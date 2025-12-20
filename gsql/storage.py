@@ -7,6 +7,7 @@ import json
 import os
 import pickle
 from pathlib import Path
+from .exceptions import GSQLTableError  # Changé ici
 
 class StorageEngine:
     """Storage engine for GSQL"""
@@ -132,8 +133,7 @@ class StorageEngine:
         
         table_file = self.data_dir / f"{table_name}.json"
         if not table_file.exists():
-            from .exceptions import GQLTableError
-            raise GQLTableError(f"Table '{table_name}' doesn't exist")
+            raise GSQLTableError(f"Table '{table_name}' doesn't exist")
         
         with open(table_file, 'r') as f:
             table = json.load(f)
