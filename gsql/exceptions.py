@@ -1,38 +1,24 @@
 # gsql/gsql/exceptions.py
 """
-Exceptions personnalisées pour GSQL
+Custom exceptions for GSQL
 """
 
 class GQLError(Exception):
-    """Base exception for GSQL errors"""
+    """Base exception"""
     pass
-
 
 class GQLSyntaxError(GQLError):
-    """Syntax error in SQL query"""
+    """SQL syntax error"""
     pass
-
 
 class GQLExecutionError(GQLError):
     """Query execution error"""
     pass
 
-
 class GQLTableError(GQLError):
-    """Table-related error"""
+    """Table error"""
     pass
-
 
 class GQLColumnError(GQLError):
-    """Column-related error"""
-    pass
-
-
-class GQLTypeError(GQLError):
-    """Type error"""
-    pass
-
-
-class GQLConstraintError(GQLError):
-    """Constraint violation error"""
+    """Column error"""
     pass
