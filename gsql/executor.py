@@ -3,6 +3,8 @@
 Query executor
 """
 
+from .exceptions import GSQLExecutionError  # Changé ici
+
 class QueryExecutor:
     """Execute SQL queries"""
     
@@ -13,17 +15,21 @@ class QueryExecutor:
         """Execute AST"""
         query_type = ast.get('type')
         
-        if query_type == 'CREATE_TABLE':
-            return self._execute_create(ast)
-        elif query_type == 'INSERT':
-            return self._execute_insert(ast)
-        elif query_type == 'SELECT':
-            return self._execute_select(ast)
-        elif query_type == 'DELETE':
-            return self._execute_delete(ast)
-        else:
-            from .exceptions import GQLExecutionError
-            raise GQLExecutionError(f"Unsupported query type: {query_type}")
+        try:
+            if query_type == 'CREATE_TABLE':
+                return self._execute_create(ast)
+            elif query_type == 'INSERT':
+                return self._execute_insert(ast)
+            elif query_type == 'SELECT':
+                return self._execute_select(ast)
+            elif query_type == 'DELETE':
+                return self._execute_delete(ast)
+            else:
+                raise GSQLExecutionError(f"Unsupported query type: {query_type}")
+        except Exception as e:
+            if isinstance(e, GSQLExecutionError):
+                raise
+            raise GSQLExecutionError(f"Execution error: {str(e)}")
     
     def _execute_create(self, ast):
         """Execute CREATE TABLE"""
