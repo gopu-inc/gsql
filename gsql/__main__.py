@@ -386,7 +386,7 @@ class GSQLCLI(cmd.Cmd):
     
     def do_stats(self, arg):
         """Show database statistics: .stats"""
-        stats = self.db.stats()
+        stats = self.db.get_stats()
         
         print(f"\n\033[1;95m📈 DATABASE STATISTICS\033[0m")
         print("\033[90m" + "═" * 70 + "\033[0m")
@@ -395,71 +395,44 @@ class GSQLCLI(cmd.Cmd):
         print(f"\033[1;94mOverview:\033[0m")
         print(f"  ├─ Tables:      \033[93m{stats.get('tables', 0):,}\033[0m")
         print(f"  ├─ Total rows:  \033[92m{stats.get('total_rows', 0):,}\033[0m")
-        print(f"  └─ Storage:     \033[94m{stats.get('storage_path', 'N/A')}\033[0m")
+        print(f"  ├─ Queries:     \033[94m{stats.get('queries_executed', 0):,}\033[0m")
+        print(f"  ├─ Uptime:      \033[95m{self._format_time(stats.get('uptime_seconds', 0))}\033[0m")
+        print(f"  └─ Size:        \033[96m{self._format_size(stats.get('storage_size_bytes', 0))}\033[0m")
         
         # Table details
-        tables = self.db.list_tables()
-        if tables:
+        table_details = stats.get('table_details', {})
+        if table_details:
             print(f"\n\033[1;94mTable Details:\033[0m")
             print("\033[90m" + "─" * 50 + "\033[0m")
             
-            total_size = 0
-            for table in sorted(tables):
-                info = self.db.get_table_info(table)
-                if info:
-                    rows = info.get('row_count', 0)
-                    size = info.get('file_size', 0)
-                    total_size += size
-                    
-                    print(f"  \033[96m{table:20}\033[0m "
-                          f"\033[92m{rows:8,}\033[0m rows "
-                          f"(\033[94m{self._format_size(size)}\033[0m)")
-            
-            print(f"\n\033[1;94mTotal size:\033[0m \033[93m{self._format_size(total_size)}\033[0m")
+            for table, details in sorted(table_details.items()):
+                rows = details.get('rows', 0)
+                cols = details.get('columns', 0)
+                print(f"  \033[96m{table:20}\033[0m "
+                      f"\033[92m{rows:8,}\033[0m rows "
+                      f"(\033[94m{cols}\033[0m cols)")
         
         print()
     
     def do_info(self, arg):
         """Show database information: .info"""
+        stats = self.db.get_stats()
+        
         print(f"\n\033[1;95mℹ️  DATABASE INFORMATION\033[0m")
         print("\033[90m" + "═" * 70 + "\033[0m")
         
-        # Get database path
-        db_path = self.db_path or "gsql.db"
+        print(f"\033[1;94mDatabase:\033[0m")
+        print(f"  ├─ Path:        \033[93m{stats.get('database', 'N/A')}\033[0m")
+        print(f"  ├─ Start time:  \033[93m{stats.get('start_time', 'N/A')}\033[0m")
+        print(f"  ├─ Uptime:      \033[95m{self._format_time(stats.get('uptime_seconds', 0))}\033[0m")
+        print(f"  └─ Size:        \033[96m{self._format_size(stats.get('storage_size_bytes', 0))}\033[0m")
         
-        # Check if files exist
-        data_dir = Path(db_path).parent / f"{db_path}_data"
-        
-        if data_dir.exists():
-            # Calculate sizes
-            total_size = 0
-            file_counts = {'tables': 0, 'indexes': 0, 'meta': 0}
-            
-            for item in ['tables', 'indexes', 'meta']:
-                item_dir = data_dir / item
-                if item_dir.exists():
-                    count = len(list(item_dir.glob('*')))
-                    file_counts[item] = count
-                    
-                    size = sum(f.stat().st_size for f in item_dir.rglob('*') if f.is_file())
-                    total_size += size
-            
-            print(f"\033[1;94mStorage:\033[0m")
-            print(f"  ├─ Database:    \033[93m{db_path}\033[0m")
-            print(f"  ├─ Data dir:    \033[93m{data_dir}\033[0m")
-            print(f"  ├─ Total size:  \033[94m{self._format_size(total_size)}\033[0m")
-            print(f"  └─ Files:       \033[96m{file_counts['tables']}\033[0m tables, "
-                  f"\033[96m{file_counts['indexes']}\033[0m indexes, "
-                  f"\033[96m{file_counts['meta']}\033[0m metadata")
-        
-        # Show tables
-        tables = self.db.list_tables()
-        if tables:
-            print(f"\n\033[1;94mTables ({len(tables)}):\033[0m")
-            for table in sorted(tables):
-                info = self.db.get_table_info(table)
-                rows = info.get('row_count', 0) if info else 0
-                print(f"  \033[96m• {table:20}\033[0m \033[92m{rows:8,}\033[0m rows")
+        print(f"\n\033[1;94mStatistics:\033[0m")
+        print(f"  ├─ Tables:      \033[93m{stats.get('tables', 0):,}\033[0m")
+        print(f"  ├─ Total rows:  \033[92m{stats.get('total_rows', 0):,}\033[0m")
+        print(f"  ├─ Queries:     \033[94m{stats.get('queries_executed', 0):,}\033[0m")
+        print(f"  ├─ Inserts:     \033[92m{stats.get('rows_inserted', 0):,}\033[0m")
+        print(f"  └─ Created:     \033[93m{stats.get('tables_created', 0):,}\033[0m")
         
         print()
     
@@ -488,7 +461,9 @@ class GSQLCLI(cmd.Cmd):
         try:
             if backup_name.lower() == 'latest':
                 # Find latest backup
-                data_dir = Path(self.db_path or "gsql.db").parent / f"{self.db_path or 'gsql.db'}_data"
+                from pathlib import Path
+                db_path = Path(self.db_path or "gsql.db")
+                data_dir = db_path.parent / f"{db_path.stem}_data"
                 backup_dir = data_dir / 'backups'
                 
                 if not backup_dir.exists():
@@ -635,52 +610,52 @@ class GSQLCLI(cmd.Cmd):
     
     def do_config(self, arg):
         """Show configuration: .config"""
-        config_file = "GSQL.toml"
-        
-        if os.path.exists(config_file):
-            try:
-                import tomllib
-                with open(config_file, 'rb') as f:
-                    config = tomllib.load(f)
+        try:
+            # Try to get config from database
+            if hasattr(self.db, '_get_config'):
+                config = self.db._get_config()
+            else:
+                # Try to read config file directly
+                from pathlib import Path
+                db_path = Path(self.db_path or "gsql.db")
+                config_file = db_path.parent / f"{db_path.stem}_data" / "config.json"
                 
-                print(f"\n\033[1;95m⚙️  CONFIGURATION: {config_file}\033[0m")
-                print("\033[90m" + "═" * 70 + "\033[0m")
-                
-                self._print_config_section("Global", config.get('global', {}))
-                self._print_config_section("Storage", config.get('storage', {}))
-                self._print_config_section("Performance", config.get('performance', {}))
-                self._print_config_section("Security", config.get('security', {}))
-                self._print_config_section("Logging", config.get('logging', {}))
-                
-            except ImportError:
-                print("\033[91m❌\033[0m tomllib not available. Install: pip install tomli")
-            except Exception as e:
-                print(f"\033[91m❌\033[0m Error reading config: {e}")
-        else:
-            print(f"\033[94m📭\033[0m Configuration file '\033[93m{config_file}\033[0m' not found")
-            print("Using default configuration")
-    
-    def _print_config_section(self, title, section):
-        """Print a configuration section"""
-        if section:
-            print(f"\n\033[1;94m{title}:\033[0m")
-            for key, value in section.items():
-                if isinstance(value, bool):
-                    color = '\033[92m' if value else '\033[91m'
-                    display = '✓' if value else '✗'
-                    print(f"  ├─ {key:20} {color}{display}\033[0m")
-                elif isinstance(value, int):
-                    print(f"  ├─ {key:20} \033[93m{value:,}\033[0m")
+                if config_file.exists():
+                    with open(config_file, 'r') as f:
+                        config = json.load(f)
                 else:
-                    print(f"  ├─ {key:20} \033[96m{value}\033[0m")
+                    print("\033[94m📭\033[0m No configuration file found")
+                    return
+            
+            print(f"\n\033[1;95m⚙️  CONFIGURATION\033[0m")
+            print("\033[90m" + "═" * 70 + "\033[0m")
+            
+            for section, values in config.items():
+                print(f"\n\033[1;94m{section.title()}:\033[0m")
+                for key, value in values.items():
+                    if isinstance(value, bool):
+                        color = '\033[92m' if value else '\033[91m'
+                        display = '✓' if value else '✗'
+                        print(f"  ├─ {key:20} {color}{display}\033[0m")
+                    elif isinstance(value, int):
+                        print(f"  ├─ {key:20} \033[93m{value:,}\033[0m")
+                    else:
+                        print(f"  ├─ {key:20} \033[96m{value}\033[0m")
+            
+            print()
+            
+        except Exception as e:
+            print(f"\033[91m❌\033[0m Error reading config: {e}")
     
     def do_logs(self, arg):
         """Show recent logs: .logs [n]"""
         try:
-            n = int(arg) if arg.isdigit() else 10
+            n = int(arg) if arg and arg.isdigit() else 10
             n = min(n, 100)  # Limit to 100
             
-            log_dir = Path(self.db_path or "gsql.db").parent / f"{self.db_path or 'gsql.db'}_data" / "logs"
+            from pathlib import Path
+            db_path = Path(self.db_path or "gsql.db")
+            log_dir = db_path.parent / f"{db_path.stem}_data" / "logs"
             
             if not log_dir.exists():
                 print("\033[94m📭\033[0m No logs directory found")
@@ -697,8 +672,9 @@ class GSQLCLI(cmd.Cmd):
             print("\033[90m" + "═" * 70 + "\033[0m")
             
             with open(latest_log, 'r') as f:
-                lines = f.readlines()[-n:]
+                lines = f.readlines()
             
+            # Show last n lines
             for line in lines[-n:]:
                 line = line.strip()
                 if not line:
@@ -744,7 +720,7 @@ class GSQLCLI(cmd.Cmd):
     def do_history(self, arg):
         """Show command history: .history [n]"""
         try:
-            n = int(arg) if arg.isdigit() else 20
+            n = int(arg) if arg and arg.isdigit() else 20
             n = min(n, 100)
             
             # Get history from readline
@@ -789,11 +765,23 @@ class GSQLCLI(cmd.Cmd):
             print(f"INSERT INTO {table_name} ({columns}) VALUES ({values});")
         
         print(f"\n\033[92m✓\033[0m Generated \033[93m{len(data)}\033[0m INSERT statements")
+        print()
+    
+    def _format_sql_value(self, value):
+        """Format value for SQL INSERT - CORRECTION DE BUG"""
+        if value is None:
+            return "NULL"
+        elif isinstance(value, str):
+            # CORRECTION: Échapper les apostrophes correctement
+            escaped = value.replace("'", "''")
+            return f"'{escaped}'"
+        elif isinstance(value, bool):
+            return "TRUE" if value else "FALSE"
+        else:
+            return str(value)
     
     def do_indexes(self, table_name):
         """Show table indexes: .indexes [table]"""
-        # For now, just show placeholder
-        # In a real implementation, this would show actual indexes
         print(f"\n\033[1;95m🔍 INDEXES\033[0m")
         print("\033[90m" + "═" * 70 + "\033[0m")
         
@@ -807,8 +795,11 @@ class GSQLCLI(cmd.Cmd):
             print("\033[94m⏳\033[0m Index system coming soon...")
         else:
             tables = self.db.list_tables()
-            for table in sorted(tables):
-                print(f"\033[96m• {table}\033[0m")
+            if tables:
+                for table in sorted(tables):
+                    print(f"\033[96m• {table}\033[0m")
+            else:
+                print("\033[94m📭\033[0m No tables in database")
         
         print()
     
@@ -817,20 +808,18 @@ class GSQLCLI(cmd.Cmd):
         print(f"\n\033[1;95m🧹 VACUUM DATABASE\033[0m")
         print("\033[90m" + "═" * 70 + "\033[0m")
         
-        tables = self.db.list_tables()
-        if not tables:
-            print("\033[94m📭\033[0m No tables to optimize")
-            return
-        
         print("\033[94m⏳\033[0m Optimizing database...")
         
-        # In a real implementation, this would:
-        # 1. Rebuild fragmented data
-        # 2. Clean up deleted rows
-        # 3. Rebuild indexes
-        # 4. Update statistics
+        try:
+            results = self.db.vacuum()
+            
+            print(f"\033[92m✓\033[0m Optimization complete!")
+            print(f"  ├─ Tables optimized:  \033[93m{results.get('tables_optimized', 0)}\033[0m")
+            print(f"  └─ Space reclaimed:   \033[94m{self._format_size(results.get('space_reclaimed', 0))}\033[0m")
+            
+        except Exception as e:
+            print(f"\033[91m❌\033[0m Vacuum failed: {e}")
         
-        print(f"\033[92m✓\033[0m Optimization complete for \033[93m{len(tables)}\033[0m tables")
         print()
     
     def do_check(self, arg):
@@ -838,65 +827,69 @@ class GSQLCLI(cmd.Cmd):
         print(f"\n\033[1;95m🔍 DATABASE INTEGRITY CHECK\033[0m")
         print("\033[90m" + "═" * 70 + "\033[0m")
         
-        tables = self.db.list_tables()
-        if not tables:
-            print("\033[94m📭\033[0m No tables to check")
-            return
+        print("\033[94m⏳\033[0m Checking database integrity...")
         
-        issues = 0
-        
-        for table in tables:
-            info = self.db.get_table_info(table)
-            if info:
-                expected_rows = info.get('row_count', 0)
+        try:
+            results = self.db.check_integrity()
+            
+            tables_checked = results.get('tables_checked', 0)
+            errors_found = results.get('errors_found', 0)
+            warnings = results.get('warnings', [])
+            errors = results.get('errors', [])
+            
+            print(f"\033[92m✓\033[0m Checked \033[93m{tables_checked}\033[0m tables")
+            
+            if errors_found == 0 and not warnings:
+                print(f"\033[92m✓\033[0m No issues found!")
+            else:
+                if errors_found > 0:
+                    print(f"\033[91m❌\033[0m Found \033[93m{errors_found}\033[0m error(s):")
+                    for error in errors:
+                        print(f"  • {error}")
                 
-                # Count actual rows
-                actual_rows = len(self.db.select(table))
-                
-                if expected_rows != actual_rows:
-                    print(f"\033[91m❌\033[0m \033[96m{table}\033[0m: "
-                          f"Row count mismatch (expected: {expected_rows}, actual: {actual_rows})")
-                    issues += 1
-                else:
-                    print(f"\033[92m✓\033[0m \033[96m{table}\033[0m: OK ({actual_rows} rows)")
-        
-        if issues == 0:
-            print(f"\n\033[92m✓\033[0m All \033[93m{len(tables)}\033[0m tables passed integrity check")
-        else:
-            print(f"\n\033[91m❌\033[0m Found \033[93m{issues}\033[0m issue(s)")
+                if warnings:
+                    print(f"\033[93m⚠️\033[0m Found \033[93m{len(warnings)}\033[0m warning(s):")
+                    for warning in warnings:
+                        print(f"  • {warning}")
+            
+        except Exception as e:
+            print(f"\033[91m❌\033[0m Integrity check failed: {e}")
         
         print()
     
     def do_size(self, arg):
         """Show database size: .size"""
-        data_dir = Path(self.db_path or "gsql.db").parent / f"{self.db_path or 'gsql.db'}_data"
-        
-        if not data_dir.exists():
-            print("\033[94m📭\033[0m No database files found")
-            return
-        
-        total_size = 0
-        breakdown = {}
-        
-        for item in ['tables', 'indexes', 'meta', 'backups', 'logs']:
-            item_dir = data_dir / item
-            if item_dir.exists():
-                size = sum(f.stat().st_size for f in item_dir.rglob('*') if f.is_file())
-                breakdown[item] = size
-                total_size += size
-        
-        print(f"\n\033[1;95m📦 DATABASE SIZE\033[0m")
-        print("\033[90m" + "═" * 70 + "\033[0m")
-        print(f"Total: \033[93m{self._format_size(total_size)}\033[0m")
-        print("\033[90m" + "─" * 50 + "\033[0m")
-        
-        for item, size in breakdown.items():
-            percentage = (size / total_size * 100) if total_size > 0 else 0
-            bar = '█' * int(percentage / 5)  # 5% per character
-            print(f"\033[96m{item:10}\033[0m {self._format_size(size):>10} "
-                  f"\033[90m[{bar:<20}]\033[0m {percentage:5.1f}%")
-        
-        print()
+        try:
+            stats = self.db.get_stats()
+            total_size = stats.get('storage_size_bytes', 0)
+            
+            print(f"\n\033[1;95m📦 DATABASE SIZE\033[0m")
+            print("\033[90m" + "═" * 70 + "\033[0m")
+            
+            print(f"Total size: \033[93m{self._format_size(total_size)}\033[0m")
+            
+            # Show breakdown if available
+            from pathlib import Path
+            db_path = Path(self.db_path or "gsql.db")
+            data_dir = db_path.parent / f"{db_path.stem}_data"
+            
+            if data_dir.exists():
+                print(f"\n\033[1;94mBreakdown:\033[0m")
+                
+                for item in ['tables', 'indexes', 'meta', 'backups', 'logs']:
+                    item_dir = data_dir / item
+                    if item_dir.exists():
+                        size = sum(f.stat().st_size for f in item_dir.rglob('*') if f.is_file())
+                        if size > 0:
+                            percentage = (size / total_size * 100) if total_size > 0 else 0
+                            bar = '█' * int(percentage / 5)  # 5% per character
+                            print(f"  \033[96m{item:10}\033[0m {self._format_size(size):>10} "
+                                  f"\033[90m[{bar:<20}]\033[0m {percentage:5.1f}%")
+            
+            print()
+            
+        except Exception as e:
+            print(f"\033[91m❌\033[0m Error getting size: {e}")
     
     def do_help(self, arg):
         """Show help: .help [command]"""
@@ -1011,16 +1004,19 @@ class GSQLCLI(cmd.Cmd):
         else:
             return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
     
-    def _format_sql_value(self, value):
-        """Format value for SQL INSERT"""
-        if value is None:
-            return "NULL"
-        elif isinstance(value, str):
-            return f"'{value.replace("'", "''")}'"
-        elif isinstance(value, bool):
-            return "TRUE" if value else "FALSE"
+    def _format_time(self, seconds):
+        """Format time duration"""
+        if seconds < 60:
+            return f"{seconds:.0f} seconds"
+        elif seconds < 3600:
+            minutes = seconds / 60
+            return f"{minutes:.1f} minutes"
+        elif seconds < 86400:
+            hours = seconds / 3600
+            return f"{hours:.1f} hours"
         else:
-            return str(value)
+            days = seconds / 86400
+            return f"{days:.1f} days"
     
     def preloop(self):
         """Run before CLI loop"""
