@@ -1,88 +1,125 @@
-# gsql/parser.py
+# gsql/gsql/parser.py
+"""
+SQL Parser in pure Python
+"""
+
 import re
-from typing import Dict, List, Any, Optional, Tuple
-from .exceptions import GSQLSyntaxError
 
 class SQLParser:
-    """Parser SQL simple mais puissant"""
+    """Parse SQL queries"""
     
     def __init__(self):
-        # Regex pour les commandes SQL
-        self.patterns = {
-            'create_table': r'CREATE\s+TABLE\s+(\w+)\s*\((.*?)\)',
-            'insert': r'INSERT\s+INTO\s+(\w+)\s*(?:\(([^)]+)\))?\s*VALUES\s*(.*)',
-            'select': r'SELECT\s+(.*?)\s+FROM\s+(\w+)(?:\s+WHERE\s+(.*))?',
-            'delete': r'DELETE\s+FROM\s+(\w+)(?:\s+WHERE\s+(.*))?',
-            'update': r'UPDATE\s+(\w+)\s+SET\s+(.*?)(?:\s+WHERE\s+(.*))?',
-            'create_index': r'CREATE\s+INDEX\s+(\w+)\s+ON\s+(\w+)\s*\((.*?)\)',
-        }
-        
-        # Types de données supportés
-        self.data_types = {
-            'INT': 'integer',
-            'INTEGER': 'integer',
-            'BIGINT': 'bigint',
-            'FLOAT': 'float',
-            'DOUBLE': 'double',
-            'TEXT': 'text',
-            'VARCHAR': 'varchar',
-            'BOOLEAN': 'boolean',
-            'JSON': 'json',
-            'DATETIME': 'datetime',
+        self.keywords = {
+            'SELECT', 'FROM', 'WHERE', 'INSERT', 'INTO', 'VALUES',
+            'CREATE', 'TABLE', 'DELETE', 'UPDATE', 'SET',
+            'INT', 'TEXT', 'FLOAT', 'BOOLEAN', 'PRIMARY', 'KEY',
+            'NOT', 'NULL', 'AND', 'OR', 'LIKE', 'ORDER', 'BY',
+            'GROUP', 'HAVING', 'LIMIT', 'OFFSET'
         }
     
-    def parse(self, sql: str) -> Dict[str, Any]:
-        """Parser une requête SQL en AST"""
-        sql = sql.strip().upper()
+    def parse(self, sql):
+        """Parse SQL query"""
+        sql = sql.strip()
         
-        if sql.startswith('CREATE TABLE'):
+        # Remove multiple spaces
+        sql = re.sub(r'\s+', ' ', sql)
+        
+        # Convert to uppercase for parsing (but preserve strings)
+        parts = []
+        in_string = False
+        string_char = None
+        current = []
+        
+        for char in sql:
+            if char in ("'", '"') and not in_string:
+                in_string = True
+                string_char = char
+                current.append(char)
+            elif char == string_char and in_string:
+                in_string = False
+                string_char = None
+                current.append(char)
+            elif not in_string and char == ' ':
+                parts.append(''.join(current))
+                current = []
+            else:
+                current.append(char)
+        
+        if current:
+            parts.append(''.join(current))
+        
+        # Reconstruct with keywords in uppercase
+        result_parts = []
+        for part in parts:
+            if not in_string and part.upper() in self.keywords:
+                result_parts.append(part.upper())
+            else:
+                result_parts.append(part)
+        
+        sql_upper = ' '.join(result_parts)
+        
+        # Parse based on first keyword
+        if sql_upper.startswith('CREATE TABLE'):
             return self._parse_create_table(sql)
-        elif sql.startswith('INSERT INTO'):
+        elif sql_upper.startswith('INSERT INTO'):
             return self._parse_insert(sql)
-        elif sql.startswith('SELECT'):
+        elif sql_upper.startswith('SELECT'):
             return self._parse_select(sql)
-        elif sql.startswith('DELETE FROM'):
+        elif sql_upper.startswith('DELETE FROM'):
             return self._parse_delete(sql)
-        elif sql.startswith('UPDATE'):
+        elif sql_upper.startswith('UPDATE'):
             return self._parse_update(sql)
-        elif sql.startswith('CREATE INDEX'):
-            return self._parse_create_index(sql)
         else:
-            raise GSQLSyntaxError(f"Commande non supportée: {sql}")
+            from .exceptions import GQLSyntaxError
+            raise GQLSyntaxError(f"Unsupported SQL: {sql}")
     
-    def _parse_create_table(self, sql: str) -> Dict[str, Any]:
-        """Parser CREATE TABLE"""
-        match = re.search(self.patterns['create_table'], sql, re.IGNORECASE | re.DOTALL)
+    def _parse_create_table(self, sql):
+        """Parse CREATE TABLE"""
+        # Simple regex for MVP
+        pattern = r'CREATE\s+TABLE\s+(\w+)\s*\((.*)\)'
+        match = re.match(pattern, sql, re.IGNORECASE)
+        
         if not match:
-            raise GSQLSyntaxError("Syntaxe CREATE TABLE invalide")
+            from .exceptions import GQLSyntaxError
+            raise GQLSyntaxError("Invalid CREATE TABLE syntax")
         
         table_name = match.group(1)
-        columns_def = match.group(2).strip()
+        columns_str = match.group(2)
         
-        # Parser les colonnes
+        # Parse columns
         columns = []
-        for col_def in self._split_by_comma(columns_def):
-            col_parts = col_def.strip().split()
-            if len(col_parts) < 2:
-                raise GSQLSyntaxError(f"Définition de colonne invalide: {col_def}")
+        col_defs = self._split_by_comma(columns_str)
+        
+        for col_def in col_defs:
+            col_def = col_def.strip()
+            parts = col_def.split()
             
-            col_name = col_parts[0]
-            col_type = col_parts[1].upper()
+            if len(parts) < 2:
+                from .exceptions import GQLSyntaxError
+                raise GQLSyntaxError(f"Invalid column: {col_def}")
             
-            # Extraire les contraintes
+            col_name = parts[0]
+            col_type = parts[1].upper()
+            
+            # Parse constraints
             constraints = []
-            for part in col_parts[2:]:
-                if part.upper() == 'PRIMARY KEY':
+            i = 2
+            while i < len(parts):
+                if parts[i].upper() == 'PRIMARY' and i+1 < len(parts) and parts[i+1].upper() == 'KEY':
                     constraints.append('PRIMARY_KEY')
-                elif part.upper() == 'NOT NULL':
+                    i += 2
+                elif parts[i].upper() == 'NOT' and i+1 < len(parts) and parts[i+1].upper() == 'NULL':
                     constraints.append('NOT_NULL')
-                elif part.upper() == 'UNIQUE':
+                    i += 2
+                elif parts[i].upper() == 'UNIQUE':
                     constraints.append('UNIQUE')
+                    i += 1
+                else:
+                    i += 1
             
             columns.append({
                 'name': col_name,
-                'type': self.data_types.get(col_type, 'text'),
-                'original_type': col_type,
+                'type': self._normalize_type(col_type),
                 'constraints': constraints
             })
         
@@ -92,22 +129,26 @@ class SQLParser:
             'columns': columns
         }
     
-    def _parse_insert(self, sql: str) -> Dict[str, Any]:
-        """Parser INSERT INTO"""
-        match = re.search(self.patterns['insert'], sql, re.IGNORECASE | re.DOTALL)
+    def _parse_insert(self, sql):
+        """Parse INSERT INTO"""
+        # Pattern: INSERT INTO table (col1, col2) VALUES (val1, val2), (val3, val4)
+        pattern = r'INSERT\s+INTO\s+(\w+)\s*(?:\(([^)]+)\))?\s*VALUES\s*(.+)'
+        match = re.match(pattern, sql, re.IGNORECASE)
+        
         if not match:
-            raise GSQLSyntaxError("Syntaxe INSERT invalide")
+            from .exceptions import GQLSyntaxError
+            raise GQLSyntaxError("Invalid INSERT syntax")
         
         table_name = match.group(1)
         columns_str = match.group(2)
         values_str = match.group(3)
         
-        # Parser les colonnes (optionnel)
+        # Parse columns
         columns = []
         if columns_str:
             columns = [col.strip() for col in columns_str.split(',')]
         
-        # Parser les valeurs
+        # Parse values
         values = self._parse_values(values_str)
         
         return {
@@ -117,24 +158,27 @@ class SQLParser:
             'values': values
         }
     
-    def _parse_select(self, sql: str) -> Dict[str, Any]:
-        """Parser SELECT"""
-        match = re.search(self.patterns['select'], sql, re.IGNORECASE | re.DOTALL)
+    def _parse_select(self, sql):
+        """Parse SELECT"""
+        # Pattern: SELECT columns FROM table WHERE conditions
+        pattern = r'SELECT\s+(.+?)\s+FROM\s+(\w+)(?:\s+WHERE\s+(.+))?'
+        match = re.match(pattern, sql, re.IGNORECASE)
+        
         if not match:
-            raise GSQLSyntaxError("Syntaxe SELECT invalide")
+            from .exceptions import GQLSyntaxError
+            raise GQLSyntaxError("Invalid SELECT syntax")
         
         columns_str = match.group(1)
         table_name = match.group(2)
         where_str = match.group(3)
         
-        # Parser les colonnes
-        columns = []
+        # Parse columns
         if columns_str.strip() == '*':
             columns = ['*']
         else:
             columns = [col.strip() for col in columns_str.split(',')]
         
-        # Parser WHERE
+        # Parse WHERE
         where = None
         if where_str:
             where = self._parse_where(where_str)
@@ -146,40 +190,73 @@ class SQLParser:
             'where': where
         }
     
-    def _parse_where(self, where_str: str) -> Dict[str, Any]:
-        """Parser la clause WHERE"""
-        # Support pour AND, OR, =, !=, >, <, >=, <=, LIKE
+    def _parse_delete(self, sql):
+        """Parse DELETE"""
+        pattern = r'DELETE\s+FROM\s+(\w+)(?:\s+WHERE\s+(.+))?'
+        match = re.match(pattern, sql, re.IGNORECASE)
+        
+        if not match:
+            from .exceptions import GQLSyntaxError
+            raise GQLSyntaxError("Invalid DELETE syntax")
+        
+        table_name = match.group(1)
+        where_str = match.group(2)
+        
+        where = None
+        if where_str:
+            where = self._parse_where(where_str)
+        
+        return {
+            'type': 'DELETE',
+            'table': table_name,
+            'where': where
+        }
+    
+    def _parse_update(self, sql):
+        """Parse UPDATE"""
+        # Not implemented in MVP
+        from .exceptions import GQLSyntaxError
+        raise GQLSyntaxError("UPDATE not implemented")
+    
+    def _parse_where(self, where_str):
+        """Parse WHERE clause"""
         conditions = []
         
-        # Séparer par AND/OR
-        parts = re.split(r'\s+(AND|OR)\s+', where_str, flags=re.IGNORECASE)
+        # Split by AND/OR
+        tokens = re.split(r'\s+(AND|OR)\s+', where_str, flags=re.IGNORECASE)
         
-        for i in range(0, len(parts), 2):
-            condition = parts[i].strip()
-            operator = parts[i+1].upper() if i+1 < len(parts) else None
+        i = 0
+        while i < len(tokens):
+            condition = tokens[i].strip()
             
-            # Parser chaque condition
-            cond_match = re.match(r'(\w+)\s*([=!<>]+|LIKE|IN)\s*(.+)', condition)
+            # Parse condition
+            cond_match = re.match(r'(\w+)\s*([=<>!]+|LIKE)\s*(.+)', condition)
             if cond_match:
                 col = cond_match.group(1)
                 op = cond_match.group(2)
                 value = self._parse_value(cond_match.group(3).strip())
                 
+                connector = None
+                if i + 1 < len(tokens):
+                    connector = tokens[i + 1].upper()
+                    i += 1
+                
                 conditions.append({
                     'column': col,
                     'operator': op,
                     'value': value,
-                    'connector': operator
+                    'connector': connector
                 })
+            
+            i += 1
         
-        return {'conditions': conditions} if conditions else None
+        return {'conditions': conditions}
     
-    def _parse_values(self, values_str: str) -> List[List[Any]]:
-        """Parser les valeurs INSERT"""
-        # Support pour: (1, 'Alice'), (2, 'Bob')
+    def _parse_values(self, values_str):
+        """Parse VALUES clause"""
         rows = []
         
-        # Trouver toutes les tuples de valeurs
+        # Find all value tuples
         tuples = re.findall(r'\(([^)]+)\)', values_str)
         
         for tup in tuples:
@@ -190,41 +267,39 @@ class SQLParser:
         
         return rows
     
-    def _parse_value(self, val: str) -> Any:
-        """Parser une valeur SQL"""
-        # Chaîne
-        if val.startswith("'") and val.endswith("'"):
+    def _parse_value(self, val):
+        """Parse a SQL value"""
+        # String
+        if (val.startswith("'") and val.endswith("'")) or (val.startswith('"') and val.endswith('"')):
             return val[1:-1]
-        # Nombre
-        elif val.replace('.', '').isdigit():
+        # Number
+        elif val.replace('.', '').replace('-', '').isdigit():
             if '.' in val:
                 return float(val)
             else:
                 return int(val)
-        # Booléen
-        elif val.upper() in ['TRUE', 'FALSE']:
+        # Boolean
+        elif val.upper() in ('TRUE', 'FALSE'):
             return val.upper() == 'TRUE'
         # NULL
         elif val.upper() == 'NULL':
             return None
-        # JSON
-        elif val.startswith('{') or val.startswith('['):
-            try:
-                return json.loads(val)
-            except:
-                return val
         else:
-            return val
+            # Try to parse as number
+            try:
+                return float(val) if '.' in val else int(val)
+            except ValueError:
+                return val
     
-    def _split_by_comma(self, s: str) -> List[str]:
-        """Diviser par virgule, en ignorant les virgules dans les strings"""
+    def _split_by_comma(self, s):
+        """Split by comma, ignoring commas in strings"""
         parts = []
         current = []
         in_string = False
         string_char = None
         
         for char in s:
-            if char in ["'", '"']:
+            if char in ("'", '"'):
                 if not in_string:
                     in_string = True
                     string_char = char
@@ -242,3 +317,21 @@ class SQLParser:
             parts.append(''.join(current).strip())
         
         return parts
+    
+    def _normalize_type(self, type_str):
+        """Normalize data type"""
+        type_map = {
+            'INT': 'integer',
+            'INTEGER': 'integer',
+            'BIGINT': 'bigint',
+            'FLOAT': 'float',
+            'DOUBLE': 'double',
+            'REAL': 'real',
+            'TEXT': 'text',
+            'VARCHAR': 'text',
+            'STRING': 'text',
+            'BOOLEAN': 'boolean',
+            'BOOL': 'boolean',
+            'JSON': 'json'
+        }
+        return type_map.get(type_str.upper(), 'text')
