@@ -1,0 +1,33 @@
+# gsql/GSQL.toml
+[global]
+name = "GSQL Database"
+version = "1.0"
+author = "GSQL Team"
+description = "Simple yet powerful SQL database"
+
+[storage]
+engine = "json"  # json, binary, hybrid
+path = "./data"
+compression = false
+auto_backup = true
+backup_interval = 3600  # seconds
+
+[performance]
+cache_size = 1000  # rows in memory
+index_auto_create = true
+query_cache = true
+
+[security]
+encryption = false
+password_hash = ""
+access_log = true
+
+[replication]
+enabled = false
+mode = "master-slave"
+sync_interval = 60
+
+[logging]
+level = "INFO"
+path = "./logs"
+max_size = 10485760  # 10MB
