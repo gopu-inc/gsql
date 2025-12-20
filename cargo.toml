@@ -1,0 +1,32 @@
+[package]
+name = "gsql"
+version = "0.1.0"
+edition = "2021"
+description = "Simple yet powerful SQL database"
+license = "MIT"
+authors = ["GSQL Contributors"]
+
+[dependencies]
+thiserror = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+bytes = "1.0"
+crossbeam-channel = "0.5"
+lazy_static = "1.4"
+log = "0.4"
+env_logger = "0.10"
+clap = { version = "4.0", features = ["derive"] }
+rustyline = "10.0"
+
+[dev-dependencies]
+tempfile = "3.3"
+criterion = "0.4"
+
+[[bin]]
+name = "gsql-cli"
+path = "src/bin/gsql-cli.rs"
+
+[profile.release]
+lto = true
+codegen-units = 1
