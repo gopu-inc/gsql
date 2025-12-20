@@ -139,4 +139,79 @@ class GSQLCLI(cmd.Cmd):
             
             # Calculer les largeurs de colonnes
             col_widths = []
-            for header
+            for header in headers:
+                max_len = len(str(header))
+                for row in data:
+                    max_len = max(max_len, len(str(row.get(header, ''))))
+                col_widths.append(max_len + 2)
+            
+            # Ligne de séparation
+            separator = "+" + "+".join(["-" * w for w in col_widths]) + "+"
+            
+            print(separator)
+            
+            # En-têtes
+            header_row = "|"
+            for i, header in enumerate(headers):
+                header_row += f" {header:<{col_widths[i]-1}}|"
+            print(header_row)
+            
+            print(separator)
+            
+            # Données
+            for row in data:
+                row_str = "|"
+                for i, header in enumerate(headers):
+                    value = str(row.get(header, ''))
+                    row_str += f" {value:<{col_widths[i]-1}}|"
+                print(row_str)
+            
+            print(separator)
+            print(f"{len(data)} ligne(s)")
+            
+        elif result_type == 'INSERT':
+            rows = result.get('rows_affected', 0)
+            print(f"✓ {rows} ligne(s) insérée(s)")
+            
+        elif result_type == 'CREATE_TABLE':
+            table = result.get('table', '')
+            print(f"✓ Table '{table}' créée")
+            
+        elif result_type == 'DELETE':
+            rows = result.get('rows_affected', 0)
+            print(f"✓ {rows} ligne(s) supprimée(s)")
+            
+        elif result_type == 'UPDATE':
+            rows = result.get('rows_affected', 0)
+            print(f"✓ {rows} ligne(s) mise(s) à jour")
+
+
+def main():
+    """Point d'entrée principal"""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='GSQL Database CLI')
+    parser.add_argument('database', nargs='?', help='Fichier de base de données')
+    parser.add_argument('-e', '--execute', help='Exécuter une commande SQL')
+    
+    args = parser.parse_args()
+    
+    if args.execute:
+        # Mode non-interactif
+        db = GSQL(args.database)
+        result = db.execute(args.execute)
+        
+        if isinstance(result.get('data'), list):
+            # Format JSON pour parsing facile
+            print(json.dumps(result, indent=2))
+        else:
+            print(result)
+        db.close()
+    else:
+        # Mode interactif
+        cli = GSQLCLI(args.database)
+        cli.cmdloop()
+
+
+if __name__ == "__main__":
+    main()
