@@ -21,6 +21,10 @@ class SQLParser:
         """Parse SQL query"""
         sql = sql.strip()
         
+        if not sql:
+            from .exceptions import GSQLSyntaxError
+            raise GSQLSyntaxError("Empty SQL query")
+        
         # Remove multiple spaces
         sql = re.sub(r'\s+', ' ', sql)
         
@@ -70,8 +74,8 @@ class SQLParser:
         elif sql_upper.startswith('UPDATE'):
             return self._parse_update(sql)
         else:
-            from .exceptions import GQLSyntaxError
-            raise GQLSyntaxError(f"Unsupported SQL: {sql}")
+            from .exceptions import GSQLSyntaxError
+            raise GSQLSyntaxError(f"Unsupported SQL: {sql}")
     
     def _parse_create_table(self, sql):
         """Parse CREATE TABLE"""
@@ -80,8 +84,8 @@ class SQLParser:
         match = re.match(pattern, sql, re.IGNORECASE)
         
         if not match:
-            from .exceptions import GQLSyntaxError
-            raise GQLSyntaxError("Invalid CREATE TABLE syntax")
+            from .exceptions import GSQLSyntaxError
+            raise GSQLSyntaxError("Invalid CREATE TABLE syntax")
         
         table_name = match.group(1)
         columns_str = match.group(2)
@@ -95,8 +99,8 @@ class SQLParser:
             parts = col_def.split()
             
             if len(parts) < 2:
-                from .exceptions import GQLSyntaxError
-                raise GQLSyntaxError(f"Invalid column: {col_def}")
+                from .exceptions import GSQLSyntaxError
+                raise GSQLSyntaxError(f"Invalid column: {col_def}")
             
             col_name = parts[0]
             col_type = parts[1].upper()
@@ -136,8 +140,8 @@ class SQLParser:
         match = re.match(pattern, sql, re.IGNORECASE)
         
         if not match:
-            from .exceptions import GQLSyntaxError
-            raise GQLSyntaxError("Invalid INSERT syntax")
+            from .exceptions import GSQLSyntaxError
+            raise GSQLSyntaxError("Invalid INSERT syntax")
         
         table_name = match.group(1)
         columns_str = match.group(2)
@@ -165,8 +169,8 @@ class SQLParser:
         match = re.match(pattern, sql, re.IGNORECASE)
         
         if not match:
-            from .exceptions import GQLSyntaxError
-            raise GQLSyntaxError("Invalid SELECT syntax")
+            from .exceptions import GSQLSyntaxError
+            raise GSQLSyntaxError("Invalid SELECT syntax")
         
         columns_str = match.group(1)
         table_name = match.group(2)
@@ -196,8 +200,8 @@ class SQLParser:
         match = re.match(pattern, sql, re.IGNORECASE)
         
         if not match:
-            from .exceptions import GQLSyntaxError
-            raise GQLSyntaxError("Invalid DELETE syntax")
+            from .exceptions import GSQLSyntaxError
+            raise GSQLSyntaxError("Invalid DELETE syntax")
         
         table_name = match.group(1)
         where_str = match.group(2)
@@ -215,8 +219,8 @@ class SQLParser:
     def _parse_update(self, sql):
         """Parse UPDATE"""
         # Not implemented in MVP
-        from .exceptions import GQLSyntaxError
-        raise GQLSyntaxError("UPDATE not implemented")
+        from .exceptions import GSQLSyntaxError
+        raise GSQLSyntaxError("UPDATE not implemented")
     
     def _parse_where(self, where_str):
         """Parse WHERE clause"""
