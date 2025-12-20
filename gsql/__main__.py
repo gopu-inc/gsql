@@ -183,3 +183,46 @@ class GSQLCLI(cmd.Cmd):
             print(f"✅ Deleted {rows} row(s)")
             
         else:
+            print(f"✅ Operation completed")
+    
+    def do_exit(self, arg):
+        """Exit GSQL"""
+        print("\n👋 Goodbye!")
+        if self.db:
+            self.db.close()
+        return True
+
+def main():
+    """Main entry point"""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='GSQL Database CLI')
+    parser.add_argument('database', nargs='?', help='Database file')
+    parser.add_argument('-e', '--execute', help='Execute SQL command')
+    
+    args = parser.parse_args()
+    
+    if args.execute:
+        # Non-interactive mode
+        from .database import GSQL
+        db = GSQL(args.database)
+        result = db.execute(args.execute)
+        
+        if result.get('type') == 'SELECT':
+            import json
+            print(json.dumps(result.get('data', []), indent=2))
+        else:
+            print(f"Rows affected: {result.get('rows_affected', 0)}")
+        
+        db.close()
+    else:
+        # Interactive mode
+        cli = GSQLCLI(args.database)
+        try:
+            cli.cmdloop()
+        except KeyboardInterrupt:
+            print("\n\nInterrupted. Type 'exit' to quit.")
+            cli.cmdloop()
+
+if __name__ == "__main__":
+    main()
