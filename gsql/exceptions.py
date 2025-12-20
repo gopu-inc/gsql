@@ -7,18 +7,24 @@ class GQLError(Exception):
     """Base exception"""
     pass
 
-class GQLSyntaxError(GQLError):
+class GSQLSyntaxError(GQLError):
     """SQL syntax error"""
     pass
 
-class GQLExecutionError(GQLError):
+class GSQLExecutionError(GQLError):
     """Query execution error"""
     pass
 
-class GQLTableError(GQLError):
+class GSQLTableError(GQLError):
     """Table error"""
     pass
 
-class GQLColumnError(GQLError):
+class GSQLColumnError(GQLError):
     """Column error"""
     pass
+
+# Pour la rétrocompatibilité
+GQLSyntaxError = GSQLSyntaxError
+GQLExecutionError = GSQLExecutionError
+GQLTableError = GSQLTableError
+GQLColumnError = GSQLColumnError
