@@ -1,0 +1,9 @@
+# GSQL Database
+
+<div align="center">
+
+<svg xmlns="http://www.w3.org/2000/svg" width="41" height="20" role="img" aria-label="GSQL"><title>GSQL</title><linearGradient id="s" x2="0" y2="100%"><stop offset="0" stop-color="#bbb" stop-opacity=".1"/><stop offset="1" stop-opacity=".1"/></linearGradient><clipPath id="r"><rect width="41" height="20" rx="3" fill="#fff"/></clipPath><g clip-path="url(#r)"><rect width="0" height="20" fill="#4c1"/><rect x="0" width="41" height="20" fill="#4c1"/><rect width="41" height="20" fill="url(#s)"/></g><g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" text-rendering="geometricPrecision" font-size="110"><text aria-hidden="true" x="205" y="150" fill="#010101" fill-opacity=".3" transform="scale(.1)" textLength="310">GSQL</text><text x="205" y="140" transform="scale(.1)" fill="#fff" textLength="310">GSQL</text></g></svg>
+
+<svg xmlns="http://www.w3.org/2000/svg" width="127.5" height="28" role="img" aria-label="PYTHON: 3.6+"><title>PYTHON: 3.6+</title><g shape-rendering="crispEdges"><rect width="72.5" height="28" fill="#555"/><rect x="72.5" width="55" height="28" fill="#3670a0"/></g><g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" text-rendering="geometricPrecision" font-size="100"><text transform="scale(.1)" x="362.5" y="175" textLength="485" fill="#fff">PYTHON</text><text transform="scale(.1)" x="1000" y="175" textLength="310" fill="#fff" font-weight="bold">3.6+</text></g></svg>
+
+</div>
