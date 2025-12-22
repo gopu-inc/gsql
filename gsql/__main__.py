@@ -15,6 +15,7 @@ import cmd
 import signal
 import traceback
 import sys
+from .executor import create_executor
 import os
 import sqlite3
 import json
