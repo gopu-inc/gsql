@@ -10,7 +10,30 @@ include README.md
 include CHANGELOG.md
 include CONTRIBUTING.md
 include CODE_OF_CONDUCT.md
+# MANIFEST.in minimal pour GSQL v3.0.1
+include LICENSE
+include README.md
+include requirements.txt
+include setup.py
+include pyproject.toml
+include MANIFEST.in
 
+# Package principal
+recursive-include gsql *.py
+recursive-include gsql *.pyi
+recursive-include gsql *.json
+recursive-include gsql *.yaml
+recursive-include gsql *.txt
+recursive-include gsql *.sql
+
+# Données NLP (si elles existent)
+recursive-include gsql/nlp *.json
+recursive-include gsql/nlp *.txt
+
+# Exclusions
+global-exclude *.pyc
+global-exclude *.pyo
+global-exclude __pycache__
 # Inclure les fichiers de configuration
 include requirements.txt
 include requirements-dev.txt
