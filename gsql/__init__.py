@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 GSQL - A lightweight SQL database engine with natural language interface
-Version: 3.0.0
+Version: 3.0.1
 SQLite Only - No YAML dependency
 """
 
