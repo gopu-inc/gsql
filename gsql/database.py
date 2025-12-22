@@ -1,916 +1,1015 @@
 #!/usr/bin/env python3
 """
-Database module for GSQL - Version complète et stable
+GSQL Database Module - Interface principale utilisant le Storage Engine
+Version: 4.0 - Avec Buffer Pool, Transactions et Auto-Recovery
 """
 
 import os
-import logging
 import json
-import sqlite3
-import tempfile
+import logging
+import threading
+import hashlib
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Union
-import yaml
+from datetime import datetime
+from typing import Dict, List, Any, Optional, Union
+import re
 
+from .storage import SQLiteStorage, create_storage
 from .exceptions import (
     GSQLBaseException, SQLSyntaxError, SQLExecutionError,
-    ConstraintViolationError, TransactionError, FunctionError
+    ConstraintViolationError, TransactionError, FunctionError,
+    BufferPoolError
 )
 
 logger = logging.getLogger(__name__)
 
-class YAMLStorage:
-    """Stockage YAML simple et efficace"""
+class Database:
+    """Classe principale de base de données GSQL"""
     
-    def __init__(self, db_path: str):
-        self.db_path = Path(db_path)
-        if not self.db_path.suffix in ['.yaml', '.yml']:
-            self.db_path = self.db_path.with_suffix('.yaml')
+    def __init__(self, db_path=None, base_dir="/root/.gsql", 
+                 buffer_pool_size=100, enable_wal=True, auto_recovery=True):
+        """
+        Initialise la base de données GSQL
         
-        # Créer le dossier si nécessaire
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        Args:
+            db_path: Chemin de la base (None pour auto)
+            base_dir: Répertoire de base pour GSQL
+            buffer_pool_size: Taille du buffer pool en pages
+            enable_wal: Activer le mode WAL pour meilleures performances
+            auto_recovery: Activer la récupération automatique
+        """
+        self.base_dir = Path(base_dir)
+        self.base_dir.mkdir(parents=True, exist_ok=True)
         
-        # Charger ou initialiser la base
-        self.data = self._load_or_create()
-    
-    def _load_or_create(self) -> Dict:
-        """Charge ou crée la base de données"""
-        if self.db_path.exists():
-            try:
-                with open(self.db_path, 'r', encoding='utf-8') as f:
-                    data = yaml.safe_load(f)
-                    if data is None:
-                        return self._default_structure()
-                    return data
-            except Exception as e:
-                logger.error(f"Error loading YAML: {e}")
-                return self._default_structure()
-        else:
-            return self._default_structure()
-    
-    def _default_structure(self) -> Dict:
-        """Structure par défaut de la base"""
-        return {
-            'metadata': {
-                'version': '2.0',
-                'created_at': '2024-01-15',
-                'engine': 'GSQL YAML'
-            },
-            'tables': {},
-            'schemas': {},
-            'functions': {
-                'builtin': [
-                    {'name': 'UPPER', 'type': 'string', 'description': 'Convert to uppercase'},
-                    {'name': 'LOWER', 'type': 'string', 'description': 'Convert to lowercase'},
-                    {'name': 'LENGTH', 'type': 'numeric', 'description': 'String length'},
-                    {'name': 'ABS', 'type': 'numeric', 'description': 'Absolute value'},
-                    {'name': 'ROUND', 'type': 'numeric', 'description': 'Round number'}
-                ],
-                'user': []
-            },
-            'config': {
-                'auto_save': True,
-                'backup_on_write': True
-            }
+        # Configuration
+        self.config = {
+            'db_path': db_path,
+            'base_dir': str(base_dir),
+            'buffer_pool_size': buffer_pool_size,
+            'enable_wal': enable_wal,
+            'auto_recovery': auto_recovery,
+            'auto_backup': True,
+            'backup_interval': 24 * 3600,  # 24 heures
+            'max_query_cache': 100,
+            'query_timeout': 30,  # secondes
+            'version': '4.0'
         }
+        
+        # Initialiser le moteur de stockage
+        self.storage = create_storage(
+            db_path=db_path,
+            base_dir=base_dir,
+            buffer_pool_size=buffer_pool_size,
+            enable_wal=enable_wal
+        )
+        
+        # État de la base
+        self.is_open = True
+        self.initialized = False
+        self.lock = threading.RLock()
+        
+        # Cache des résultats
+        self.query_cache = {}
+        self.schema_cache = {}
+        
+        # Statistiques
+        self.stats = {
+            'queries_executed': 0,
+            'queries_cached': 0,
+            'transactions': 0,
+            'errors': 0,
+            'start_time': datetime.now(),
+            'last_backup': None
+        }
+        
+        # Journal de transaction actif
+        self.active_transactions = {}
+        
+        # Initialiser les tables système
+        self._initialize_database()
+        
+        logger.info(f"GSQL Database initialized (v{self.config['version']})")
     
-    def save(self):
-        """Sauvegarde la base"""
+    def _initialize_database(self):
+        """Initialise les tables et structures système"""
         try:
-            with open(self.db_path, 'w', encoding='utf-8') as f:
-                yaml.dump(self.data, f, default_flow_style=False, allow_unicode=True)
-            logger.debug(f"Database saved to {self.db_path}")
+            with self.lock:
+                # Vérifier si les tables système existent
+                tables = self.storage.get_tables()
+                
+                # Créer des tables par défaut si nécessaire
+                default_tables = self._get_default_tables()
+                
+                for table_name, table_sql in default_tables.items():
+                    table_exists = any(t['table_name'] == table_name for t in tables)
+                    
+                    if not table_exists:
+                        logger.info(f"Creating default table: {table_name}")
+                        self.storage.execute(table_sql)
+                
+                self.initialized = True
+                
+                # Sauvegarder la configuration
+                self._save_config()
+                
         except Exception as e:
-            logger.error(f"Error saving database: {e}")
-    
-    # === GESTION DES TABLES ===
-    
-    def create_table(self, table_name: str, columns: Dict) -> bool:
-        """Crée une nouvelle table"""
-        if table_name in self.data['tables']:
-            return False
-        
-        # Initialiser la table
-        self.data['tables'][table_name] = []
-        self.data['schemas'][table_name] = {
-            'columns': columns,
-            'created_at': 'now',
-            'row_count': 0
-        }
-        
-        self.save()
-        return True
-    
-    def insert(self, table_name: str, values: Dict) -> int:
-        """Insère une ligne"""
-        if table_name not in self.data['tables']:
-            # Créer la table si elle n'existe pas
-            columns = {k: 'TEXT' for k in values.keys()}
-            self.create_table(table_name, columns)
-        
-        # Ajouter la ligne
-        row_id = len(self.data['tables'][table_name])
-        row = {'_id': row_id, **values}
-        self.data['tables'][table_name].append(row)
-        self.data['schemas'][table_name]['row_count'] = len(self.data['tables'][table_name])
-        
-        self.save()
-        return row_id
-    
-    def select(self, table_name: str, where: Dict = None, 
-               columns: List[str] = None, limit: int = None) -> List[Dict]:
-        """Sélectionne des lignes"""
-        if table_name not in self.data['tables']:
-            return []
-        
-        rows = self.data['tables'][table_name]
-        
-        # Filtrer
-        if where:
-            filtered = []
-            for row in rows:
-                match = True
-                for key, value in where.items():
-                    if row.get(key) != value:
-                        match = False
-                        break
-                if match:
-                    filtered.append(row)
-            rows = filtered
-        
-        # Sélectionner des colonnes
-        if columns:
-            result = []
-            for row in rows:
-                filtered_row = {}
-                for col in columns:
-                    if col in row:
-                        filtered_row[col] = row[col]
-                result.append(filtered_row)
-            rows = result
-        
-        # Limite
-        if limit:
-            rows = rows[:limit]
-        
-        return rows
-    
-    def update(self, table_name: str, values: Dict, where: Dict = None) -> int:
-        """Met à jour des lignes"""
-        if table_name not in self.data['tables']:
-            return 0
-        
-        updated = 0
-        for row in self.data['tables'][table_name]:
-            # Vérifier les conditions
-            if where:
-                match = True
-                for key, value in where.items():
-                    if row.get(key) != value:
-                        match = False
-                        break
-                if not match:
-                    continue
-            
-            # Mettre à jour
-            for key, value in values.items():
-                row[key] = value
-            updated += 1
-        
-        if updated > 0:
-            self.save()
-        
-        return updated
-    
-    def delete(self, table_name: str, where: Dict = None) -> int:
-        """Supprime des lignes"""
-        if table_name not in self.data['tables']:
-            return 0
-        
-        if not where:
-            # Supprimer tout
-            count = len(self.data['tables'][table_name])
-            self.data['tables'][table_name] = []
-            self.data['schemas'][table_name]['row_count'] = 0
-            self.save()
-            return count
-        
-        # Filtrer
-        keep_rows = []
-        deleted = 0
-        for row in self.data['tables'][table_name]:
-            match = True
-            for key, value in where.items():
-                if row.get(key) != value:
-                    match = False
-                    break
-            
-            if match:
-                deleted += 1
+            logger.error(f"Failed to initialize database: {e}")
+            if self.config['auto_recovery']:
+                logger.warning("Attempting auto-recovery...")
+                self._auto_recover()
             else:
-                keep_rows.append(row)
-        
-        self.data['tables'][table_name] = keep_rows
-        self.data['schemas'][table_name]['row_count'] = len(keep_rows)
-        
-        if deleted > 0:
-            self.save()
-        
-        return deleted
+                raise
     
-    def drop_table(self, table_name: str) -> bool:
-        """Supprime une table"""
-        if table_name not in self.data['tables']:
-            return False
+    def _get_default_tables(self) -> Dict[str, str]:
+        """Retourne les tables par défaut à créer"""
+        return {
+            'users': """
+                CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT UNIQUE NOT NULL,
+                    email TEXT UNIQUE NOT NULL,
+                    full_name TEXT,
+                    age INTEGER CHECK(age >= 0),
+                    city TEXT DEFAULT 'Unknown',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """,
+            
+            'products': """
+                CREATE TABLE IF NOT EXISTS products (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    price REAL NOT NULL CHECK(price >= 0),
+                    category TEXT,
+                    stock INTEGER DEFAULT 0 CHECK(stock >= 0),
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    active BOOLEAN DEFAULT 1
+                )
+            """,
+            
+            'orders': """
+                CREATE TABLE IF NOT EXISTS orders (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    product_id INTEGER NOT NULL,
+                    quantity INTEGER NOT NULL CHECK(quantity > 0),
+                    total_price REAL NOT NULL CHECK(total_price >= 0),
+                    status TEXT DEFAULT 'pending',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+                )
+            """,
+            
+            'logs': """
+                CREATE TABLE IF NOT EXISTS logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    level TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    source TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """
+        }
+    
+    def _save_config(self):
+        """Sauvegarde la configuration dans un fichier"""
+        config_file = self.base_dir / "gsql_config.json"
+        try:
+            with open(config_file, 'w') as f:
+                json.dump(self.config, f, indent=2)
+        except Exception as e:
+            logger.warning(f"Failed to save config: {e}")
+    
+    def _auto_recover(self):
+        """Tente une récupération automatique"""
+        try:
+            logger.warning("Starting auto-recovery...")
+            
+            # Fermer et réouvrir le storage
+            self.storage.close()
+            
+            # Réinitialiser le storage
+            self.storage = create_storage(
+                db_path=self.config['db_path'],
+                base_dir=self.config['base_dir'],
+                buffer_pool_size=self.config['buffer_pool_size'],
+                enable_wal=self.config['enable_wal']
+            )
+            
+            # Réinitialiser les tables
+            self._initialize_database()
+            
+            logger.info("Auto-recovery completed successfully")
+            
+        except Exception as e:
+            logger.error(f"Auto-recovery failed: {e}")
+            raise SQLExecutionError(f"Database recovery failed: {e}")
+    
+    def execute(self, sql: str, params: Dict = None, 
+                use_cache: bool = True, timeout: int = None) -> Dict:
+        """
+        Exécute une requête SQL sur la base de données
         
-        del self.data['tables'][table_name]
-        del self.data['schemas'][table_name]
-        self.save()
-        return True
-    
-    def get_tables(self) -> List[Dict]:
-        """Liste les tables"""
-        tables = []
-        for name, schema in self.data['schemas'].items():
-            tables.append({
-                'name': name,
-                'rows': schema.get('row_count', 0),
-                'columns': list(schema.get('columns', {}).keys())
-            })
-        return tables
-    
-    def get_schema(self, table_name: str) -> Optional[Dict]:
-        """Récupère le schéma d'une table"""
-        return self.data['schemas'].get(table_name)
-    
-    # === GESTION DES FONCTIONS ===
-    
-    def create_function(self, name: str, params: List[str], 
-                       body: str, returns: str = "TEXT") -> bool:
-        """Crée une fonction"""
-        # Vérifier si elle existe déjà
-        for func in self.data['functions']['user']:
-            if func['name'] == name:
-                return False
+        Args:
+            sql: Requête SQL à exécuter
+            params: Paramètres pour la requête préparée
+            use_cache: Utiliser le cache de requêtes
+            timeout: Timeout en secondes
         
-        self.data['functions']['user'].append({
-            'name': name,
-            'params': params,
-            'body': body,
-            'returns': returns,
-            'created_at': 'now'
-        })
+        Returns:
+            Dict: Résultats formatés de la requête
+        """
+        if not self.is_open:
+            raise SQLExecutionError("Database is closed")
         
-        self.save()
-        return True
+        # Détecter les commandes spéciales GSQL
+        special_result = self._handle_special_commands(sql)
+        if special_result:
+            return special_result
+        
+        start_time = datetime.now()
+        query_hash = None
+        
+        # Générer un hash pour le cache
+        if use_cache and params is None:
+            query_hash = hashlib.md5(sql.encode()).hexdigest()[:16]
+            cached = self.query_cache.get(query_hash)
+            if cached:
+                self.stats['queries_cached'] += 1
+                logger.debug(f"Query cache hit: {query_hash}")
+                return cached
+        
+        try:
+            with self.lock:
+                # Exécuter la requête via le storage
+                result = self.storage.execute(
+                    sql=sql,
+                    params=params,
+                    use_cache=use_cache,
+                    track_stats=True
+                )
+                
+                # Ajouter des métadonnées
+                execution_time = (datetime.now() - start_time).total_seconds()
+                result['execution_time'] = round(execution_time, 3)
+                result['timestamp'] = datetime.now().isoformat()
+                
+                # Mettre à jour les statistiques
+                self.stats['queries_executed'] += 1
+                
+                # Mettre en cache les requêtes SELECT réussies
+                if (use_cache and query_hash and 
+                    result.get('success') and 
+                    result.get('type') == 'select'):
+                    
+                    # Limiter la taille du cache
+                    if len(self.query_cache) >= self.config['max_query_cache']:
+                        # Supprimer la plus ancienne entrée
+                        oldest_key = min(self.query_cache.keys(), 
+                                        key=lambda k: self.query_cache[k]['timestamp'])
+                        del self.query_cache[oldest_key]
+                    
+                    self.query_cache[query_hash] = result
+                
+                # Logger les requêtes importantes
+                if execution_time > 1.0:  # Plus d'1 seconde
+                    logger.warning(f"Slow query ({execution_time:.2f}s): {sql[:100]}...")
+                
+                return result
+                
+        except SQLExecutionError as e:
+            self.stats['errors'] += 1
+            logger.error(f"Query execution error: {e}")
+            
+            # Tentative de récupération pour certaines erreurs
+            if "database is locked" in str(e) and self.config['auto_recovery']:
+                logger.info("Database locked, attempting recovery...")
+                self._auto_recover()
+                
+                # Réessayer la requête
+                return self.execute(sql, params, use_cache=False)
+            
+            raise
+            
+        except Exception as e:
+            self.stats['errors'] += 1
+            logger.error(f"Unexpected error: {e}")
+            raise SQLExecutionError(f"Database error: {str(e)}")
     
-    def get_functions(self) -> List[Dict]:
-        """Liste toutes les fonctions"""
-        all_funcs = []
+    def _handle_special_commands(self, sql: str) -> Optional[Dict]:
+        """Gère les commandes spéciales GSQL"""
+        sql_upper = sql.strip().upper()
         
-        # Built-in
-        for func in self.data['functions']['builtin']:
-            all_funcs.append({**func, 'type': 'builtin'})
-        
-        # User
-        for func in self.data['functions']['user']:
-            all_funcs.append({**func, 'type': 'user'})
-        
-        return all_funcs
-    
-    def drop_function(self, name: str) -> bool:
-        """Supprime une fonction"""
-        for i, func in enumerate(self.data['functions']['user']):
-            if func['name'] == name:
-                del self.data['functions']['user'][i]
-                self.save()
-                return True
-        return False
-
-class QueryExecutor:
-    """Exécuteur de requêtes avec support YAML"""
-    
-    def __init__(self, storage):
-        self.storage = storage
-    
-    def execute(self, sql: str) -> Any:
-        """Exécute une requête SQL"""
-        sql = sql.strip()
-        
-        # Commandes spéciales
-        if sql.upper() == "SHOW TABLES":
+        # SHOW TABLES
+        if sql_upper == "SHOW TABLES" or sql == ".tables":
             return self._execute_show_tables()
-        elif sql.upper() == "SHOW FUNCTIONS":
+        
+        # SHOW FUNCTIONS
+        elif sql_upper == "SHOW FUNCTIONS":
             return self._execute_show_functions()
-        elif sql.upper() == "HELP":
+        
+        # DESCRIBE / SCHEMA
+        elif sql_upper.startswith("DESCRIBE ") or sql_upper.startswith("SCHEMA "):
+            table_name = sql.split()[1] if len(sql.split()) > 1 else None
+            if table_name:
+                return self._execute_describe_table(table_name)
+        
+        # STATS
+        elif sql_upper == "STATS" or sql == ".stats":
+            return self._execute_stats()
+        
+        # VACUUM
+        elif sql_upper == "VACUUM":
+            return self._execute_vacuum()
+        
+        # BACKUP
+        elif sql_upper.startswith("BACKUP"):
+            return self._execute_backup(sql)
+        
+        # HELP
+        elif sql_upper == "HELP" or sql == ".help":
             return self._execute_help()
         
-        # Détecter le type de requête
-        sql_upper = sql.upper()
-        
-        if sql_upper.startswith("CREATE TABLE"):
-            return self._execute_create_table(sql)
-        elif sql_upper.startswith("CREATE FUNCTION"):
-            return self._execute_create_function(sql)
-        elif sql_upper.startswith("INSERT INTO"):
-            return self._execute_insert(sql)
-        elif sql_upper.startswith("SELECT"):
-            return self._execute_select(sql)
-        elif sql_upper.startswith("UPDATE"):
-            return self._execute_update(sql)
-        elif sql_upper.startswith("DELETE FROM"):
-            return self._execute_delete(sql)
-        elif sql_upper.startswith("DROP TABLE"):
-            return self._execute_drop_table(sql)
-        else:
-            raise SQLExecutionError(f"Unsupported SQL: {sql}")
+        return None
     
     def _execute_show_tables(self) -> Dict:
         """Exécute SHOW TABLES"""
-        tables = self.storage.get_tables()
-        return {
-            'type': 'tables',
-            'rows': tables,
-            'count': len(tables),
-            'message': f'Found {len(tables)} table(s)'
-        }
+        try:
+            tables = self.storage.get_tables()
+            
+            # Formater les résultats
+            formatted_tables = []
+            for table in tables:
+                formatted_tables.append({
+                    'table': table['table_name'],
+                    'rows': table.get('row_count', 0),
+                    'size_kb': round(table.get('size_bytes', 0) / 1024, 2),
+                    'columns': table.get('columns', []),
+                    'last_analyzed': table.get('last_analyzed')
+                })
+            
+            return {
+                'type': 'show_tables',
+                'tables': formatted_tables,
+                'count': len(formatted_tables),
+                'message': f'Found {len(formatted_tables)} table(s)',
+                'success': True
+            }
+            
+        except Exception as e:
+            return {
+                'type': 'show_tables',
+                'tables': [],
+                'count': 0,
+                'message': f'Error: {str(e)}',
+                'success': False
+            }
     
     def _execute_show_functions(self) -> Dict:
         """Exécute SHOW FUNCTIONS"""
-        functions = self.storage.get_functions()
-        return {
-            'type': 'functions',
-            'rows': functions,
-            'count': len(functions),
-            'message': f'Found {len(functions)} function(s)'
-        }
+        try:
+            # Récupérer les fonctions depuis le storage
+            result = self.storage.execute("""
+                SELECT name, params, returns, created_at, is_active
+                FROM _gsql_functions
+                WHERE is_active = 1
+                ORDER BY name
+            """)
+            
+            # Ajouter les fonctions intégrées
+            builtin_funcs = [
+                {'name': 'UPPER(text)', 'type': 'builtin', 'description': 'Convert to uppercase'},
+                {'name': 'LOWER(text)', 'type': 'builtin', 'description': 'Convert to lowercase'},
+                {'name': 'LENGTH(text)', 'type': 'builtin', 'description': 'String length'},
+                {'name': 'ABS(number)', 'type': 'builtin', 'description': 'Absolute value'},
+                {'name': 'ROUND(number, decimals)', 'type': 'builtin', 'description': 'Round number'},
+                {'name': 'CONCAT(str1, str2, ...)', 'type': 'builtin', 'description': 'Concatenate strings'},
+                {'name': 'NOW()', 'type': 'builtin', 'description': 'Current timestamp'},
+                {'name': 'DATE()', 'type': 'builtin', 'description': 'Current date'}
+            ]
+            
+            functions = []
+            if result['success'] and result['type'] == 'select':
+                for row in result['rows']:
+                    functions.append({
+                        'name': row['name'],
+                        'type': 'user',
+                        'params': json.loads(row['params']) if row['params'] else [],
+                        'returns': row['returns'],
+                        'created_at': row['created_at']
+                    })
+            
+            functions.extend(builtin_funcs)
+            
+            return {
+                'type': 'show_functions',
+                'functions': functions,
+                'count': len(functions),
+                'message': f'Found {len(functions)} function(s)',
+                'success': True
+            }
+            
+        except Exception as e:
+            return {
+                'type': 'show_functions',
+                'functions': [],
+                'count': 0,
+                'message': f'Error: {str(e)}',
+                'success': False
+            }
+    
+    def _execute_describe_table(self, table_name: str) -> Dict:
+        """Exécute DESCRIBE <table>"""
+        try:
+            schema = self.storage.get_table_schema(table_name)
+            
+            if not schema:
+                raise SQLExecutionError(f"Table '{table_name}' not found")
+            
+            # Formater le schéma
+            columns_info = []
+            for col_name, col_info in schema.get('columns', {}).items():
+                column_desc = f"{col_name} {col_info.get('type', 'TEXT')}"
+                
+                if col_info.get('pk'):
+                    column_desc += " PRIMARY KEY"
+                if col_info.get('not_null'):
+                    column_desc += " NOT NULL"
+                if col_info.get('default'):
+                    column_desc += f" DEFAULT {col_info['default']}"
+                
+                columns_info.append({
+                    'field': col_name,
+                    'type': col_info.get('type', 'TEXT'),
+                    'null': not col_info.get('not_null', False),
+                    'key': 'PRI' if col_info.get('pk') else '',
+                    'default': col_info.get('default'),
+                    'extra': 'auto_increment' if col_info.get('auto_increment') else ''
+                })
+            
+            return {
+                'type': 'describe',
+                'table': table_name,
+                'columns': columns_info,
+                'indexes': schema.get('indexes', []),
+                'foreign_keys': schema.get('foreign_keys', []),
+                'count': len(columns_info),
+                'message': f'Table structure of {table_name}',
+                'success': True
+            }
+            
+        except Exception as e:
+            return {
+                'type': 'describe',
+                'table': table_name,
+                'columns': [],
+                'message': f'Error: {str(e)}',
+                'success': False
+            }
+    
+    def _execute_stats(self) -> Dict:
+        """Exécute STATS pour voir les statistiques"""
+        try:
+            # Récupérer les statistiques du storage
+            storage_stats = self.storage.get_stats()
+            
+            # Statistiques de la base
+            db_stats = {
+                'queries_executed': self.stats['queries_executed'],
+                'queries_cached': self.stats['queries_cached'],
+                'cache_hit_ratio': (
+                    self.stats['queries_cached'] / self.stats['queries_executed'] 
+                    if self.stats['queries_executed'] > 0 else 0
+                ),
+                'errors': self.stats['errors'],
+                'uptime_seconds': (datetime.now() - self.stats['start_time']).total_seconds(),
+                'query_cache_size': len(self.query_cache),
+                'active_transactions': len(self.active_transactions)
+            }
+            
+            return {
+                'type': 'stats',
+                'database': db_stats,
+                'storage': storage_stats,
+                'config': self.config,
+                'message': 'Database statistics',
+                'success': True
+            }
+            
+        except Exception as e:
+            return {
+                'type': 'stats',
+                'message': f'Error: {str(e)}',
+                'success': False
+            }
+    
+    def _execute_vacuum(self) -> Dict:
+        """Exécute VACUUM pour optimiser la base"""
+        try:
+            success = self.storage.vacuum()
+            
+            return {
+                'type': 'vacuum',
+                'success': success,
+                'message': 'Database optimization completed' if success else 'Optimization failed'
+            }
+            
+        except Exception as e:
+            return {
+                'type': 'vacuum',
+                'success': False,
+                'message': f'Error: {str(e)}'
+            }
+    
+    def _execute_backup(self, sql: str) -> Dict:
+        """Exécute BACKUP [path]"""
+        try:
+            # Extraire le chemin optionnel
+            parts = sql.split()
+            backup_path = parts[1] if len(parts) > 1 else None
+            
+            # Créer la sauvegarde
+            backup_file = self.storage.backup(backup_path)
+            
+            # Mettre à jour les statistiques
+            self.stats['last_backup'] = datetime.now().isoformat()
+            
+            return {
+                'type': 'backup',
+                'success': True,
+                'backup_file': backup_file,
+                'message': f'Backup created: {backup_file}'
+            }
+            
+        except Exception as e:
+            return {
+                'type': 'backup',
+                'success': False,
+                'message': f'Error: {str(e)}'
+            }
     
     def _execute_help(self) -> Dict:
-        """Exécute HELP"""
+        """Exécute HELP pour afficher l'aide"""
         help_text = """
-GSQL Commands:
+GSQL Database Commands:
 
-SQL Commands:
-  CREATE TABLE name (col1 TYPE, col2 TYPE, ...)
-  INSERT INTO table VALUES (val1, val2, ...)
-  SELECT * FROM table [WHERE condition]
+DATA MANIPULATION:
+  SELECT * FROM table [WHERE condition] [LIMIT n]
+  INSERT INTO table (col1, col2) VALUES (val1, val2)
   UPDATE table SET col=value [WHERE condition]
   DELETE FROM table [WHERE condition]
-  DROP TABLE table
 
-GSQL Commands:
-  SHOW TABLES      - List all tables
-  SHOW FUNCTIONS   - List all functions
-  HELP             - This help
+DATA DEFINITION:
+  CREATE TABLE name (col1 TYPE, col2 TYPE, ...)
+  DROP TABLE name
+  ALTER TABLE name ADD COLUMN col TYPE
+  CREATE INDEX idx_name ON table(column)
 
-Natural Language:
-  nl show tables
-  nl table [name]
-  nl help
+DATABASE MANAGEMENT:
+  SHOW TABLES                    - List all tables
+  DESCRIBE table                 - Show table structure
+  SHOW FUNCTIONS                 - List all functions
+  STATS                          - Show database statistics
+  VACUUM                         - Optimize database
+  BACKUP [path]                  - Create database backup
+  HELP                           - This help message
+
+TRANSACTIONS:
+  BEGIN [DEFERRED|IMMEDIATE|EXCLUSIVE]
+  COMMIT
+  ROLLBACK [TO SAVEPOINT name]
+  SAVEPOINT name
+
+DOT COMMANDS (compatible SQLite):
+  .tables                        - List tables
+  .schema [table]                - Show schema
+  .stats                         - Show stats
+  .help                          - Show help
+  .backup [file]                 - Create backup
+  .vacuum                        - Optimize database
 """
+        
         return {
             'type': 'help',
-            'message': help_text
+            'message': help_text,
+            'success': True
         }
     
-    def _execute_create_table(self, sql: str) -> Dict:
-        """Exécute CREATE TABLE"""
-        # Parser simple: CREATE TABLE name (col1 TYPE, col2 TYPE, ...)
-        import re
-        
-        pattern = r"CREATE TABLE (\w+)\s*\((.*)\)"
-        match = re.search(pattern, sql, re.IGNORECASE)
-        
-        if not match:
-            raise SQLSyntaxError("Invalid CREATE TABLE syntax")
-        
-        table_name = match.group(1)
-        columns_str = match.group(2)
-        
-        # Parser les colonnes
-        columns = {}
-        for col_def in columns_str.split(','):
-            col_def = col_def.strip()
-            if not col_def:
-                continue
+    # ==================== TRANSACTION MANAGEMENT ====================
+    
+    def begin_transaction(self, isolation_level: str = "DEFERRED") -> Dict:
+        """Démarre une nouvelle transaction"""
+        try:
+            tid = self.storage.begin_transaction(isolation_level)
             
-            parts = col_def.split()
-            if len(parts) >= 2:
-                col_name = parts[0]
-                col_type = parts[1].upper()
-                columns[col_name] = col_type
-            else:
-                raise SQLSyntaxError(f"Invalid column definition: {col_def}")
-        
-        success = self.storage.create_table(table_name, columns)
-        
-        if success:
+            # Enregistrer la transaction
+            self.active_transactions[tid] = {
+                'start_time': datetime.now(),
+                'isolation': isolation_level,
+                'queries': []
+            }
+            
+            self.stats['transactions'] += 1
+            
+            return {
+                'type': 'transaction',
+                'tid': tid,
+                'isolation': isolation_level,
+                'message': f'Transaction {tid} started',
+                'success': True
+            }
+            
+        except Exception as e:
+            raise TransactionError(f"Failed to begin transaction: {e}")
+    
+    def commit_transaction(self, tid: int) -> Dict:
+        """Valide une transaction"""
+        try:
+            success = self.storage.commit_transaction(tid)
+            
+            if tid in self.active_transactions:
+                del self.active_transactions[tid]
+            
+            return {
+                'type': 'transaction',
+                'tid': tid,
+                'message': f'Transaction {tid} committed',
+                'success': success
+            }
+            
+        except Exception as e:
+            raise TransactionError(f"Failed to commit transaction {tid}: {e}")
+    
+    def rollback_transaction(self, tid: int, to_savepoint: str = None) -> Dict:
+        """Annule une transaction"""
+        try:
+            success = self.storage.rollback_transaction(tid, to_savepoint)
+            
+            if not to_savepoint and tid in self.active_transactions:
+                del self.active_transactions[tid]
+            
+            return {
+                'type': 'transaction',
+                'tid': tid,
+                'message': f'Transaction {tid} rolled back' + 
+                          (f' to {to_savepoint}' if to_savepoint else ''),
+                'success': success
+            }
+            
+        except Exception as e:
+            raise TransactionError(f"Failed to rollback transaction {tid}: {e}")
+    
+    def create_savepoint(self, tid: int, name: str) -> Dict:
+        """Crée un savepoint dans une transaction"""
+        try:
+            success = self.storage.savepoint(tid, name)
+            
+            if tid in self.active_transactions:
+                self.active_transactions[tid]['savepoints'] = \
+                    self.active_transactions[tid].get('savepoints', []) + [name]
+            
+            return {
+                'type': 'savepoint',
+                'tid': tid,
+                'name': name,
+                'message': f'Savepoint {name} created in transaction {tid}',
+                'success': success
+            }
+            
+        except Exception as e:
+            raise TransactionError(f"Failed to create savepoint: {e}")
+    
+    # ==================== TABLE MANAGEMENT ====================
+    
+    def create_table(self, table_name: str, columns: Dict) -> Dict:
+        """Crée une nouvelle table avec validation"""
+        try:
+            # Valider le nom de la table
+            if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', table_name):
+                raise SQLSyntaxError(f"Invalid table name: '{table_name}'")
+            
+            # Construire la requête SQL
+            column_defs = []
+            for col_name, col_spec in columns.items():
+                if isinstance(col_spec, str):
+                    col_def = f"{col_name} {col_spec}"
+                elif isinstance(col_spec, dict):
+                    col_def = f"{col_name} {col_spec.get('type', 'TEXT')}"
+                    
+                    if col_spec.get('primary_key'):
+                        col_def += " PRIMARY KEY"
+                    if col_spec.get('auto_increment'):
+                        col_def += " AUTOINCREMENT"
+                    if col_spec.get('not_null'):
+                        col_def += " NOT NULL"
+                    if 'default' in col_spec:
+                        default_val = col_spec['default']
+                        if isinstance(default_val, str) and not default_val.upper() in ['CURRENT_TIMESTAMP', 'NULL']:
+                            default_val = f"'{default_val}'"
+                        col_def += f" DEFAULT {default_val}"
+                    if col_spec.get('unique'):
+                        col_def += " UNIQUE"
+                    if 'check' in col_spec:
+                        col_def += f" CHECK({col_spec['check']})"
+                else:
+                    raise SQLSyntaxError(f"Invalid column specification for '{col_name}'")
+                
+                column_defs.append(col_def)
+            
+            sql = f"CREATE TABLE {table_name} ({', '.join(column_defs)})"
+            
+            # Exécuter la création
+            result = self.execute(sql)
+            
+            # Mettre à jour le cache de schéma
+            self.storage._cache_table_schema(table_name)
+            
             return {
                 'type': 'create_table',
-                'message': f'Table {table_name} created successfully',
                 'table': table_name,
-                'columns': list(columns.keys())
+                'columns': list(columns.keys()),
+                'sql': sql,
+                'message': f'Table {table_name} created successfully',
+                'success': True
             }
-        else:
-            raise SQLExecutionError(f"Table {table_name} already exists")
-    
-    def _execute_create_function(self, sql: str) -> Dict:
-        """Exécute CREATE FUNCTION"""
-        # Format: CREATE FUNCTION name(params) RETURNS type AS $$code$$ LANGUAGE plpython
-        import re
-        
-        pattern = r"CREATE FUNCTION (\w+)\s*\((.*?)\)\s*RETURNS\s+(\w+)\s+AS\s+\$\$(.*?)\$\$\s+LANGUAGE\s+(\w+)"
-        match = re.search(pattern, sql, re.IGNORECASE | re.DOTALL)
-        
-        if not match:
-            raise SQLSyntaxError("Invalid CREATE FUNCTION syntax")
-        
-        name = match.group(1)
-        params_str = match.group(2)
-        returns = match.group(3)
-        body = match.group(4).strip()
-        language = match.group(5)
-        
-        # Extraire les paramètres
-        params = []
-        if params_str.strip():
-            for param in params_str.split(','):
-                param = param.strip()
-                if param:
-                    # Enlever le type si présent
-                    param_name = param.split()[0]
-                    params.append(param_name)
-        
-        success = self.storage.create_function(name, params, body, returns)
-        
-        if success:
-            return {
-                'type': 'create_function',
-                'message': f'Function {name} created successfully',
-                'name': name,
-                'params': params
-            }
-        else:
-            raise SQLExecutionError(f"Function {name} already exists")
-    
-    def _execute_insert(self, sql: str) -> Dict:
-        """Exécute INSERT INTO"""
-        import re
-        
-        # Pattern: INSERT INTO table VALUES (val1, val2, ...)
-        pattern = r"INSERT INTO (\w+)\s+VALUES\s*\((.*?)\)"
-        match = re.search(pattern, sql, re.IGNORECASE | re.DOTALL)
-        
-        if not match:
-            raise SQLSyntaxError("Invalid INSERT syntax")
-        
-        table_name = match.group(1)
-        values_str = match.group(2)
-        
-        # Parser les valeurs
-        values = []
-        current = ""
-        in_quotes = False
-        quote_char = None
-        
-        for char in values_str:
-            if char in ["'", '"'] and (not in_quotes or quote_char == char):
-                if not in_quotes:
-                    in_quotes = True
-                    quote_char = char
-                else:
-                    in_quotes = False
-                current += char
-            elif char == ',' and not in_quotes:
-                values.append(current.strip())
-                current = ""
-            else:
-                current += char
-        
-        if current:
-            values.append(current.strip())
-        
-        # Créer le dictionnaire de valeurs
-        values_dict = {}
-        for i, val in enumerate(values):
-            # Enlever les guillemets
-            if val.startswith("'") and val.endswith("'"):
-                val = val[1:-1]
-            elif val.startswith('"') and val.endswith('"'):
-                val = val[1:-1]
             
-            values_dict[f"col{i}"] = val
-        
-        row_id = self.storage.insert(table_name, values_dict)
-        
-        return {
-            'type': 'insert',
-            'message': f'Row inserted with ID {row_id}',
-            'table': table_name,
-            'row_id': row_id
-        }
+        except Exception as e:
+            raise SQLExecutionError(f"Failed to create table {table_name}: {e}")
     
-    def _execute_select(self, sql: str) -> Dict:
-        """Exécute SELECT"""
-        import re
-        
-        # Pattern simple: SELECT * FROM table [WHERE conditions]
-        pattern = r"SELECT (.*?) FROM (\w+)(?: WHERE (.*?))?(?: LIMIT (\d+))?$"
-        match = re.search(pattern, sql, re.IGNORECASE)
-        
-        if not match:
-            raise SQLSyntaxError("Invalid SELECT syntax")
-        
-        columns_str = match.group(1)
-        table_name = match.group(2)
-        where_str = match.group(3)
-        limit_str = match.group(4)
-        
-        # Déterminer les colonnes
-        if columns_str.strip() == "*":
-            columns = None
-        else:
-            columns = [col.strip() for col in columns_str.split(',')]
-        
-        # Parser les conditions WHERE
-        where = None
-        if where_str:
-            # Conditions simples: col = value
-            where = {}
-            conditions = where_str.split('AND')
-            for cond in conditions:
-                cond = cond.strip()
-                if '=' in cond:
-                    col, val = cond.split('=', 1)
-                    col = col.strip()
-                    val = val.strip()
-                    
-                    # Enlever les guillemets
-                    if val.startswith("'") and val.endswith("'"):
-                        val = val[1:-1]
-                    elif val.startswith('"') and val.endswith('"'):
-                        val = val[1:-1]
-                    
-                    where[col] = val
-        
-        # Limite
-        limit = int(limit_str) if limit_str else None
-        
-        # Exécuter la requête
-        rows = self.storage.select(table_name, where, columns, limit)
-        
-        return {
-            'type': 'select',
-            'rows': rows,
-            'count': len(rows),
-            'table': table_name
-        }
-    
-    def _execute_update(self, sql: str) -> Dict:
-        """Exécute UPDATE"""
-        import re
-        
-        pattern = r"UPDATE (\w+) SET (.*?)(?: WHERE (.*?))?$"
-        match = re.search(pattern, sql, re.IGNORECASE)
-        
-        if not match:
-            raise SQLSyntaxError("Invalid UPDATE syntax")
-        
-        table_name = match.group(1)
-        set_str = match.group(2)
-        where_str = match.group(3)
-        
-        # Parser SET
-        values = {}
-        assignments = set_str.split(',')
-        for assign in assignments:
-            assign = assign.strip()
-            if '=' in assign:
-                col, val = assign.split('=', 1)
-                col = col.strip()
-                val = val.strip()
-                
-                # Enlever les guillemets
-                if val.startswith("'") and val.endswith("'"):
-                    val = val[1:-1]
-                elif val.startswith('"') and val.endswith('"'):
-                    val = val[1:-1]
-                
-                values[col] = val
-        
-        # Parser WHERE
-        where = None
-        if where_str:
-            where = {}
-            if '=' in where_str:
-                col, val = where_str.split('=', 1)
-                col = col.strip()
-                val = val.strip()
-                
-                if val.startswith("'") and val.endswith("'"):
-                    val = val[1:-1]
-                elif val.startswith('"') and val.endswith('"'):
-                    val = val[1:-1]
-                
-                where[col] = val
-        
-        updated = self.storage.update(table_name, values, where)
-        
-        return {
-            'type': 'update',
-            'message': f'{updated} row(s) updated',
-            'table': table_name,
-            'updated': updated
-        }
-    
-    def _execute_delete(self, sql: str) -> Dict:
-        """Exécute DELETE FROM"""
-        import re
-        
-        pattern = r"DELETE FROM (\w+)(?: WHERE (.*?))?$"
-        match = re.search(pattern, sql, re.IGNORECASE)
-        
-        if not match:
-            raise SQLSyntaxError("Invalid DELETE syntax")
-        
-        table_name = match.group(1)
-        where_str = match.group(2)
-        
-        # Parser WHERE
-        where = None
-        if where_str:
-            where = {}
-            if '=' in where_str:
-                col, val = where_str.split('=', 1)
-                col = col.strip()
-                val = val.strip()
-                
-                if val.startswith("'") and val.endswith("'"):
-                    val = val[1:-1]
-                elif val.startswith('"') and val.endswith('"'):
-                    val = val[1:-1]
-                
-                where[col] = val
-        
-        deleted = self.storage.delete(table_name, where)
-        
-        return {
-            'type': 'delete',
-            'message': f'{deleted} row(s) deleted',
-            'table': table_name,
-            'deleted': deleted
-        }
-    
-    def _execute_drop_table(self, sql: str) -> Dict:
-        """Exécute DROP TABLE"""
-        import re
-        
-        pattern = r"DROP TABLE (\w+)"
-        match = re.search(pattern, sql, re.IGNORECASE)
-        
-        if not match:
-            raise SQLSyntaxError("Invalid DROP TABLE syntax")
-        
-        table_name = match.group(1)
-        success = self.storage.drop_table(table_name)
-        
-        if success:
+    def drop_table(self, table_name: str, if_exists: bool = True) -> Dict:
+        """Supprime une table"""
+        try:
+            sql = f"DROP TABLE {'IF EXISTS ' if if_exists else ''}{table_name}"
+            result = self.execute(sql)
+            
+            # Nettoyer le cache
+            if table_name in self.schema_cache:
+                del self.schema_cache[table_name]
+            
             return {
                 'type': 'drop_table',
+                'table': table_name,
                 'message': f'Table {table_name} dropped',
-                'table': table_name
+                'success': True
             }
-        else:
-            raise SQLExecutionError(f"Table {table_name} does not exist")
-
-class Database:
-    """Classe principale de la base de données GSQL"""
-    
-    def __init__(self, db_path: str = ":memory:", use_nlp: bool = True):
-        """
-        Initialise la base de données
-        
-        Args:
-            db_path: Chemin vers le fichier YAML ou ":memory:" pour en mémoire
-            use_nlp: Activer le traitement du langage naturel
-        """
-        self.db_path = db_path
-        self.use_nlp = use_nlp
-        
-        # Initialiser le stockage
-        if db_path == ":memory:":
-            # Mode mémoire - utiliser SQLite temporaire
-            self._init_memory_mode()
-        else:
-            # Mode YAML
-            self.storage = YAMLStorage(db_path)
-        
-        # Initialiser l'exécuteur
-        self.executor = QueryExecutor(self.storage)
-        
-        logger.info(f"Database initialized: {db_path}")
-    
-    def _init_memory_mode(self):
-        """Initialise le mode mémoire avec SQLite"""
-        self.temp_db = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
-        self.temp_db.close()
-        
-        self.conn = sqlite3.connect(self.temp_db.name)
-        self.conn.row_factory = sqlite3.Row
-        self.cursor = self.conn.cursor()
-        
-        # Créer une table users par défaut avec des données
-        self.cursor.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY,
-                name TEXT,
-                email TEXT,
-                age INTEGER
-            )
-        """)
-        
-        # Insérer des données d'exemple si la table est vide
-        self.cursor.execute("SELECT COUNT(*) FROM users")
-        if self.cursor.fetchone()[0] == 0:
-            sample_data = [
-                (1, 'Alice', 'alice@example.com', 30),
-                (2, 'Bob', 'bob@example.com', 25),
-                (3, 'Charlie', 'charlie@example.com', 35)
-            ]
-            self.cursor.executemany("INSERT INTO users VALUES (?, ?, ?, ?)", sample_data)
-            self.conn.commit()
-        
-        # Simuler le stockage YAML pour l'API
-        class MemoryStorage:
-            def __init__(self, cursor, conn):
-                self.cursor = cursor
-                self.conn = conn
             
-            def get_tables(self):
-                self.cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-                tables = []
-                for row in self.cursor.fetchall():
-                    table_name = row['name']
-                    self.cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
-                    row_count = self.cursor.fetchone()[0]
-                    tables.append({
-                        'name': table_name,
-                        'rows': row_count,
-                        'columns': self._get_columns(table_name)
-                    })
-                return tables
-            
-            def _get_columns(self, table_name):
-                self.cursor.execute(f"PRAGMA table_info({table_name})")
-                return [row['name'] for row in self.cursor.fetchall()]
-            
-            def select(self, table_name, where=None, columns=None, limit=None):
-                # Construire la requête
-                query = f"SELECT * FROM {table_name}"
-                params = []
-                
-                if where:
-                    conditions = []
-                    for key, value in where.items():
-                        conditions.append(f"{key} = ?")
-                        params.append(value)
-                    query += " WHERE " + " AND ".join(conditions)
-                
-                if limit:
-                    query += f" LIMIT {limit}"
-                
-                self.cursor.execute(query, params)
-                rows = []
-                for row in self.cursor.fetchall():
-                    rows.append(dict(row))
-                return rows
-        
-        self.storage = MemoryStorage(self.cursor, self.conn)
-    
-    def execute(self, sql: str) -> Any:
-        """
-        Exécute une commande SQL
-        
-        Args:
-            sql: Commande SQL
-            
-        Returns:
-            Résultat de l'exécution
-        """
-        try:
-            return self.executor.execute(sql)
         except Exception as e:
-            if isinstance(e, GSQLBaseException):
-                raise e
-            raise SQLExecutionError(f"Execution failed: {str(e)}")
+            raise SQLExecutionError(f"Failed to drop table {table_name}: {e}")
     
-    def execute_nl(self, nl_query: str) -> Any:
-        """
-        Exécute une requête en langage naturel
-        
-        Args:
-            nl_query: Requête en langage naturel
+    def insert(self, table_name: str, values: Dict, 
+               returning: str = None) -> Dict:
+        """Insère une ligne dans une table"""
+        try:
+            # Construire la requête INSERT
+            columns = ', '.join(values.keys())
+            placeholders = ', '.join(['?' for _ in values])
             
-        Returns:
-            Résultat de l'exécution
-        """
-        if not self.use_nlp:
-            raise SQLExecutionError("NLP is not enabled")
-        
-        # Traduction simple
-        nl_lower = nl_query.lower()
-        
-        if "table" in nl_lower and "show" not in nl_lower:
-            # Extraire le nom de table
-            words = nl_lower.split()
-            for word in words:
-                if word != "table" and len(word) > 2:
-                    return self.execute(f"SELECT * FROM {word}")
-        
-        if "table" in nl_lower:
-            return self.execute("SHOW TABLES")
-        elif "fonction" in nl_lower or "function" in nl_lower:
-            return self.execute("SHOW FUNCTIONS")
-        elif "aide" in nl_lower or "help" in nl_lower:
-            return self.execute("HELP")
-        else:
+            sql = f"INSERT INTO {table_name} ({columns}) VALUES ({placeholders})"
+            
+            if returning:
+                sql += f" RETURNING {returning}"
+            
+            # Exécuter avec les valeurs
+            result = self.execute(sql, tuple(values.values()))
+            
             return {
-                'type': 'help',
-                'message': 'Try: show tables, table [name], help'
+                'type': 'insert',
+                'table': table_name,
+                'lastrowid': result.get('lastrowid'),
+                'rows_affected': result.get('rows_affected', 0),
+                'message': f'Row inserted into {table_name}',
+                'success': True
+            }
+            
+        except Exception as e:
+            raise SQLExecutionError(f"Failed to insert into {table_name}: {e}")
+    
+    def select(self, table_name: str, columns: List[str] = None, 
+               where: Dict = None, limit: int = None, 
+               offset: int = 0, order_by: str = None) -> Dict:
+        """Exécute une requête SELECT avec paramètres simplifiés"""
+        try:
+            # Construire la requête SELECT
+            cols = ', '.join(columns) if columns else '*'
+            sql = f"SELECT {cols} FROM {table_name}"
+            
+            # Ajouter WHERE
+            params = []
+            if where:
+                conditions = []
+                for col, val in where.items():
+                    if isinstance(val, (list, tuple)):
+                        placeholders = ', '.join(['?' for _ in val])
+                        conditions.append(f"{col} IN ({placeholders})")
+                        params.extend(val)
+                    else:
+                        conditions.append(f"{col} = ?")
+                        params.append(val)
+                
+                if conditions:
+                    sql += f" WHERE {' AND '.join(conditions)}"
+            
+            # Ajouter ORDER BY
+            if order_by:
+                sql += f" ORDER BY {order_by}"
+            
+            # Ajouter LIMIT et OFFSET
+            if limit is not None:
+                sql += f" LIMIT {limit}"
+                if offset:
+                    sql += f" OFFSET {offset}"
+            
+            # Exécuter la requête
+            result = self.execute(sql, params if params else None)
+            
+            return result
+            
+        except Exception as e:
+            raise SQLExecutionError(f"Failed to select from {table_name}: {e}")
+    
+    # ==================== FUNCTION MANAGEMENT ====================
+    
+    def register_function(self, name: str, func, num_params: int = -1) -> Dict:
+        """Enregistre une fonction Python dans la base"""
+        try:
+            self.storage.register_function(name, func, num_params)
+            
+            return {
+                'type': 'register_function',
+                'name': name,
+                'num_params': num_params,
+                'message': f'Function {name} registered',
+                'success': True
+            }
+            
+        except Exception as e:
+            raise FunctionError(f"Failed to register function {name}: {e}")
+    
+    # ==================== MAINTENANCE ====================
+    
+    def optimize(self) -> Dict:
+        """Optimise la base de données"""
+        try:
+            # Exécuter plusieurs optimisations
+            results = []
+            
+            # 1. VACUUM
+            vacuum_result = self._execute_vacuum()
+            results.append(('vacuum', vacuum_result['success']))
+            
+            # 2. ANALYZE pour les statistiques
+            analyze_result = self.execute("ANALYZE")
+            results.append(('analyze', analyze_result.get('success', False)))
+            
+            # 3. Nettoyer le cache
+            self.query_cache.clear()
+            results.append(('clear_cache', True))
+            
+            # 4. Nettoyer le buffer pool
+            self.storage.buffer_pool.invalidate()
+            results.append(('clear_buffer_pool', True))
+            
+            return {
+                'type': 'optimize',
+                'operations': results,
+                'message': 'Database optimization completed',
+                'success': all(r[1] for r in results)
+            }
+            
+        except Exception as e:
+            return {
+                'type': 'optimize',
+                'message': f'Error during optimization: {e}',
+                'success': False
             }
     
-    def create_function(self, name: str, params: List[str], 
-                       body: str, returns: str = "TEXT") -> bool:
-        """
-        Crée une fonction utilisateur
-        """
-        if hasattr(self.storage, 'create_function'):
-            return self.storage.create_function(name, params, body, returns)
-        return False
-    
-    def list_tables(self) -> List[Dict]:
-        """Liste les tables"""
-        if hasattr(self.storage, 'get_tables'):
-            return self.storage.get_tables()
-        return []
-    
-    def list_functions(self) -> List[Dict]:
-        """Liste les fonctions"""
-        if hasattr(self.storage, 'get_functions'):
-            return self.storage.get_functions()
-        return []
+    def check_health(self) -> Dict:
+        """Vérifie la santé de la base de données"""
+        try:
+            health_checks = []
+            
+            # 1. Connexion
+            health_checks.append(('connection', self.is_open and self.storage.is_connected))
+            
+            # 2. Tables système
+            sys_tables = ['_gsql_metadata', '_gsql_schemas', '_gsql_functions']
+            for table in sys_tables:
+                result = self.execute(f"SELECT 1 FROM {table} LIMIT 1")
+                health_checks.append((f'table_{table}', result.get('success', False)))
+            
+            # 3. Buffer pool
+            bp_stats = self.storage.buffer_pool.get_stats()
+            health_checks.append(('buffer_pool', bp_stats['hit_ratio'] > 0.5))
+            
+            # 4. Espace disque (estimation)
+            import shutil
+            disk_usage = shutil.disk_usage(self.base_dir)
+            free_gb = disk_usage.free / (1024**3)
+            health_checks.append(('disk_space', free_gb > 1))  # 1GB minimum
+            
+            # Calculer le score de santé
+            passed = sum(1 for _, status in health_checks if status)
+            total = len(health_checks)
+            health_score = (passed / total) * 100
+            
+            status = 'HEALTHY' if health_score >= 80 else 'DEGRADED' if health_score >= 50 else 'CRITICAL'
+            
+            return {
+                'type': 'health_check',
+                'status': status,
+                'score': round(health_score, 1),
+                'checks': health_checks,
+                'passed': passed,
+                'total': total,
+                'message': f'Health check: {status} ({health_score:.1f}%)',
+                'success': health_score >= 50
+            }
+            
+        except Exception as e:
+            return {
+                'type': 'health_check',
+                'status': 'ERROR',
+                'score': 0,
+                'message': f'Health check failed: {e}',
+                'success': False
+            }
     
     def close(self):
-        """Ferme la base de données"""
-        if hasattr(self, 'conn'):
-            self.conn.close()
-            os.unlink(self.temp_db.name)
-        logger.info("Database closed")
+        """Ferme la base de données proprement"""
+        with self.lock:
+            if self.is_open:
+                try:
+                    # Sauvegarder les statistiques
+                    self._save_stats()
+                    
+                    # Fermer le storage
+                    self.storage.close()
+                    
+                    # Fermer les transactions actives
+                    for tid in list(self.active_transactions.keys()):
+                        try:
+                            self.rollback_transaction(tid)
+                        except:
+                            pass
+                    
+                    self.is_open = False
+                    self.initialized = False
+                    
+                    logger.info("Database closed")
+                    
+                except Exception as e:
+                    logger.error(f"Error closing database: {e}")
+    
+    def _save_stats(self):
+        """Sauvegarde les statistiques d'utilisation"""
+        stats_file = self.base_dir / "gsql_stats.json"
+        try:
+            stats_data = {
+                'stats': self.stats,
+                'last_run': datetime.now().isoformat(),
+                'version': self.config['version']
+            }
+            
+            with open(stats_file, 'w') as f:
+                json.dump(stats_data, f, indent=2)
+                
+        except Exception as e:
+            logger.warning(f"Failed to save stats: {e}")
+    
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+    
+    def __del__(self):
+        try:
+            self.close()
+        except:
+            pass
 
-# Fonctions utilitaires
-def create_database(db_path: str, **kwargs) -> Database:
-    """
-    Crée une nouvelle base de données
-    
-    Args:
-        db_path: Chemin vers le fichier
-        **kwargs: Arguments supplémentaires
-        
-    Returns:
-        Instance Database
-    """
-    # S'assurer que le dossier existe
-    db_dir = os.path.dirname(db_path)
-    if db_dir and not os.path.exists(db_dir):
-        os.makedirs(db_dir)
-    
-    # Supprimer le fichier existant s'il y a lieu
-    if os.path.exists(db_path):
-        os.remove(db_path)
-    
+
+# ==================== FACTORY FUNCTIONS ====================
+
+def create_database(db_path=None, **kwargs) -> Database:
+    """Crée une nouvelle instance de base de données"""
     return Database(db_path, **kwargs)
-
-def connect(db_path: str = ":memory:", **kwargs) -> Database:
-    """
-    Se connecte à une base de données
-    
-    Args:
-        db_path: Chemin vers le fichier
-        **kwargs: Arguments supplémentaires
-        
-    Returns:
-        Instance Database
-    """
-    return Database(db_path, **kwargs)
-
-# Variables globales
-_default_db = None
 
 def get_default_database() -> Optional[Database]:
-    """Récupère la base de données par défaut"""
-    return _default_db
+    """Récupère l'instance de base de données par défaut"""
+    # Cette fonction peut gérer une instance globale
+    if not hasattr(get_default_database, '_instance'):
+        get_default_database._instance = None
+    
+    return get_default_database._instance
 
 def set_default_database(db: Database):
-    """Définit la base de données par défaut"""
-    global _default_db
-    _default_db = db
+    """Définit l'instance de base de données par défaut"""
+    get_default_database._instance = db
+
+def connect(db_path: str, **kwargs) -> Database:
+    """Connecte à une base de données GSQL (alias pour create_database)"""
+    return create_database(db_path, **kwargs)
