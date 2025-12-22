@@ -259,12 +259,16 @@ class Database:
         try:
             with self.lock:
                 # Exécuter la requête via le storage
-                result = self.storage.execute(
-                    sql=sql,
-                    params=params,
-                    use_cache=use_cache,
-                    track_stats=True
-                )
+                # AVANT :
+result = self.storage.execute(
+    sql=sql,
+    params=params,
+    use_cache=use_cache,
+    track_stats=True
+)
+
+# APRÈS :
+result = self.storage.execute(sql, params)
                 
                 # Ajouter des métadonnées
                 execution_time = (datetime.now() - start_time).total_seconds()
