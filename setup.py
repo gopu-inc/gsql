@@ -16,7 +16,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 PROJECT_NAME = "gsql"
 AUTHOR = "Gopu Inc."
-AUTHOR_EMAIL = "contact@gopu-inc.com"
+AUTHOR_EMAIL = "ceoseshell@gmail.com"
 DESCRIPTION = "Complete SQL Database System in Python with AI Integration"
 KEYWORDS = [
     "sql", "database", "sqlite", "python", "ai", "nlp", "machine-learning",
@@ -81,9 +81,8 @@ class ManifestValidator:
                 
                 if not force:
                     print("\n⚠️  Des fichiers requis sont manquants!")
-                    response = input("   Continuer malgré tout? (o/N): ")
-                    if response.lower() != 'o':
-                        return False
+                    print("   Continuation automatique (mode Docker)...")
+                    # Dans Docker, continuez automatiquement
             
             if self.warnings:
                 print(f"   ⚠️  Avertissements: {len(self.warnings)}")
