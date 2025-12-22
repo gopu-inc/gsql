@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 GSQL Query Executor - Exécuteur unifié avec support SQLite, fonctions et NLP
-Version: 3.0 - Unifié et optimisé
+Version: 3.0 - Unifié et optimisé (SQLite only)
 """
 
 import re
@@ -21,8 +21,6 @@ from .exceptions import (
     SQLExecutionError, SQLSyntaxError, FunctionError,
     NLError, GSQLBaseException
 )
-from .nlp.translator import NLToSQLTranslator, nl_to_sql
-from .functions.user_functions import FunctionManager, UserFunctionRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +40,21 @@ class QueryExecutor:
             timeout: Timeout par défaut en secondes
         """
         self.storage = storage
-        self.function_manager = function_manager or FunctionManager()
-        self.nlp_translator = nlp_translator or NLToSQLTranslator()
+        self.function_manager = function_manager
+        
+        # Utiliser le traducteur NLP s'il est disponible
+        if nlp_translator is not None:
+            self.nlp_translator = nlp_translator
+        else:
+            # Essayer d'importer le traducteur NLP
+            try:
+                from .nlp.translator import NLToSQLTranslator, nl_to_sql
+                self.nlp_translator = NLToSQLTranslator()
+                self.nl_to_sql_func = nl_to_sql
+            except ImportError:
+                self.nlp_translator = None
+                self.nl_to_sql_func = None
+                logger.warning("NLP translator not available")
         
         # Configuration
         self.config = {
@@ -74,13 +85,17 @@ class QueryExecutor:
         self.lock = threading.RLock()
         self.cache_lock = threading.RLock()
         
-        # Initialiser les fonctions intégrées
-        self._register_builtin_functions()
+        # Initialiser les fonctions intégrées si function_manager est fourni
+        if self.function_manager:
+            self._register_builtin_functions()
         
         logger.info(f"QueryExecutor initialized (cache_size={cache_size})")
     
     def _register_builtin_functions(self):
         """Enregistre les fonctions intégrées"""
+        if not self.function_manager:
+            return
+            
         try:
             # Fonctions mathématiques
             self.function_manager.register('pow', self._func_pow)
@@ -250,8 +265,11 @@ class QueryExecutor:
             # Étape 4: Validation syntaxique
             self._validate_query(sql_query)
             
-            # Étape 5: Exécution via storage
-            result = self._execute_via_storage(sql_query, params)
+            # Étape 5: Exécution via storage ou standalone
+            if self.storage:
+                result = self._execute_via_storage(sql_query, params)
+            else:
+                result = self._execute_standalone(sql_query, params)
             
             # Étape 6: Post-traitement
             result = self._postprocess_result(result, sql_query)
@@ -450,26 +468,35 @@ class QueryExecutor:
         try:
             if self.nlp_translator:
                 return self.nlp_translator.translate(nl_query)
+            elif self.nl_to_sql_func:
+                return self.nl_to_sql_func(nl_query)
             else:
-                return nl_to_sql(nl_query)
+                # Fallback simple
+                return self._simple_nl_translation(nl_query)
         except Exception as e:
             logger.warning(f"NL translation failed: {e}")
             # Fallback simple
-            nl_lower = nl_query.lower()
-            
-            if "table" in nl_lower and "show" not in nl_lower:
-                # Essayer d'extraire un nom de table
-                words = nl_lower.split()
-                for word in words:
-                    if word != "table" and len(word) > 2:
-                        return f"SELECT * FROM {word}"
-            
-            if "table" in nl_lower:
-                return "SHOW TABLES"
-            elif "fonction" in nl_lower or "function" in nl_lower:
-                return "SHOW FUNCTIONS"
-            else:
-                return "HELP"
+            return self._simple_nl_translation(nl_query)
+    
+    def _simple_nl_translation(self, nl_query: str) -> str:
+        """Traduction NL simple (fallback)"""
+        nl_lower = nl_query.lower()
+        
+        if "table" in nl_lower and "show" not in nl_lower:
+            # Essayer d'extraire un nom de table
+            words = nl_lower.split()
+            for word in words:
+                if word != "table" and len(word) > 2:
+                    return f"SELECT * FROM {word}"
+        
+        if "table" in nl_lower:
+            return "SHOW TABLES"
+        elif "fonction" in nl_lower or "function" in nl_lower:
+            return "SHOW FUNCTIONS"
+        elif "aide" in nl_lower or "help" in nl_lower:
+            return "HELP"
+        else:
+            return "SELECT 'Try: show tables, show functions, table [name]' as suggestion"
     
     def _validate_query(self, query: str):
         """Valide la syntaxe de la requête (validation basique)"""
@@ -498,10 +525,6 @@ class QueryExecutor:
     
     def _execute_via_storage(self, sql_query: str, params: Dict) -> Dict:
         """Exécute la requête via le système de stockage"""
-        if not self.storage:
-            # Mode standalone (pour tests)
-            return self._execute_standalone(sql_query, params)
-        
         try:
             # Enregistrer les fonctions avant l'exécution
             self._register_functions_to_storage()
@@ -631,7 +654,7 @@ class QueryExecutor:
     
     def _register_functions_to_sqlite(self, conn: sqlite3.Connection):
         """Enregistre les fonctions dans une connexion SQLite"""
-        # Fonctions intégrées
+        # Fonctions intégrées de base
         def sql_upper(text):
             return str(text).upper() if text else ''
         
@@ -644,6 +667,16 @@ class QueryExecutor:
         conn.create_function('UPPER', 1, sql_upper)
         conn.create_function('LOWER', 1, sql_lower)
         conn.create_function('LENGTH', 1, sql_length)
+        
+        # Enregistrer les fonctions du function_manager si disponible
+        if self.function_manager:
+            for name, func_info in self.function_manager.functions.items():
+                try:
+                    func = func_info['call'] if 'call' in func_info else func_info
+                    num_params = len(func_info.get('params', [])) if isinstance(func_info, dict) else -1
+                    conn.create_function(name, num_params, func)
+                except Exception as e:
+                    logger.debug(f"Could not register function {name} to SQLite: {e}")
     
     def _postprocess_result(self, result: Dict, query: str) -> Dict:
         """Post-traite les résultats de la requête"""
@@ -928,8 +961,8 @@ class QueryExecutor:
             'cache': self.get_cache_stats(),
             'functions': {
                 'builtin': len([f for f in self.function_manager.functions 
-                              if f not in self.function_manager.user_functions]),
-                'user': len(self.function_manager.user_functions)
+                              if f not in self.function_manager.user_functions]) if self.function_manager else 0,
+                'user': len(self.function_manager.user_functions) if self.function_manager else 0
             },
             'config': self.config
         }
