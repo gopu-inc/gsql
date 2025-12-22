@@ -29,3 +29,8 @@ obj/
 *.bak
 *.log
 
+*gg*o
+README.md
+gsql.db*
+*pyca*
+

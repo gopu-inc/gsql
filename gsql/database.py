@@ -246,6 +246,10 @@ class Database:
         if special_result:
             return special_result
         
+        # Détecter les commandes spéciales GSQL
+        special_result = self._handle_special_commands(sql)
+        if special_result:
+            return special_result
         start_time = datetime.now()
         query_hash = None
         
@@ -286,9 +290,7 @@ class Database:
                     query_type = 'unknown'
                 
                 # Exécuter la requête via le storage
-                result = self.storage.execute(
-                    query_type, params, sql, query_hash
-                )
+                result = self.storage.execute(sql, params)
                 
                 # Ajouter des métadonnées
                 execution_time = (datetime.now() - start_time).total_seconds()
@@ -341,6 +343,7 @@ class Database:
             raise SQLExecutionError(f"Database error: {str(e)}")
     
     def _handle_special_commands(self, sql: str) -> Optional[Dict]:
+        logger.debug(f"Checking special command: {sql}")
         """Gère les commandes spéciales GSQL"""
         sql_upper = sql.strip().upper()
         
