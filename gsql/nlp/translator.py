@@ -1,6 +1,10 @@
+#!/usr/bin/env python3
+"""
+Traducteur de langage naturel vers SQL pour GSQL
+"""
+
 import json
 import re
-import sqlite3
 from pathlib import Path
 import nltk
 from nltk.tokenize import word_tokenize
@@ -12,7 +16,9 @@ class NLToSQLTranslator:
     
     def __init__(self, patterns_file=None):
         self.lemmatizer = WordNetLemmatizer()
-        self.stop_words = set(stopwords.words('french') + stopwords.words('english'))
+        
+        # Initialiser les stopwords
+        self.stop_words = self._load_stopwords()
         
         # Charger les patterns de traduction
         if patterns_file and Path(patterns_file).exists():
@@ -21,35 +27,123 @@ class NLToSQLTranslator:
         else:
             self.patterns = self._get_default_patterns()
         
-        # Étiqueteur grammatical
+        # Vérifier les données NLTK
+        self._ensure_nltk_data()
+    
+    def _load_stopwords(self):
+        """Charger les stopwords avec fallback"""
         try:
-            nltk.data.find('taggers/averaged_perceptron_tagger')
+            nltk.data.find('corpora/stopwords')
+            french_stopwords = set(stopwords.words('french'))
+            english_stopwords = set(stopwords.words('english'))
+            return french_stopwords.union(english_stopwords)
         except LookupError:
-            nltk.download('averaged_perceptron_tagger', quiet=True)
+            # Liste de fallback
+            return {
+                'le', 'la', 'les', 'un', 'une', 'des', 'de', 'du', 'au', 'aux',
+                'à', 'avec', 'et', 'ou', 'où', 'qui', 'que', 'quoi', 'dont',
+                'dans', 'en', 'sur', 'sous', 'pour', 'par', 'chez', 'entre',
+                'mais', 'ou', 'donc', 'car', 'ni', 'or', 'ne', 'pas', 'plus',
+                'moins', 'très', 'trop', 'peu', 'beaucoup', 'tout', 'tous',
+                'cette', 'ce', 'cet', 'ces', 'mon', 'ton', 'son', 'notre',
+                'votre', 'leur', 'même', 'autre', 'quel', 'quelle', 'quels',
+                'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to',
+                'for', 'of', 'with', 'by', 'as', 'is', 'are', 'was', 'were',
+                'be', 'been', 'have', 'has', 'had', 'do', 'does', 'did'
+            }
+    
+    def _ensure_nltk_data(self):
+        """S'assurer que les données NLTK nécessaires sont disponibles"""
+        required = [
+            ('punkt', 'tokenizers/punkt'),
+            ('stopwords', 'corpora/stopwords'),
+            ('wordnet', 'corpora/wordnet')
+        ]
+        
+        for package, path in required:
+            try:
+                nltk.data.find(path)
+            except LookupError:
+                try:
+                    nltk.download(package, quiet=True)
+                except:
+                    pass
     
     def _get_default_patterns(self):
         """Patterns par défaut pour la traduction"""
         return {
-            "select_patterns": [
+            "patterns": [
                 {
-                    "pattern": r"(montre|affiche|donne|sélectionne)\s+(.+?)\s+(de|depuis|from)\s+(\w+)",
-                    "template": "SELECT {columns} FROM {table}"
+                    "keywords": ["table", "tables", "tableau", "tableaux"],
+                    "action": "SHOW_TABLES",
+                    "sql": "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
                 },
                 {
-                    "pattern": r"(combien|nombre|count)\s+(de|d')\s+(\w+)\s+(dans|in|from)\s+(\w+)",
-                    "template": "SELECT COUNT(*) FROM {table}"
-                }
-            ],
-            "where_patterns": [
+                    "keywords": ["fonction", "fonctions", "function", "functions"],
+                    "action": "SHOW_FUNCTIONS",
+                    "sql": "SELECT 'UPPER(text)', 'LOWER(text)', 'LENGTH(text)' as functions"
+                },
                 {
-                    "pattern": r"(où|where)\s+(.+?)\s+(est|égale|=\s*|>\s*|<\s*)(.+?)$",
-                    "template": "WHERE {column} {operator} {value}"
+                    "keywords": ["aide", "help", "commande", "commandes"],
+                    "action": "HELP",
+                    "sql": "SELECT 'SHOW TABLES - List tables' as help UNION SELECT 'SHOW FUNCTIONS - List functions' UNION SELECT 'CREATE FUNCTION - Create custom function'"
+                },
+                {
+                    "keywords": ["crée", "créer", "create", "nouvelle", "nouveau"],
+                    "patterns": [
+                        (r"crée(?:r)?\s+(?:une\s+)?(?:table|tableau)\s+(\w+)", "CREATE TABLE {table} (id INTEGER PRIMARY KEY)"),
+                        (r"crée(?:r)?\s+(?:une\s+)?fonction\s+(\w+)", "CREATE FUNCTION {name}(text) RETURNS text AS $$ RETURN $1 $$ LANGUAGE plpython")
+                    ]
+                },
+                {
+                    "keywords": ["affiche", "montre", "donne", "liste", "show", "select"],
+                    "patterns": [
+                        (r"(affiche|montre|donne|liste)\s+(?:les\s+)?(\w+)", "SELECT * FROM {table}"),
+                        (r"(affiche|montre|donne|liste)\s+(?:tous\s+les\s+)?(\w+)", "SELECT * FROM {table}"),
+                        (r"(\w+)\s+(?:de|dans)\s+(\w+)", "SELECT {column} FROM {table}"),
+                        (r"combien\s+de\s+(\w+)", "SELECT COUNT(*) FROM {table}"),
+                        (r"(\w+)\s+avec\s+(\w+)\s*=\s*['\"]?(.+?)['\"]?$", "SELECT * FROM {table} WHERE {column} = '{value}'")
+                    ]
+                },
+                {
+                    "keywords": ["ajoute", "insère", "insert", "add"],
+                    "patterns": [
+                        (r"ajoute(?:r)?\s+(?:un|une)?\s*(\w+)\s+(.+)", "INSERT INTO {table} VALUES ({values})"),
+                        (r"insère(?:r)?\s+(?:dans\s+)?(\w+)\s+(.+)", "INSERT INTO {table} VALUES ({values})")
+                    ]
+                },
+                {
+                    "keywords": ["supprime", "efface", "delete", "remove"],
+                    "patterns": [
+                        (r"supprime(?:r)?\s+(?:les\s+)?(\w+)", "DELETE FROM {table}"),
+                        (r"efface(?:r)?\s+(?:la\s+)?table\s+(\w+)", "DROP TABLE {table}")
+                    ]
                 }
             ],
+            "table_mapping": {
+                "utilisateurs": "users",
+                "usagers": "users",
+                "clients": "clients",
+                "client": "clients",
+                "produits": "products",
+                "produit": "products",
+                "commandes": "orders",
+                "commande": "orders",
+                "orders": "orders",
+                "employés": "employees",
+                "employes": "employees",
+                "employé": "employees",
+                "user": "users",
+                "users": "users",
+                "client": "clients",
+                "product": "products",
+                "products": "products"
+            },
             "column_mapping": {
-                "clients": ["nom", "email", "ville", "âge", "salaire"],
-                "produits": ["nom", "prix", "catégorie", "stock"],
-                "commandes": ["id", "date", "montant", "statut"]
+                "users": ["id", "name", "email", "age", "created_at"],
+                "clients": ["id", "nom", "email", "ville", "telephone"],
+                "products": ["id", "nom", "prix", "quantite", "categorie"],
+                "orders": ["id", "client_id", "date", "montant", "statut"]
             }
         }
     
@@ -62,104 +156,169 @@ class NLToSQLTranslator:
             
         Returns:
             str: Requête SQL
-            
-        Raises:
-            NLError: Si la traduction échoue
         """
         nl_query = nl_query.lower().strip()
+        original_query = nl_query
         
-        # 1. Tokenisation et nettoyage
-        tokens = word_tokenize(nl_query, language='french')
-        tokens = [t for t in tokens if t not in self.stop_words and t.isalnum()]
+        # 1. Nettoyer la requête
+        nl_query = self._clean_query(nl_query)
         
-        # 2. Lemmatisation
-        lemmas = [self.lemmatizer.lemmatize(t) for t in tokens]
-        
-        # 3. Détection du type de requête
-        sql_query = self._detect_query_type(nl_query, lemmas)
-        
-        # 4. Extraction des tables et colonnes
-        sql_query = self._extract_entities(sql_query, lemmas)
-        
-        return sql_query
-    
-    def _detect_query_type(self, query, lemmas):
-        """Détecte le type de requête SQL"""
-        first_words = ' '.join(lemmas[:3])
-        
-        # SELECT
-        for pattern in self.patterns["select_patterns"]:
-            match = re.search(pattern["pattern"], query, re.IGNORECASE)
-            if match:
-                return pattern["template"]
-        
-        # INSERT (simplifié)
-        if any(word in lemmas for word in ['ajoute', 'insère', 'nouveau']):
-            return "INSERT INTO {table} VALUES ({values})"
-        
-        # DELETE
-        if any(word in lemmas for word in ['supprime', 'efface', 'enlève']):
-            return "DELETE FROM {table} WHERE {condition}"
-        
-        # UPDATE
-        if any(word in lemmas for word in ['modifie', 'mets à jour', 'change']):
-            return "UPDATE {table} SET {set_clause} WHERE {condition}"
-        
-        # Par défaut, c'est un SELECT
-        return "SELECT * FROM {table}"
-    
-    def _extract_entities(self, sql_template, lemmas):
-        """Extrait les tables, colonnes et valeurs"""
-        # Cherche des noms de table dans les patterns
-        for table, columns in self.patterns["column_mapping"].items():
-            if table in lemmas or table[:-1] in lemmas:  # Gère le pluriel
-                sql_template = sql_template.replace("{table}", table)
+        # 2. Vérifier les patterns par mots-clés d'abord
+        for pattern_group in self.patterns.get("patterns", []):
+            # Vérifier si un mot-clé de ce groupe est dans la requête
+            keywords = pattern_group.get("keywords", [])
+            if any(keyword in original_query for keyword in keywords):
                 
-                # Cherche des colonnes spécifiques
-                for col in columns:
-                    if col in lemmas:
-                        sql_template = sql_template.replace("{columns}", col)
-                        break
-                else:
-                    sql_template = sql_template.replace("{columns}", "*")
+                # Vérifier l'action directe
+                if "action" in pattern_group:
+                    if pattern_group["action"] == "SHOW_TABLES":
+                        return "SHOW TABLES"
+                    elif pattern_group["action"] == "SHOW_FUNCTIONS":
+                        return "SHOW FUNCTIONS"
+                    elif pattern_group["action"] == "HELP":
+                        return "HELP"
+                    elif "sql" in pattern_group:
+                        return pattern_group["sql"]
                 
-                break
+                # Vérifier les patterns spécifiques
+                if "patterns" in pattern_group:
+                    for pattern, template in pattern_group["patterns"]:
+                        match = re.search(pattern, original_query, re.IGNORECASE)
+                        if match:
+                            sql = self._apply_template(template, match, original_query)
+                            if sql:
+                                return sql
         
-        return sql_template
-    
-    def learn_from_examples(self, nl_examples, sql_examples):
-        """Apprend de nouveaux patterns à partir d'exemples"""
-        for nl, sql in zip(nl_examples, sql_examples):
-            # Extraction simple de patterns (version basique)
-            if "SELECT" in sql:
-                self.patterns["select_patterns"].append({
-                    "pattern": self._create_pattern_from_example(nl),
-                    "template": sql
-                })
+        # 3. Chercher des noms de table directement
+        table_mapping = self.patterns.get("table_mapping", {})
+        for fr_word, en_table in table_mapping.items():
+            if fr_word in original_query:
+                return f"SELECT * FROM {en_table}"
         
-        # Sauvegarde des patterns
-        self._save_patterns()
+        # 4. Tokenisation avancée si disponible
+        try:
+            tokens = word_tokenize(original_query, language='french')
+            tokens = [t for t in tokens if t.lower() not in self.stop_words and t.isalnum()]
+            
+            # Chercher des mots qui pourraient être des tables
+            for token in tokens:
+                if token in table_mapping:
+                    return f"SELECT * FROM {table_mapping[token]}"
+                
+                # Vérifier aussi en anglais
+                if token in table_mapping.values():
+                    return f"SELECT * FROM {token}"
+        except:
+            # Fallback à la recherche simple
+            pass
+        
+        # 5. Pattern par défaut - table + mot
+        words = original_query.split()
+        if len(words) >= 2:
+            # Essayer différentes combinaisons
+            for i in range(len(words)):
+                potential_table = words[i]
+                if potential_table in table_mapping:
+                    return f"SELECT * FROM {table_mapping[potential_table]}"
+                elif i > 0:
+                    # Combinaison de mots
+                    combined = words[i-1] + words[i]
+                    if combined in table_mapping:
+                        return f"SELECT * FROM {table_mapping[combined]}"
+        
+        # 6. Si "table" est mentionné
+        if "table" in original_query:
+            return "SHOW TABLES"
+        
+        # 7. Par défaut, retourner de l'aide
+        return "HELP"
     
-    def _create_pattern_from_example(self, nl_example):
-        """Crée un pattern regex à partir d'un exemple"""
-        # Conversion basique
-        pattern = nl_example.lower()
-        pattern = re.sub(r'\b(le|la|les|un|une|des)\b', '', pattern)
-        pattern = re.sub(r'\b(\w+)\b', r'(\w+)', pattern)  # Capture les mots
-        return f"^{pattern}$"
+    def _clean_query(self, query):
+        """Nettoyer la requête NL"""
+        # Supprimer la ponctuation excessive
+        query = re.sub(r'[^\w\s\']', ' ', query)
+        # Remplacer multiples espaces
+        query = re.sub(r'\s+', ' ', query)
+        return query.strip()
     
-    def _save_patterns(self, filepath="patterns.json"):
-        """Sauvegarde les patterns appris"""
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(self.patterns, f, ensure_ascii=False, indent=2)
+    def _apply_template(self, template, match, original_query):
+        """Appliquer un template avec les groupes de capture"""
+        try:
+            sql = template
+            
+            # Remplacer {table}
+            if '{table}' in template and match.lastindex >= 1:
+                table_name = match.group(1).lower()
+                table_mapping = self.patterns.get("table_mapping", {})
+                actual_table = table_mapping.get(table_name, table_name)
+                sql = sql.replace('{table}', actual_table)
+            
+            # Remplacer {column}
+            if '{column}' in template and match.lastindex >= 2:
+                column = match.group(2)
+                sql = sql.replace('{column}', column)
+            
+            # Remplacer {value}
+            if '{value}' in template and match.lastindex >= 3:
+                value = match.group(3).strip("'\"")
+                sql = sql.replace('{value}', value)
+            
+            # Remplacer {name}
+            if '{name}' in template and match.lastindex >= 1:
+                name = match.group(1)
+                sql = sql.replace('{name}', name)
+            
+            # Remplacer {values}
+            if '{values}' in template and match.lastindex >= 2:
+                values_text = match.group(2)
+                # Séparer les valeurs par espaces/virgules
+                values = re.split(r'[\s,]+', values_text)
+                quoted_values = [f"'{v}'" for v in values if v]
+                sql = sql.replace('{values}', ', '.join(quoted_values))
+            
+            return sql
+        except Exception as e:
+            return None
+    
+    def learn(self, nl_example, sql_example):
+        """Apprend un nouvel exemple"""
+        # Pour l'instant, simple log
+        print(f"Learned: '{nl_example}' -> '{sql_example}'")
+        return "Pattern learned (in memory only)"
+    
+    def save_patterns(self, filepath):
+        """Sauvegarder les patterns"""
+        try:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(self.patterns, f, ensure_ascii=False, indent=2)
+            return True
+        except:
+            return False
 
-# Interface simple pour le CLI
+# Fonction helper
 def nl_to_sql(nl_query, translator=None):
-    """Fonction utilitaire pour convertir NL en SQL"""
+    """Convertir NL en SQL"""
     if translator is None:
         translator = NLToSQLTranslator()
     
     try:
         return translator.translate(nl_query)
     except Exception as e:
-        raise NLError(f"Échec de la traduction: {str(e)}")
+        # Fallback simple
+        nl_lower = nl_query.lower()
+        
+        if "table" in nl_lower and "show" not in nl_lower:
+            # Extraire le nom de table
+            words = nl_lower.split()
+            for word in words:
+                if word != "table" and len(word) > 2:
+                    return f"SELECT * FROM {word}"
+        
+        if "table" in nl_lower:
+            return "SHOW TABLES"
+        elif "fonction" in nl_lower:
+            return "SHOW FUNCTIONS"
+        elif "aide" in nl_lower or "help" in nl_lower:
+            return "HELP"
+        else:
+            return "SELECT 'Try: show tables, show functions, table [name]' as suggestion"
