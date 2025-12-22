@@ -3,33 +3,31 @@
 GSQL - SQL Database with Natural Language Interface
 Main CLI Interface - Version 3.0
 """
+# Dans database.py - Remplacer le début du fichier :
 
-import sys
+# SUPPRIMER:
+# import yaml
+
+# GARDER:
 import os
-import cmd
 import sqlite3
 import json
-import re
-import readline
-import shlex
+import logging
 import time
 import threading
-import signal
-from datetime import datetime
+import hashlib
 from pathlib import Path
-from typing import Dict, List, Any, Optional
-import traceback
+from datetime import datetime
+from typing import Dict, List, Any, Optional, Union
+import re
 
-# Imports internes GSQL
-from .database import Database, create_database
-from .executor import QueryExecutor, create_executor
-from .storage import SQLiteStorage
-from .functions.user_functions import FunctionManager
-from .nlp.translator import NLToSQLTranslator
+from .storage import SQLiteStorage, create_storage
 from .exceptions import (
-    SQLExecutionError, SQLSyntaxError, FunctionError,
-    NLError, GSQLBaseException
+    GSQLBaseException, SQLSyntaxError, SQLExecutionError,
+    ConstraintViolationError, TransactionError, FunctionError,
+    BufferPoolError, StorageError  # Ajouter StorageError
 )
+
 
 # ==================== CONFIGURATION ====================
 
