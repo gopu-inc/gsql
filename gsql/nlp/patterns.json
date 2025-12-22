@@ -1,0 +1,90 @@
+{
+  "select_patterns": [
+    {
+      "pattern": "(montre|affiche|donne|sélectionne)\\s+(.+?)\\s+(de|depuis|from)\\s+(\\w+)",
+      "template": "SELECT {columns} FROM {table}"
+    },
+    {
+      "pattern": "(combien|nombre|count)\\s+(de|d')\\s+(\\w+)\\s+(dans|in|from)\\s+(\\w+)",
+      "template": "SELECT COUNT(*) FROM {table}"
+    },
+    {
+      "pattern": "liste\\s+(?:les|tous les)\\s+(\\w+)",
+      "template": "SELECT * FROM {table}"
+    }
+  ],
+  "where_patterns": [
+    {
+      "pattern": "(où|where)\\s+(.+?)\\s+(est|égale|=|>\\s*|<\\s*)(.+?)$",
+      "template": "WHERE {column} {operator} {value}"
+    },
+    {
+      "pattern": "de\\s+(\\w+)\\s+où\\s+(.+?)\\s+(est|>)",
+      "template": "FROM {table} WHERE {condition}"
+    }
+  ],
+  "insert_patterns": [
+    {
+      "pattern": "(ajoute|insère)\\s+(?:un|une)\\s+(.+?)\\s+(.+?)$",
+      "template": "INSERT INTO {table} VALUES ({values})"
+    }
+  ],
+  "column_mapping": {
+    "clients": [
+      "nom",
+      "email",
+      "ville",
+      "âge",
+      "salaire",
+      "date_inscription"
+    ],
+    "produits": [
+      "nom",
+      "prix",
+      "catégorie",
+      "stock",
+      "description"
+    ],
+    "commandes": [
+      "id",
+      "client_id",
+      "date",
+      "montant",
+      "statut",
+      "produits"
+    ],
+    "utilisateurs": [
+      "id",
+      "nom",
+      "email",
+      "mot_de_passe",
+      "role",
+      "actif"
+    ],
+    "employés": [
+      "id",
+      "prénom",
+      "nom",
+      "département",
+      "salaire",
+      "date_embauche"
+    ]
+  },
+  "table_aliases": {
+    "client": "clients",
+    "produit": "produits",
+    "commande": "commandes",
+    "utilisateur": "utilisateurs",
+    "employé": "employés",
+    "employes": "employés",
+    "user": "utilisateurs",
+    "users": "utilisateurs"
+  },
+  "value_mapping": {
+    "aujourd'hui": "CURRENT_DATE",
+    "maintenant": "NOW()",
+    "vrai": "TRUE",
+    "faux": "FALSE",
+    "null": "NULL"
+  }
+}

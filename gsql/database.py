@@ -215,45 +215,6 @@ class Database:
             else:
                 raise SQLExecutionError(f"Database recovery failed after {MAX_RECURSION} attempts: {e}")
     
-    def _auto_recover(self, recursion_depth=0):
-    """Tente une récupération automatique avec limite de récursion"""
-    MAX_RECURSION = 3
-    
-    if recursion_depth >= MAX_RECURSION:
-        logger.error(f"Max recursion depth ({MAX_RECURSION}) reached in auto-recovery")
-        raise SQLExecutionError("Auto-recovery failed: max recursion depth exceeded")
-    
-    try:
-        logger.warning(f"Starting auto-recovery (attempt {recursion_depth + 1})...")
-        
-        # Fermer et réouvrir le storage
-        if self.storage:
-            self.storage.close()
-        
-        # Réinitialiser le storage
-        self.storage = create_storage(
-            db_path=self.config['db_path'],
-            base_dir=self.config['base_dir'],
-            buffer_pool_size=self.config['buffer_pool_size'],
-            enable_wal=self.config['enable_wal']
-        )
-        
-        # Réinitialiser les tables SANS déclencher une nouvelle récupération
-        self._initialize_database(skip_recovery=True)
-        
-        logger.info("Auto-recovery completed successfully")
-        
-    except Exception as e:
-        logger.error(f"Auto-recovery attempt {recursion_depth + 1} failed: {e}")
-        
-        # Réessayer si pas encore à la limite
-        if recursion_depth < MAX_RECURSION - 1:
-            wait_time = 1 * (2 ** recursion_depth)
-            time.sleep(wait_time)
-            return self._auto_recover(recursion_depth + 1)
-        else:
-            raise SQLExecutionError(f"Database recovery failed after {MAX_RECURSION} attempts: {e}")
-    
     def execute(self, sql: str, params: Dict = None, 
                 use_cache: bool = True, timeout: int = None) -> Dict:
         """

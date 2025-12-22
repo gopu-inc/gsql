@@ -1,5 +1,18 @@
 README.md
 setup.py
+./gsql/GSQL.toml
+./gsql/__init__.py
+./gsql/__main__.py
+./gsql/btree.py
+./gsql/cli.py
+./gsql/database.py
+./gsql/exceptions.py
+./gsql/executor.py
+./gsql/exp.py
+./gsql/index.py
+./gsql/parser.py
+./gsql/storage.py
+./gsql/nlp/patterns.json
 gsql/__init__.py
 gsql/__main__.py
 gsql/btree.py
@@ -15,4 +28,6 @@ gsql.egg-info/PKG-INFO
 gsql.egg-info/SOURCES.txt
 gsql.egg-info/dependency_links.txt
 gsql.egg-info/entry_points.txt
+gsql.egg-info/not-zip-safe
+gsql.egg-info/requires.txt
 gsql.egg-info/top_level.txt
