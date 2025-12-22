@@ -1,220 +1,254 @@
-#!/usr/bin/env python3
 """
-Setup script for GSQL - SQL database engine with natural language interface
+Setup script for GSQL - Complete SQL Database System in Python
+Version 3.0.0
 """
 
-import os
-from pathlib import Path
 from setuptools import setup, find_packages
+import os
+import re
 
-# Read the long description from README.md
-readme_path = Path(__file__).parent / "README.md"
-long_description = ""
-if readme_path.exists():
-    with open(readme_path, "r", encoding="utf-8") as f:
-        long_description = f.read()
-
-# Get version from gsql/__init__.py
+# Read version from __init__.py
 def get_version():
-    init_path = Path(__file__).parent / "gsql" / "__init__.py"
-    with open(init_path, "r", encoding="utf-8") as f:
-        for line in f:
-            if line.startswith("__version__"):
-                return line.split("=")[1].strip().strip('"\'')
-    return "1.0.0"
+    """Extract version from gsql/__init__.py"""
+    init_path = os.path.join(os.path.dirname(__file__), 'gsql', '__init__.py')
+    with open(init_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+        match = re.search(r'__version__\s*=\s*[\'"]([^\'"]+)[\'"]', content)
+        if match:
+            return match.group(1)
+    return '3.0.0'
 
-# Ensure NLTK data is available
-def download_nltk_data():
-    """Download required NLTK data on installation"""
+# Read long description from README
+def get_long_description():
+    """Read long description from README.md"""
     try:
-        import nltk
-        required_data = [
-            'punkt',
-            'stopwords',
-            'averaged_perceptron_tagger',
-            'wordnet'
-        ]
-        
-        for package in required_data:
-            try:
-                nltk.download(package, quiet=True)
-                print(f"✓ NLTK data '{package}' downloaded")
-            except Exception as e:
-                print(f"⚠ Could not download NLTK data '{package}': {e}")
-    except ImportError:
-        print("⚠ NLTK not available, please install it manually")
+        with open('README.md', 'r', encoding='utf-8') as f:
+            return f.read()
+    except FileNotFoundError:
+        return "GSQL - Complete SQL Database System in Python"
 
-# Post-installation script
-def post_install():
-    """Post-installation setup"""
-    download_nltk_data()
-    
-    # Create default patterns file if it doesn't exist
-    patterns_dir = Path("gsql/nlp")
-    patterns_file = patterns_dir / "patterns.json"
-    
-    if not patterns_file.exists() and patterns_dir.exists():
-        default_patterns = {
-            "select_patterns": [
-                {
-                    "pattern": r"(montre|affiche|donne|sélectionne)\s+(.+?)\s+(de|depuis|from)\s+(\w+)",
-                    "template": "SELECT {columns} FROM {table}"
-                },
-                {
-                    "pattern": r"(combien|nombre|count)\s+(de|d')\s+(\w+)\s+(dans|in|from)\s+(\w+)",
-                    "template": "SELECT COUNT(*) FROM {table}"
-                },
-                {
-                    "pattern": r"liste\s+(?:les|tous les)\s+(\w+)",
-                    "template": "SELECT * FROM {table}"
-                }
-            ],
-            "where_patterns": [
-                {
-                    "pattern": r"(où|where)\s+(.+?)\s+(est|égale|=|>\s*|<\s*)(.+?)$",
-                    "template": "WHERE {column} {operator} {value}"
-                },
-                {
-                    "pattern": r"de\s+(\w+)\s+où\s+(.+?)\s+(est|>)",
-                    "template": "FROM {table} WHERE {condition}"
-                }
-            ],
-            "insert_patterns": [
-                {
-                    "pattern": r"(ajoute|insère)\s+(?:un|une)\s+(.+?)\s+(.+?)$",
-                    "template": "INSERT INTO {table} VALUES ({values})"
-                }
-            ],
-            "column_mapping": {
-                "clients": ["nom", "email", "ville", "âge", "salaire", "date_inscription"],
-                "produits": ["nom", "prix", "catégorie", "stock", "description"],
-                "commandes": ["id", "client_id", "date", "montant", "statut", "produits"],
-                "utilisateurs": ["id", "nom", "email", "mot_de_passe", "role", "actif"],
-                "employés": ["id", "prénom", "nom", "département", "salaire", "date_embauche"]
-            },
-            "table_aliases": {
-                "client": "clients",
-                "produit": "produits",
-                "commande": "commandes",
-                "utilisateur": "utilisateurs",
-                "employé": "employés",
-                "employes": "employés",
-                "user": "utilisateurs",
-                "users": "utilisateurs"
-            },
-            "value_mapping": {
-                "aujourd'hui": "CURRENT_DATE",
-                "maintenant": "NOW()",
-                "vrai": "TRUE",
-                "faux": "FALSE",
-                "null": "NULL"
-            }
-        }
-        
-        import json
-        with open(patterns_file, "w", encoding="utf-8") as f:
-            json.dump(default_patterns, f, ensure_ascii=False, indent=2)
-        
-        print("✓ Default NLP patterns created")
+# Get dependencies from requirements.txt
+def get_requirements():
+    """Read requirements from requirements.txt"""
+    requirements_path = os.path.join(os.path.dirname(__file__), 'requirements.txt')
+    if os.path.exists(requirements_path):
+        with open(requirements_path, 'r', encoding='utf-8') as f:
+            return [line.strip() for line in f if line.strip() and not line.startswith('#')]
+    return []
 
-# Execute post-install
-try:
-    post_install()
-except Exception as e:
-    print(f"⚠ Post-installation setup incomplete: {e}")
+# Get development dependencies
+def get_dev_requirements():
+    """Read development requirements from requirements-dev.txt"""
+    dev_requirements_path = os.path.join(os.path.dirname(__file__), 'requirements-dev.txt')
+    if os.path.exists(dev_requirements_path):
+        with open(dev_requirements_path, 'r', encoding='utf-8') as f:
+            return [line.strip() for line in f if line.strip() and not line.startswith('#')]
+    return []
 
 setup(
+    # Basic Information
     name="gsql",
     version=get_version(),
-    author="Gopu Inc",
-    author_email="contact@gopu-inc.com",
-    description="A lightweight SQL database engine with natural language interface",
-    long_description=long_description,
+    description="Complete SQL Database System in Python with AI Integration",
+    long_description=get_long_description(),
     long_description_content_type="text/markdown",
-    url="https://github.com/gopu-inc/gsql",
     
-    # Package discovery
-    packages=find_packages(include=['gsql', 'gsql.*']),
-    package_dir={'': '.'},
+    # Authors
+    author="Gopu Inc.",
+    author_email="contact@gopu-inc.com",
+    
+    # Project URLs
+    url="https://github.com/gopu-inc/gsql",
+    project_urls={
+        "Homepage": "https://github.com/gopu-inc/gsql",
+        "Documentation": "https://gsql.readthedocs.io",
+        "Source Code": "https://github.com/gopu-inc/gsql",
+        "Bug Tracker": "https://github.com/gopu-inc/gsql/issues",
+        "Changelog": "https://github.com/gopu-inc/gsql/releases",
+    },
+    
+    # Classifiers
+    classifiers=[
+        # Development Status
+        "Development Status :: 5 - Production/Stable",
+        
+        # Intended Audience
+        "Intended Audience :: Developers",
+        "Intended Audience :: System Administrators",
+        "Intended Audience :: Information Technology",
+        "Intended Audience :: Science/Research",
+        
+        # Topics
+        "Topic :: Database",
+        "Topic :: Database :: Database Engines/Servers",
+        "Topic :: Database :: Front-Ends",
+        "Topic :: Software Development :: Libraries :: Python Modules",
+        "Topic :: System :: Systems Administration",
+        "Topic :: Scientific/Engineering :: Information Analysis",
+        
+        # License
+        "License :: OSI Approved :: MIT License",
+        
+        # Programming Languages
+        "Programming Language :: Python",
+        "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3.8",
+        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.13",
+        
+        # Operating Systems
+        "Operating System :: OS Independent",
+        "Operating System :: Microsoft :: Windows",
+        "Operating System :: POSIX",
+        "Operating System :: Unix",
+        "Operating System :: MacOS",
+        
+        # Additional
+        "Environment :: Console",
+        "Natural Language :: English",
+        "Natural Language :: French",
+    ],
+    
+    # Keywords
+    keywords=[
+        "sql",
+        "database",
+        "sqlite",
+        "python",
+        "ai",
+        "nlp",
+        "query",
+        "relational",
+        "data",
+        "analytics",
+        "management",
+        "server",
+        "cli",
+        "shell",
+        "indexing",
+        "storage",
+        "transaction",
+    ],
+    
+    # Packages
+    packages=find_packages(
+        include=['gsql', 'gsql.*'],
+        exclude=['tests', 'tests.*', 'docs', 'docs.*', 'examples', 'examples.*']
+    ),
     
     # Include package data
     package_data={
         'gsql': [
-            'nlp/patterns.json',
-            'nlp/*.json',
-            '*.py',
-            '*'
-        ]
+            'nlp/data/*.json',
+            'nlp/models/*.pkl',
+            'config/*.yaml',
+            'config/*.json',
+        ],
     },
     
-    # Entry points for CLI
-    entry_points={
-        'console_scripts': [
-            'gsql=gsql.__main__:main',
-            'gs=gsql.__main__:main',
+    # Exclude certain files
+    exclude_package_data={
+        '': [
+            '*.pyc',
+            '*.pyo',
+            '__pycache__',
+            '*.so',
+            '*.dll',
+            '*.pyd',
         ],
     },
     
     # Dependencies
-    install_requires=[
-        'nltk>=3.8.1',
-        'colorama>=0.4.6',
-        'tabulate>=0.9.0',
-        'sqlparse>=0.4.4',
-    ],
+    install_requires=get_requirements(),
     
-    # Optional dependencies
+    # Development dependencies
     extras_require={
-        'dev': [
-            'pytest>=7.4.0',
-            'pytest-cov>=4.1.0',
-            'black>=23.0.0',
-            'flake8>=6.0.0',
-            'mypy>=1.5.0',
+        'dev': get_dev_requirements(),
+        'test': [
+            'pytest>=7.0.0',
+            'pytest-cov>=4.0.0',
+            'pytest-mock>=3.10.0',
+            'pytest-asyncio>=0.21.0',
+        ],
+        'docs': [
+            'sphinx>=7.0.0',
+            'sphinx-rtd-theme>=1.3.0',
+            'sphinx-autodoc-typehints>=1.24.0',
+        ],
+        'performance': [
+            'pandas>=1.5.0',
+            'numpy>=1.24.0',
+            'psutil>=5.9.0',
         ],
         'nlp': [
+            'nltk>=3.8.0',
             'spacy>=3.6.0',
-            'transformers>=4.35.0',
+            'transformers>=4.30.0',
             'torch>=2.0.0',
         ],
-        'web': [
-            'fastapi>=0.104.0',
-            'uvicorn>=0.24.0',
-            'jinja2>=3.1.0',
+        'full': [
+            'pandas>=1.5.0',
+            'numpy>=1.24.0',
+            'nltk>=3.8.0',
+            'spacy>=3.6.0',
+            'transformers>=4.30.0',
+            'torch>=2.0.0',
+            'psutil>=5.9.0',
+            'prompt-toolkit>=3.0.0',
+            'click>=8.0.0',
+            'colorama>=0.4.0',
         ],
     },
     
     # Python version requirements
-    python_requires='>=3.8',
+    python_requires=">=3.8",
     
-    # Metadata
-    classifiers=[
-        'Development Status :: 4 - Beta',
-        'Intended Audience :: Developers',
-        'Topic :: Database :: Database Engines/Servers',
-        'License :: OSI Approved :: MIT License',
-        'Programming Language :: Python :: 3',
-        'Programming Language :: Python :: 3.8',
-        'Programming Language :: Python :: 3.9',
-        'Programming Language :: Python :: 3.10',
-        'Programming Language :: Python :: 3.11',
-        'Programming Language :: Python :: 3.12',
-    ],
-    
-    # Keywords
-    keywords='sql database nlp natural-language sqlite',
-    
-    # Project URLs
-    project_urls={
-        'Bug Reports': 'https://github.com/gopu-inc/gsql/issues',
-        'Source': 'https://github.com/gopu-inc/gsql',
-        'Documentation': 'https://github.com/gopu-inc/gsql/wiki',
+    # Entry points
+    entry_points={
+        'console_scripts': [
+            'gsql=gsql.__main__:main',
+            'gsql-cli=gsql.cli.shell:main',
+            'gsql-server=gsql.api.rest_api:main',
+        ],
     },
     
-    # License
-    license='MIT',
-    
-    # Include data files
-    include_package_data=True,
+    # Zip safe
     zip_safe=False,
+    
+    # Platforms
+    platforms=["any"],
+    
+    # License
+    license="MIT License",
+    
+    # Download URL
+    download_url="https://github.com/gopu-inc/gsql/archive/refs/tags/v3.0.0.tar.gz",
+    
+    # Additional metadata
+    provides=["gsql"],
+    
+    # Options for building
+    options={
+        'bdist_wheel': {
+            'universal': False,
+        },
+        'egg_info': {
+            'tag_build': '',
+            'tag_date': False,
+        },
+    },
+    
+    # Scripts
+    scripts=[
+        'scripts/gsql-backup',
+        'scripts/gsql-migrate',
+        'scripts/gsql-monitor',
+    ] if os.path.exists('scripts') else [],
 )
+
+# Additional setup for building
+if __name__ == "__main__":
+    print(f"Building GSQL version {get_version()}")
