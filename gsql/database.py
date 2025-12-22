@@ -178,7 +178,7 @@ class Database:
     
     def _auto_recover(self, recursion_depth=0):
         """Tente une récupération automatique avec limite de récursion"""
-        MAX_RECURSION = 3  # Limite pour éviter la boucle infinie
+        MAX_RECURSION = 3
         
         if recursion_depth >= MAX_RECURSION:
             logger.error(f"Max recursion depth ({MAX_RECURSION}) reached in auto-recovery")
