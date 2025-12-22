@@ -92,35 +92,35 @@ class Database:
         
         logger.info(f"GSQL Database initialized (v{self.config['version']})")
     
-    def _initialize_database(self):
-        """Initialise les tables et structures système"""
-        try:
-            with self.lock:
-                # Vérifier si les tables système existent
-                tables = self.storage.get_tables()
+    def _initialize_database(self, skip_recovery=False):
+    """Initialise les tables et structures système"""
+    try:
+        with self.lock:
+            # Vérifier si les tables système existent
+            tables = self.storage.get_tables()
+            
+            # Créer des tables par défaut si nécessaire
+            default_tables = self._get_default_tables()
+            
+            for table_name, table_sql in default_tables.items():
+                table_exists = any(t['table_name'] == table_name for t in tables)
                 
-                # Créer des tables par défaut si nécessaire
-                default_tables = self._get_default_tables()
-                
-                for table_name, table_sql in default_tables.items():
-                    table_exists = any(t['table_name'] == table_name for t in tables)
-                    
-                    if not table_exists:
-                        logger.info(f"Creating default table: {table_name}")
-                        self.storage.execute(table_sql)
-                
-                self.initialized = True
-                
-                # Sauvegarder la configuration
-                self._save_config()
-                
-        except Exception as e:
-            logger.error(f"Failed to initialize database: {e}")
-            if self.config['auto_recovery']:
-                logger.warning("Attempting auto-recovery...")
-                self._auto_recover()
-            else:
-                raise
+                if not table_exists:
+                    logger.info(f"Creating default table: {table_name}")
+                    self.storage.execute(table_sql)
+            
+            self.initialized = True
+            
+            # Sauvegarder la configuration
+            self._save_config()
+            
+    except Exception as e:
+        logger.error(f"Failed to initialize database: {e}")
+        if self.config['auto_recovery'] and not skip_recovery:
+            logger.warning("Attempting auto-recovery...")
+            self._auto_recover()
+        else:
+            raise
     
     def _get_default_tables(self) -> Dict[str, str]:
         """Retourne les tables par défaut à créer"""
@@ -186,43 +186,43 @@ class Database:
             logger.warning(f"Failed to save config: {e}")
     
     def _auto_recover(self, recursion_depth=0):
-        """Tente une récupération automatique avec limite de récursion"""
-        MAX_RECURSION = 3  # Limite pour éviter la boucle infinie
+    """Tente une récupération automatique avec limite de récursion"""
+    MAX_RECURSION = 3
+    
+    if recursion_depth >= MAX_RECURSION:
+        logger.error(f"Max recursion depth ({MAX_RECURSION}) reached in auto-recovery")
+        raise SQLExecutionError("Auto-recovery failed: max recursion depth exceeded")
+    
+    try:
+        logger.warning(f"Starting auto-recovery (attempt {recursion_depth + 1})...")
         
-        if recursion_depth >= MAX_RECURSION:
-            logger.error(f"Max recursion depth ({MAX_RECURSION}) reached in auto-recovery")
-            raise SQLExecutionError("Auto-recovery failed: max recursion depth exceeded")
+        # Fermer et réouvrir le storage
+        if self.storage:
+            self.storage.close()
         
-        try:
-            logger.warning(f"Starting auto-recovery (attempt {recursion_depth + 1})...")
-            
-            # Fermer et réouvrir le storage
-            if self.storage:
-                self.storage.close()
-            
-            # Réinitialiser le storage
-            self.storage = create_storage(
-                db_path=self.config['db_path'],
-                base_dir=self.config['base_dir'],
-                buffer_pool_size=self.config['buffer_pool_size'],
-                enable_wal=self.config['enable_wal']
-            )
-            
-            # Réinitialiser les tables
-            self._initialize_database()
-            
-            logger.info("Auto-recovery completed successfully")
-            
-        except Exception as e:
-            logger.error(f"Auto-recovery attempt {recursion_depth + 1} failed: {e}")
-            
-            # Réessayer si pas encore à la limite
-            if recursion_depth < MAX_RECURSION - 1:
-                wait_time = 1 * (2 ** recursion_depth)  # Exponential backoff
-                time.sleep(wait_time)
-                return self._auto_recover(recursion_depth + 1)
-            else:
-                raise SQLExecutionError(f"Database recovery failed after {MAX_RECURSION} attempts: {e}")
+        # Réinitialiser le storage
+        self.storage = create_storage(
+            db_path=self.config['db_path'],
+            base_dir=self.config['base_dir'],
+            buffer_pool_size=self.config['buffer_pool_size'],
+            enable_wal=self.config['enable_wal']
+        )
+        
+        # Réinitialiser les tables SANS déclencher une nouvelle récupération
+        self._initialize_database(skip_recovery=True)
+        
+        logger.info("Auto-recovery completed successfully")
+        
+    except Exception as e:
+        logger.error(f"Auto-recovery attempt {recursion_depth + 1} failed: {e}")
+        
+        # Réessayer si pas encore à la limite
+        if recursion_depth < MAX_RECURSION - 1:
+            wait_time = 1 * (2 ** recursion_depth)
+            time.sleep(wait_time)
+            return self._auto_recover(recursion_depth + 1)
+        else:
+            raise SQLExecutionError(f"Database recovery failed after {MAX_RECURSION} attempts: {e}")
     
     def execute(self, sql: str, params: Dict = None, 
                 use_cache: bool = True, timeout: int = None) -> Dict:
