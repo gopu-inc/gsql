@@ -185,30 +185,44 @@ class Database:
         except Exception as e:
             logger.warning(f"Failed to save config: {e}")
     
-    def _auto_recover(self):
-        """Tente une récupération automatique"""
-        try:
-            logger.warning("Starting auto-recovery...")
-            
-            # Fermer et réouvrir le storage
+    def _auto_recover(self, recursion_depth=0):
+    """Tente une récupération automatique avec limite de récursion"""
+    MAX_RECURSION = 3  # Limite pour éviter la boucle infinie
+    
+    if recursion_depth >= MAX_RECURSION:
+        logger.error(f"Max recursion depth ({MAX_RECURSION}) reached in auto-recovery")
+        raise SQLExecutionError("Auto-recovery failed: max recursion depth exceeded")
+    
+    try:
+        logger.warning(f"Starting auto-recovery (attempt {recursion_depth + 1})...")
+        
+        # Fermer et réouvrir le storage
+        if self.storage:
             self.storage.close()
-            
-            # Réinitialiser le storage
-            self.storage = create_storage(
-                db_path=self.config['db_path'],
-                base_dir=self.config['base_dir'],
-                buffer_pool_size=self.config['buffer_pool_size'],
-                enable_wal=self.config['enable_wal']
-            )
-            
-            # Réinitialiser les tables
-            self._initialize_database()
-            
-            logger.info("Auto-recovery completed successfully")
-            
-        except Exception as e:
-            logger.error(f"Auto-recovery failed: {e}")
-            raise SQLExecutionError(f"Database recovery failed: {e}")
+        
+        # Réinitialiser le storage
+        self.storage = create_storage(
+            db_path=self.config['db_path'],
+            base_dir=self.config['base_dir'],
+            buffer_pool_size=self.config['buffer_pool_size'],
+            enable_wal=self.config['enable_wal']
+        )
+        
+        # Réinitialiser les tables
+        self._initialize_database()
+        
+        logger.info("Auto-recovery completed successfully")
+        
+    except Exception as e:
+        logger.error(f"Auto-recovery attempt {recursion_depth + 1} failed: {e}")
+        
+        # Réessayer si pas encore à la limite
+        if recursion_depth < MAX_RECURSION - 1:
+            wait_time = 1 * (2 ** recursion_depth)  # Exponential backoff
+            time.sleep(wait_time)
+            return self._auto_recover(recursion_depth + 1)
+        else:
+            raise SQLExecutionError(f"Database recovery failed after {MAX_RECURSION} attempts: {e}")
     
     def execute(self, sql: str, params: Dict = None, 
                 use_cache: bool = True, timeout: int = None) -> Dict:
@@ -966,20 +980,28 @@ DOT COMMANDS (compatible SQLite):
                     logger.error(f"Error closing database: {e}")
     
     def _save_stats(self):
-        """Sauvegarde les statistiques d'utilisation"""
-        stats_file = self.base_dir / "gsql_stats.json"
-        try:
-            stats_data = {
-                'stats': self.stats,
-                'last_run': datetime.now().isoformat(),
-                'version': self.config['version']
-            }
-            
-            with open(stats_file, 'w') as f:
-                json.dump(stats_data, f, indent=2)
+    """Sauvegarde les statistiques d'utilisation"""
+    stats_file = self.base_dir / "gsql_stats.json"
+    try:
+        # Convertir les objets datetime en chaînes
+        stats_to_save = {
+            'stats': {
+                'queries_executed': self.stats['queries_executed'],
+                'queries_cached': self.stats['queries_cached'],
+                'transactions': self.stats['transactions'],
+                'errors': self.stats['errors'],
+                'start_time': self.stats['start_time'].isoformat() if hasattr(self.stats['start_time'], 'isoformat') else str(self.stats['start_time']),
+                'last_backup': self.stats['last_backup']
+            },
+            'last_run': datetime.now().isoformat(),
+            'version': self.config['version']
+        }
+        
+        with open(stats_file, 'w') as f:
+            json.dump(stats_to_save, f, indent=2, default=str)
                 
-        except Exception as e:
-            logger.warning(f"Failed to save stats: {e}")
+    except Exception as e:
+        logger.warning(f"Failed to save stats: {e}")
     
     def __enter__(self):
         return self
