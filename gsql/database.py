@@ -1,563 +1,313 @@
-# gsql/gsql/database.py - Version améliorée
+#!/usr/bin/env python3
 """
-GSQL Database - Improved Version
+Database module for GSQL - Main database engine class
 """
 
-import json
-import re
+import os
+import logging
 from pathlib import Path
-from datetime import datetime
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, Any, List, Optional, Union
 
-class GSQLSyntaxError(Exception):
-    pass
+from .exceptions import (
+    GSQLBaseException, SQLSyntaxError, SQLExecutionError,
+    ConstraintViolationError, TransactionError
+)
+from .parser import SQLParser
+from .executor import QueryExecutor
+from .storage import StorageEngine
+from .functions.user_functions import FunctionManager
+from .nlp.translator import NLToSQLTranslator
 
-class GSQLExecutionError(Exception):
-    pass
+logger = logging.getLogger(__name__)
 
-class GSQL:
-    """GSQL Database - Complete Implementation"""
+class Database:
+    """Main database class for GSQL"""
     
-    def __init__(self, path: Optional[str] = None):
-        self.path = path or "gsql.db"
-        self.data_dir = Path(self.path).parent / f"{self.path}_data"
-        self.data_dir.mkdir(exist_ok=True)
+    def __init__(self, db_path: str, use_nlp: bool = True, buffer_pool_size: int = 100):
+        """
+        Initialize a GSQL database
         
-        # Create subdirectories
-        (self.data_dir / 'tables').mkdir(exist_ok=True)
-        (self.data_dir / 'meta').mkdir(exist_ok=True)
+        Args:
+            db_path (str): Path to database file
+            use_nlp (bool): Enable natural language processing
+            buffer_pool_size (int): Size of buffer pool
+        """
+        self.db_path = db_path
+        self.use_nlp = use_nlp
         
-        # Initialize parser and storage
-        self._init_components()
-        
-        # Metadata cache
-        self.tables_meta = {}
-        self._load_metadata()
-    
-    def _init_components(self):
-        """Initialize parser and storage"""
-        # Improved Parser
-        class SQLParser:
-            def parse(self, sql: str) -> Dict:
-                sql = sql.strip()
-                sql_upper = sql.upper()
-                
-                if sql_upper.startswith('CREATE TABLE'):
-                    return self._parse_create_table(sql)
-                elif sql_upper.startswith('INSERT INTO'):
-                    return self._parse_insert(sql)
-                elif sql_upper.startswith('SELECT'):
-                    return self._parse_select(sql)
-                elif sql_upper.startswith('DELETE FROM'):
-                    return self._parse_delete(sql)
-                else:
-                    raise GSQLSyntaxError(f"Unsupported SQL: {sql}")
-            
-            def _parse_create_table(self, sql: str) -> Dict:
-                """Parse CREATE TABLE statement"""
-                # Pattern: CREATE TABLE table_name (col1 type1, col2 type2, ...)
-                pattern = r'CREATE\s+TABLE\s+(\w+)\s*\((.*)\)'
-                match = re.match(pattern, sql, re.IGNORECASE)
-                
-                if not match:
-                    raise GSQLSyntaxError("Invalid CREATE TABLE syntax")
-                
-                table_name = match.group(1)
-                columns_str = match.group(2)
-                
-                # Parse columns
-                columns = []
-                for col_def in self._split_by_comma(columns_str):
-                    col_def = col_def.strip()
-                    parts = col_def.split()
-                    
-                    if len(parts) < 2:
-                        raise GSQLSyntaxError(f"Invalid column definition: {col_def}")
-                    
-                    col_name = parts[0]
-                    col_type = parts[1].upper()
-                    
-                    # Parse constraints
-                    constraints = []
-                    for part in parts[2:]:
-                        if part.upper() == 'PRIMARY' and 'KEY' in parts:
-                            constraints.append('PRIMARY_KEY')
-                        elif part.upper() == 'NOT' and 'NULL' in parts:
-                            constraints.append('NOT_NULL')
-                        elif part.upper() == 'UNIQUE':
-                            constraints.append('UNIQUE')
-                    
-                    columns.append({
-                        'name': col_name,
-                        'type': self._normalize_type(col_type),
-                        'constraints': constraints
-                    })
-                
-                return {
-                    'type': 'CREATE_TABLE',
-                    'table': table_name,
-                    'columns': columns
-                }
-            
-            def _parse_insert(self, sql: str) -> Dict:
-                """Parse INSERT INTO statement"""
-                # Pattern: INSERT INTO table (col1, col2) VALUES (val1, val2)
-                pattern = r'INSERT\s+INTO\s+(\w+)\s*(?:\(([^)]+)\))?\s*VALUES\s*(.+)'
-                match = re.match(pattern, sql, re.IGNORECASE)
-                
-                if not match:
-                    raise GSQLSyntaxError("Invalid INSERT syntax")
-                
-                table_name = match.group(1)
-                columns_str = match.group(2)
-                values_str = match.group(3)
-                
-                # Parse columns
-                columns = []
-                if columns_str:
-                    columns = [col.strip() for col in columns_str.split(',')]
-                
-                # Parse values
-                values = self._parse_values(values_str)
-                
-                return {
-                    'type': 'INSERT',
-                    'table': table_name,
-                    'columns': columns,
-                    'values': values
-                }
-            
-            def _parse_select(self, sql: str) -> Dict:
-                """Parse SELECT statement"""
-                # Pattern: SELECT columns FROM table WHERE conditions
-                pattern = r'SELECT\s+(.+?)\s+FROM\s+(\w+)(?:\s+WHERE\s+(.+))?'
-                match = re.match(pattern, sql, re.IGNORECASE)
-                
-                if not match:
-                    raise GSQLSyntaxError("Invalid SELECT syntax")
-                
-                columns_str = match.group(1)
-                table_name = match.group(2)
-                where_str = match.group(3)
-                
-                # Parse columns
-                if columns_str.strip() == '*':
-                    columns = ['*']
-                else:
-                    columns = [col.strip() for col in columns_str.split(',')]
-                
-                # Parse WHERE (simplified)
-                where = None
-                if where_str:
-                    where = self._parse_where(where_str)
-                
-                return {
-                    'type': 'SELECT',
-                    'table': table_name,
-                    'columns': columns,
-                    'where': where
-                }
-            
-            def _parse_delete(self, sql: str) -> Dict:
-                """Parse DELETE statement"""
-                pattern = r'DELETE\s+FROM\s+(\w+)(?:\s+WHERE\s+(.+))?'
-                match = re.match(pattern, sql, re.IGNORECASE)
-                
-                if not match:
-                    raise GSQLSyntaxError("Invalid DELETE syntax")
-                
-                table_name = match.group(1)
-                where_str = match.group(2)
-                
-                where = None
-                if where_str:
-                    where = self._parse_where(where_str)
-                
-                return {
-                    'type': 'DELETE',
-                    'table': table_name,
-                    'where': where
-                }
-            
-            def _parse_values(self, values_str: str) -> List[List[Any]]:
-                """Parse VALUES clause"""
-                rows = []
-                
-                # Find all value tuples
-                tuples = re.findall(r'\(([^)]+)\)', values_str)
-                
-                for tup in tuples:
-                    values = []
-                    for val in self._split_by_comma(tup):
-                        values.append(self._parse_value(val.strip()))
-                    rows.append(values)
-                
-                return rows
-            
-            def _parse_where(self, where_str: str) -> Dict:
-                """Parse WHERE clause (simplified)"""
-                # Simple equality for now
-                conditions = []
-                
-                # Split by AND
-                and_parts = where_str.split(' AND ')
-                
-                for part in and_parts:
-                    part = part.strip()
-                    # Pattern: column = value
-                    match = re.match(r'(\w+)\s*=\s*(.+)', part, re.IGNORECASE)
-                    if match:
-                        col = match.group(1)
-                        value = self._parse_value(match.group(2).strip())
-                        conditions.append({
-                            'column': col,
-                            'operator': '=',
-                            'value': value
-                        })
-                
-                return {'conditions': conditions} if conditions else None
-            
-            def _parse_value(self, val: str) -> Any:
-                """Parse a SQL value"""
-                # String
-                if (val.startswith("'") and val.endswith("'")) or (val.startswith('"') and val.endswith('"')):
-                    return val[1:-1]
-                # Number
-                elif val.replace('.', '').replace('-', '').isdigit():
-                    if '.' in val:
-                        return float(val)
-                    else:
-                        return int(val)
-                # Boolean
-                elif val.upper() in ('TRUE', 'FALSE'):
-                    return val.upper() == 'TRUE'
-                # NULL
-                elif val.upper() == 'NULL':
-                    return None
-                else:
-                    # Try as number
-                    try:
-                        return float(val) if '.' in val else int(val)
-                    except ValueError:
-                        return val
-            
-            def _split_by_comma(self, s: str) -> List[str]:
-                """Split by comma, ignoring commas in strings"""
-                parts = []
-                current = []
-                in_string = False
-                string_char = None
-                
-                for char in s:
-                    if char in ("'", '"'):
-                        if not in_string:
-                            in_string = True
-                            string_char = char
-                        elif char == string_char:
-                            in_string = False
-                            string_char = None
-                        current.append(char)
-                    elif char == ',' and not in_string:
-                        parts.append(''.join(current).strip())
-                        current = []
-                    else:
-                        current.append(char)
-                
-                if current:
-                    parts.append(''.join(current).strip())
-                
-                return parts
-            
-            def _normalize_type(self, type_str: str) -> str:
-                """Normalize data type"""
-                type_map = {
-                    'INT': 'integer',
-                    'INTEGER': 'integer',
-                    'BIGINT': 'bigint',
-                    'FLOAT': 'float',
-                    'DOUBLE': 'double',
-                    'TEXT': 'text',
-                    'VARCHAR': 'text',
-                    'STRING': 'text',
-                    'BOOLEAN': 'boolean',
-                    'BOOL': 'boolean'
-                }
-                return type_map.get(type_str.upper(), 'text')
-        
-        # Improved Storage
-        class Storage:
-            def __init__(self, data_dir):
-                self.data_dir = data_dir
-            
-            def create_table(self, name: str, columns: List[Dict]) -> None:
-                """Create table with metadata"""
-                # Create data file
-                table_file = self.data_dir / 'tables' / f'{name}.json'
-                with open(table_file, 'w') as f:
-                    json.dump([], f, indent=2)
-                
-                # Create metadata file
-                meta_file = self.data_dir / 'meta' / f'{name}.json'
-                with open(meta_file, 'w') as f:
-                    json.dump({
-                        'name': name,
-                        'columns': columns,
-                        'created_at': datetime.now().isoformat(),
-                        'modified_at': datetime.now().isoformat(),
-                        'row_count': 0,
-                        'next_id': 1
-                    }, f, indent=2)
-            
-            def insert(self, table: str, data: Dict) -> int:
-                """Insert data with proper column mapping"""
-                table_file = self.data_dir / 'tables' / f'{table}.json'
-                meta_file = self.data_dir / 'meta' / f'{table}.json'
-                
-                if not meta_file.exists():
-                    raise GSQLExecutionError(f"Table '{table}' doesn't exist")
-                
-                # Load metadata
-                with open(meta_file, 'r') as f:
-                    meta = json.load(f)
-                
-                # Load data
-                if table_file.exists():
-                    with open(table_file, 'r') as f:
-                        rows = json.load(f)
-                else:
-                    rows = []
-                
-                # Assign ID
-                row_id = meta['next_id']
-                data['_id'] = row_id
-                data['_created'] = datetime.now().isoformat()
-                
-                rows.append(data)
-                
-                # Save data
-                with open(table_file, 'w') as f:
-                    json.dump(rows, f, indent=2)
-                
-                # Update metadata
-                meta['next_id'] += 1
-                meta['row_count'] = len(rows)
-                meta['modified_at'] = datetime.now().isoformat()
-                
-                with open(meta_file, 'w') as f:
-                    json.dump(meta, f, indent=2)
-                
-                return row_id
-            
-            def select(self, table: str, where: Dict = None, 
-                      columns: List[str] = None, limit: int = None) -> List[Dict]:
-                """Select data with filtering"""
-                table_file = self.data_dir / 'tables' / f'{table}.json'
-                
-                if not table_file.exists():
-                    return []
-                
-                with open(table_file, 'r') as f:
-                    rows = json.load(f)
-                
-                results = []
-                for row in rows:
-                    # Apply WHERE filter
-                    if where and not self._matches_where(row, where):
-                        continue
-                    
-                    # Project columns
-                    if columns and columns != ['*']:
-                        projected = {col: row.get(col) for col in columns if col in row}
-                        results.append(projected)
-                    else:
-                        # Remove internal fields
-                        filtered = {k: v for k, v in row.items() if not k.startswith('_')}
-                        results.append(filtered)
-                    
-                    # Apply limit
-                    if limit and len(results) >= limit:
-                        break
-                
-                return results
-            
-            def _matches_where(self, row: Dict, where: Dict) -> bool:
-                """Check if row matches WHERE conditions"""
-                for col, val in where.items():
-                    if col not in row or row[col] != val:
-                        return False
-                return True
-            
-            def list_tables(self) -> List[str]:
-                """List all tables"""
-                tables_dir = self.data_dir / 'tables'
-                if not tables_dir.exists():
-                    return []
-                return [f.stem for f in tables_dir.glob('*.json')]
-            
-            def get_table_info(self, table: str) -> Dict:
-                """Get table metadata"""
-                meta_file = self.data_dir / 'meta' / f'{table}.json'
-                if meta_file.exists():
-                    with open(meta_file, 'r') as f:
-                        return json.load(f)
-                return None
-        
-        # Executor
-        class Executor:
-            def __init__(self, storage):
-                self.storage = storage
-            
-            def execute(self, ast: Dict) -> Dict:
-                """Execute AST"""
-                query_type = ast.get('type')
-                
-                if query_type == 'CREATE_TABLE':
-                    table = ast['table']
-                    columns = ast['columns']
-                    self.storage.create_table(table, columns)
-                    return {
-                        'type': 'CREATE_TABLE',
-                        'table': table,
-                        'columns': len(columns)
-                    }
-                
-                elif query_type == 'INSERT':
-                    table = ast['table']
-                    columns = ast.get('columns', [])
-                    values_list = ast['values']
-                    
-                    rows_inserted = 0
-                    for values in values_list:
-                        # Map values to columns
-                        if columns:
-                            row_data = {}
-                            for i, col in enumerate(columns):
-                                if i < len(values):
-                                    row_data[col] = values[i]
-                        else:
-                            # No columns specified, use positional mapping
-                            # Need table metadata to know column names
-                            meta = self.storage.get_table_info(table)
-                            if meta and 'columns' in meta:
-                                table_columns = meta['columns']
-                                row_data = {}
-                                for i, col_def in enumerate(table_columns):
-                                    if i < len(values):
-                                        row_data[col_def['name']] = values[i]
-                            else:
-                                # Fallback: use generic names
-                                row_data = {f'col_{i}': val for i, val in enumerate(values)}
-                        
-                        self.storage.insert(table, row_data)
-                        rows_inserted += 1
-                    
-                    return {
-                        'type': 'INSERT',
-                        'table': table,
-                        'rows_affected': rows_inserted
-                    }
-                
-                elif query_type == 'SELECT':
-                    table = ast['table']
-                    columns = ast['columns']
-                    where_ast = ast.get('where')
-                    
-                    # Convert WHERE AST to simple dict
-                    where = None
-                    if where_ast and where_ast.get('conditions'):
-                        where = {}
-                        for cond in where_ast['conditions']:
-                            if cond['operator'] == '=':
-                                where[cond['column']] = cond['value']
-                    
-                    data = self.storage.select(table, where, columns)
-                    
-                    return {
-                        'type': 'SELECT',
-                        'table': table,
-                        'data': data,
-                        'row_count': len(data)
-                    }
-                
-                elif query_type == 'DELETE':
-                    table = ast['table']
-                    where_ast = ast.get('where')
-                    
-                    # For now, just return placeholder
-                    return {
-                        'type': 'DELETE',
-                        'table': table,
-                        'rows_affected': 0
-                    }
-                
-                else:
-                    raise GSQLExecutionError(f"Unsupported query type: {query_type}")
-        
+        # Initialize components
+        self.storage = StorageEngine(db_path, buffer_pool_size=buffer_pool_size)
         self.parser = SQLParser()
-        self.storage = Storage(self.data_dir)
-        self.executor = Executor(self.storage)
+        self.function_manager = FunctionManager()
+        
+        # Initialize NLP translator if enabled
+        self.nlp_translator = None
+        if use_nlp:
+            try:
+                self.nlp_translator = NLToSQLTranslator()
+            except Exception as e:
+                logger.warning(f"NLP translator initialization failed: {e}")
+                self.nlp_translator = None
+        
+        # Initialize executor with all components
+        self.executor = QueryExecutor(
+            database=self,
+            function_manager=self.function_manager,
+            nlp_translator=self.nlp_translator
+        )
+        
+        # Inject function manager into parser
+        self.parser.function_manager = self.function_manager
+        
+        logger.info(f"Database initialized: {db_path}")
     
-    def _load_metadata(self):
-        """Load table metadata"""
-        meta_dir = self.data_dir / 'meta'
-        if meta_dir.exists():
-            for meta_file in meta_dir.glob('*.json'):
-                with open(meta_file, 'r') as f:
-                    meta = json.load(f)
-                    self.tables_meta[meta['name']] = meta
-    
-    def execute(self, sql: str) -> Dict[str, Any]:
-        """Execute SQL query"""
+    def execute(self, sql: str, params: Dict = None, use_cache: bool = True) -> Any:
+        """
+        Execute a SQL query or natural language command
+        
+        Args:
+            sql (str): SQL query or natural language text
+            params (Dict): Parameters for prepared statements
+            use_cache (bool): Use query cache
+            
+        Returns:
+            Query results
+            
+        Raises:
+            SQLExecutionError: If execution fails
+        """
         try:
-            # Parse
-            ast = self.parser.parse(sql)
-            
-            # Execute
-            result = self.executor.execute(ast)
-            
-            # Update metadata cache
-            if ast.get('type') == 'CREATE_TABLE':
-                table = ast['table']
-                if table not in self.tables_meta:
-                    self.tables_meta[table] = {
-                        'name': table,
-                        'columns': ast['columns'],
-                        'created_at': datetime.now().isoformat(),
-                        'row_count': 0
-                    }
-            
-            return result
-            
-        except GSQLSyntaxError as e:
-            raise e
+            return self.executor.execute(sql, params=params, use_cache=use_cache)
         except Exception as e:
-            raise GSQLExecutionError(f"Execution error: {str(e)}")
+            if isinstance(e, GSQLBaseException):
+                raise e
+            raise SQLExecutionError(f"Execution failed: {str(e)}")
     
-    def query(self, sql: str) -> List[Dict[str, Any]]:
-        """Execute SELECT query"""
-        result = self.execute(sql)
-        return result.get('data', [])
+    def execute_nl(self, nl_query: str) -> Any:
+        """
+        Execute a natural language query
+        
+        Args:
+            nl_query (str): Query in natural language
+            
+        Returns:
+            Query results
+            
+        Raises:
+            SQLExecutionError: If execution fails
+        """
+        if not self.use_nlp or not self.nlp_translator:
+            raise SQLExecutionError("NLP is not enabled")
+        
+        return self.execute(nl_query)
     
-    def list_tables(self) -> List[str]:
-        """List all tables"""
-        return self.storage.list_tables()
+    def create_function(self, name: str, params: List[str], body: str, return_type: str = "TEXT") -> str:
+        """
+        Create a user-defined function
+        
+        Args:
+            name (str): Function name
+            params (List[str]): Parameter names
+            body (str): Function body (Python code)
+            return_type (str): Return type
+            
+        Returns:
+            str: Success message
+        """
+        return self.function_manager.create_function(name, params, body, return_type)
     
-    def get_table_info(self, table: str) -> Dict:
-        """Get table information"""
-        return self.storage.get_table_info(table)
+    def list_functions(self) -> List[Dict]:
+        """
+        List all available functions
+        
+        Returns:
+            List[Dict]: Function information
+        """
+        return self.function_manager.list_functions()
+    
+    def drop_function(self, name: str) -> str:
+        """
+        Drop a user-defined function
+        
+        Args:
+            name (str): Function name
+            
+        Returns:
+            str: Success message
+        """
+        return self.function_manager.drop_function(name)
+    
+    def begin_transaction(self) -> int:
+        """
+        Begin a new transaction
+        
+        Returns:
+            int: Transaction ID
+        """
+        return self.storage.transaction_manager.begin()
+    
+    def commit_transaction(self, tid: int) -> str:
+        """
+        Commit a transaction
+        
+        Args:
+            tid (int): Transaction ID
+            
+        Returns:
+            str: Success message
+        """
+        self.storage.transaction_manager.commit(tid)
+        return f"Transaction {tid} committed"
+    
+    def rollback_transaction(self, tid: int) -> str:
+        """
+        Rollback a transaction
+        
+        Args:
+            tid (int): Transaction ID
+            
+        Returns:
+            str: Success message
+        """
+        self.storage.transaction_manager.rollback(tid)
+        return f"Transaction {tid} rolled back"
+    
+    def get_cache_stats(self) -> Dict:
+        """
+        Get buffer pool cache statistics
+        
+        Returns:
+            Dict: Cache statistics
+        """
+        return self.storage.buffer_pool.stats()
+    
+    def clear_cache(self) -> str:
+        """
+        Clear query cache
+        
+        Returns:
+            str: Success message
+        """
+        self.executor.clear_cache()
+        return "Cache cleared"
+    
+    def import_csv(self, csv_path: str, table_name: str = None, delimiter: str = ',') -> str:
+        """
+        Import data from CSV file
+        
+        Args:
+            csv_path (str): Path to CSV file
+            table_name (str): Table name (defaults to filename)
+            delimiter (str): CSV delimiter
+            
+        Returns:
+            str: Success message
+        """
+        import csv
+        from pathlib import Path
+        
+        filepath = Path(csv_path)
+        if not filepath.exists():
+            raise SQLExecutionError(f"File not found: {csv_path}")
+        
+        if table_name is None:
+            table_name = filepath.stem
+        
+        with open(filepath, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f, delimiter=delimiter)
+            headers = reader.fieldnames
+            
+            if not headers:
+                raise SQLExecutionError("CSV file has no headers")
+            
+            # Create table
+            create_sql = f"CREATE TABLE {table_name} ({', '.join([f'{h} TEXT' for h in headers])})"
+            self.execute(create_sql)
+            
+            # Insert data
+            count = 0
+            for row in reader:
+                values = [f"'{row[h].replace(\"'\", \"''\")}'" if row[h] is not None else 'NULL' for h in headers]
+                insert_sql = f"INSERT INTO {table_name} VALUES ({', '.join(values)})"
+                self.execute(insert_sql)
+                count += 1
+            
+            return f"Imported {count} rows into table '{table_name}'"
+    
+    def export_csv(self, table_name: str, csv_path: str, delimiter: str = ',') -> str:
+        """
+        Export table to CSV file
+        
+        Args:
+            table_name (str): Table name
+            csv_path (str): Output CSV path
+            delimiter (str): CSV delimiter
+            
+        Returns:
+            str: Success message
+        """
+        import csv
+        
+        result = self.execute(f"SELECT * FROM {table_name}")
+        
+        if not result or 'rows' not in result or not result['rows']:
+            raise SQLExecutionError(f"No data in table '{table_name}'")
+        
+        rows = result['rows']
+        headers = list(rows[0].keys())
+        
+        with open(csv_path, 'w', encoding='utf-8', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=headers, delimiter=delimiter)
+            writer.writeheader()
+            writer.writerows(rows)
+        
+        return f"Exported {len(rows)} rows to '{csv_path}'"
     
     def close(self):
-        """Close database"""
-        pass
+        """Close the database connection"""
+        # Cleanup resources
+        self.executor.clear_cache()
+        logger.info(f"Database closed: {self.db_path}")
     
     def __enter__(self):
+        """Context manager entry"""
         return self
     
     def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit"""
         self.close()
 
-def connect(path: Optional[str] = None) -> GSQL:
-    """Connect to GSQL database"""
-    return GSQL(path)
+# Factory function for easy database creation
+def create_database(db_path: str, **kwargs) -> Database:
+    """
+    Create a new database
+    
+    Args:
+        db_path (str): Path to database file
+        **kwargs: Additional arguments for Database constructor
+        
+    Returns:
+        Database: New database instance
+    """
+    # Ensure directory exists
+    db_dir = os.path.dirname(db_path)
+    if db_dir and not os.path.exists(db_dir):
+        os.makedirs(db_dir)
+    
+    # Remove existing file if it exists
+    if os.path.exists(db_path):
+        os.remove(db_path)
+    
+    return Database(db_path, **kwargs)
 
-__all__ = ['GSQL', 'connect', 'GSQLSyntaxError', 'GSQLExecutionError']
+# Singleton for default database
+_default_db = None
+
+def get_default_database() -> Optional[Database]:
+    """Get the default database instance"""
+    return _default_db
+
+def set_default_database(db: Database):
+    """Set the default database instance"""
+    global _default_db
+    _default_db = db
