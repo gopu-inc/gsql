@@ -1,41 +1,43 @@
 #!/usr/bin/env python3
 """
-GSQL Database Module - Interface principale utilisant le Storage Engine
-Version: 4.0 - Avec Buffer Pool, Transactions et Auto-Recovery
+GSQL Database Module - SQLite Backend Only
+Version: 3.0 - Auto-recovery, no YAML
 """
 
 import os
+import sqlite3
 import json
 import logging
+import time
 import threading
 import hashlib
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, List, Any, Optional, Union
+from typing import Dict, List, Any, Optional, Tuple, Union
 import re
 
 from .storage import SQLiteStorage, create_storage
 from .exceptions import (
     GSQLBaseException, SQLSyntaxError, SQLExecutionError,
     ConstraintViolationError, TransactionError, FunctionError,
-    BufferPoolError
+    BufferPoolError, StorageError
 )
 
 logger = logging.getLogger(__name__)
 
 class Database:
-    """Classe principale de base de données GSQL"""
+    """Base de données SQLite auto-récupérante"""
     
     def __init__(self, db_path=None, base_dir="/root/.gsql", 
                  buffer_pool_size=100, enable_wal=True, auto_recovery=True):
         """
-        Initialise la base de données GSQL
+        Initialise la base de données SQLite
         
         Args:
             db_path: Chemin de la base (None pour auto)
             base_dir: Répertoire de base pour GSQL
-            buffer_pool_size: Taille du buffer pool en pages
-            enable_wal: Activer le mode WAL pour meilleures performances
+            buffer_pool_size: Taille du buffer pool
+            enable_wal: Activer le mode WAL
             auto_recovery: Activer la récupération automatique
         """
         self.base_dir = Path(base_dir)
@@ -52,7 +54,7 @@ class Database:
             'backup_interval': 24 * 3600,  # 24 heures
             'max_query_cache': 100,
             'query_timeout': 30,  # secondes
-            'version': '4.0'
+            'version': '3.0'
         }
         
         # Initialiser le moteur de stockage
@@ -175,7 +177,7 @@ class Database:
         }
     
     def _save_config(self):
-        """Sauvegarde la configuration dans un fichier"""
+        """Sauvegarde la configuration dans un fichier JSON"""
         config_file = self.base_dir / "gsql_config.json"
         try:
             with open(config_file, 'w') as f:
