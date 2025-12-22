@@ -306,6 +306,51 @@ class SQLiteStorage:
         # Initialisation
         self._initialize()
 
+    def get_tables(self) -> List[Dict]:
+    """Récupère la liste de toutes les tables"""
+    try:
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT name, type, sql 
+            FROM sqlite_master 
+            WHERE type IN ('table', 'view') 
+            AND name NOT LIKE 'sqlite_%'
+            ORDER BY type, name
+        """)
+        
+        tables = []
+        for row in cursor.fetchall():
+            table_name = row[0]
+            table_type = row[1]
+            
+            # Compter les lignes
+            try:
+                cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+                row_count = cursor.fetchone()[0]
+            except:
+                row_count = 0
+            
+            # Obtenir les colonnes
+            try:
+                cursor.execute(f"PRAGMA table_info({table_name})")
+                columns = [col[1] for col in cursor.fetchall()]
+            except:
+                columns = []
+            
+            tables.append({
+                'table_name': table_name,
+                'type': table_type,
+                'row_count': row_count,
+                'columns': columns,
+                'sql': row[2]
+            })
+        
+        return tables
+        
+    except Exception as e:
+        logger.error(f"Failed to get tables: {e}")
+        return []
+
     def _initialize(self):
         """Initialise la connexion et vérifie l'intégrité"""
         try:
