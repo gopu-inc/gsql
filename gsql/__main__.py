@@ -23,21 +23,45 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+# Import des couleurs
+try:
+    from gsql.cli.colors import Colors
+    from gsql.cli.formatter import OutputFormatter as fmt
+    COLORS_AVAILABLE = True
+except ImportError:
+    # Fallback sans couleurs
+    class Colors:
+        TITLE = HEADER = PROMPT = SUCCESS = ERROR = WARNING = INFO = HELP = ''
+        TABLE = COLUMN = ROW = ROW_ALT = ''
+        RESET = ''
+    
+    class fmt:
+        @staticmethod
+        def format_result(result): return str(result)
+        @staticmethod
+        def format_sql(sql): return sql
+        @staticmethod
+        def format_nlp_question(q): return f"🔍 Question: {q}"
+        @staticmethod
+        def format_nlp_sql(sql): return f"📊 SQL généré: {sql}"
+    
+    COLORS_AVAILABLE = False
+
 class GSQLCLI(cmd.Cmd):
-    """GSQL Command Line Interface"""
+    """GSQL Command Line Interface avec couleurs"""
     
-    intro = """
-    ╔══════════════════════════════════════╗
+    intro = f"""
+    {Colors.TITLE}╔══════════════════════════════════════╗
     ║      GSQL Interactive Shell          ║
-    ║      Version 2.0                    ║
-    ╚══════════════════════════════════════╝
+    ║      Version 2.0 with Colors         ║
+    ╚══════════════════════════════════════╝{Colors.RESET}
     
-    Type 'help' for commands, 'exit' to quit.
-    Use 'nl' for natural language queries.
-    Use '.tables' to list tables, '.help' for help.
+    Type {Colors.PROMPT}'help'{Colors.RESET} for commands, {Colors.PROMPT}'exit'{Colors.RESET} to quit.
+    Use {Colors.PROMPT}'nl'{Colors.RESET} for natural language queries.
+    Use {Colors.PROMPT}'.tables'{Colors.RESET} to list tables, {Colors.PROMPT}'.help'{Colors.RESET} for help.
     """
     
-    prompt = 'gsql> '
+    prompt = f'{Colors.PROMPT}gsql>{Colors.RESET} '
     
     def __init__(self, database_path=None, use_nlp=True):
         super().__init__()
@@ -47,7 +71,7 @@ class GSQLCLI(cmd.Cmd):
             from gsql.database import Database
             self.Database = Database
         except ImportError as e:
-            print(f"❌ Failed to import Database: {e}")
+            print(f"{Colors.ERROR}❌ Failed to import Database: {e}{Colors.RESET}")
             print("Please check your installation.")
             sys.exit(1)
         
@@ -57,10 +81,10 @@ class GSQLCLI(cmd.Cmd):
         # Initialize database
         try:
             self.db = Database(self.database_path, use_nlp=self.use_nlp)
-            print(f"✅ Connected to database: {self.database_path}")
+            print(f"{Colors.SUCCESS}✅ Connected to database: {self.database_path}{Colors.RESET}")
             logger.info(f"Database connected: {self.database_path}")
         except Exception as e:
-            print(f"❌ Error initializing database: {str(e)}")
+            print(f"{Colors.ERROR}❌ Error initializing database: {str(e)}{Colors.RESET}")
             logger.error(f"Database initialization error: {str(e)}")
             sys.exit(1)
     
@@ -74,14 +98,14 @@ class GSQLCLI(cmd.Cmd):
           sql INSERT INTO users VALUES (1, 'Alice')
         """
         if not arg:
-            print("❌ Please provide SQL command")
+            print(f"{Colors.ERROR}❌ Please provide SQL command{Colors.RESET}")
             return
         
         try:
             result = self.db.execute(arg)
-            self._display_result(result)
+            print(fmt.format_result(result))
         except Exception as e:
-            print(f"❌ SQL Error: {str(e)}")
+            print(f"{Colors.ERROR}❌ SQL Error: {str(e)}{Colors.RESET}")
     
     def do_nl(self, arg):
         """
@@ -94,19 +118,19 @@ class GSQLCLI(cmd.Cmd):
           nl aide
         """
         if not arg:
-            print("❌ Please provide a question")
+            print(f"{Colors.ERROR}❌ Please provide a question{Colors.RESET}")
             return
         
         if not self.use_nlp:
-            print("❌ NLP is not enabled. Start with --no-nlp to disable.")
+            print(f"{Colors.ERROR}❌ NLP is not enabled. Start with --no-nlp to disable.{Colors.RESET}")
             return
         
         try:
-            print(f"🔍 Question: {arg}")
+            print(fmt.format_nlp_question(arg))
             result = self.db.execute_nl(arg)
-            self._display_result(result)
+            print(fmt.format_result(result))
         except Exception as e:
-            print(f"❌ NLP Error: {str(e)}")
+            print(f"{Colors.ERROR}❌ NLP Error: {str(e)}{Colors.RESET}")
     
     def do_exec(self, arg):
         """Execute command (alias for default): exec SELECT * FROM table"""
@@ -121,22 +145,26 @@ class GSQLCLI(cmd.Cmd):
           create function name(params) RETURNS type AS $$code$$ LANGUAGE plpython
         """
         if not arg:
-            print("❌ Please specify what to create: table|function")
+            print(f"{Colors.ERROR}❌ Please specify what to create: table|function{Colors.RESET}")
             return
         
         try:
             if arg.lower().startswith('table'):
                 sql = f"CREATE {arg}"
+                print(f"{Colors.INFO}📝 Creating table...{Colors.RESET}")
+                print(f"{Colors.SQL_KEYWORD}{fmt.format_sql(sql)}{Colors.RESET}")
                 result = self.db.execute(sql)
-                self._display_result(result)
+                print(fmt.format_result(result))
             elif arg.lower().startswith('function'):
                 sql = f"CREATE {arg}"
+                print(f"{Colors.INFO}📝 Creating function...{Colors.RESET}")
+                print(f"{Colors.SQL_KEYWORD}{fmt.format_sql(sql)}{Colors.RESET}")
                 result = self.db.execute(sql)
-                self._display_result(result)
+                print(fmt.format_result(result))
             else:
-                print("❌ Unknown create type. Use: create table|function")
+                print(f"{Colors.ERROR}❌ Unknown create type. Use: create table|function{Colors.RESET}")
         except Exception as e:
-            print(f"❌ Error: {str(e)}")
+            print(f"{Colors.ERROR}❌ Error: {str(e)}{Colors.RESET}")
     
     def do_insert(self, arg):
         """
@@ -145,17 +173,19 @@ class GSQLCLI(cmd.Cmd):
         Example: insert INTO users VALUES (1, 'Alice')
         """
         if not arg:
-            print("❌ Please provide INSERT statement")
+            print(f"{Colors.ERROR}❌ Please provide INSERT statement{Colors.RESET}")
             return
         
         try:
             if not arg.upper().startswith('INTO'):
                 arg = f"INTO {arg}"
             sql = f"INSERT {arg}"
+            print(f"{Colors.INFO}📝 Inserting data...{Colors.RESET}")
+            print(f"{Colors.SQL_KEYWORD}{fmt.format_sql(sql)}{Colors.RESET}")
             result = self.db.execute(sql)
-            self._display_result(result)
+            print(fmt.format_result(result))
         except Exception as e:
-            print(f"❌ Error: {str(e)}")
+            print(f"{Colors.ERROR}❌ Error: {str(e)}{Colors.RESET}")
     
     def do_select(self, arg):
         """
@@ -166,15 +196,17 @@ class GSQLCLI(cmd.Cmd):
           select name, age FROM users WHERE age > 25
         """
         if not arg:
-            print("❌ Please provide SELECT statement")
+            print(f"{Colors.ERROR}❌ Please provide SELECT statement{Colors.RESET}")
             return
         
         try:
             sql = f"SELECT {arg}"
+            print(f"{Colors.INFO}📝 Executing query...{Colors.RESET}")
+            print(f"{Colors.SQL_KEYWORD}{fmt.format_sql(sql)}{Colors.RESET}")
             result = self.db.execute(sql)
-            self._display_result(result)
+            print(fmt.format_result(result))
         except Exception as e:
-            print(f"❌ Error: {str(e)}")
+            print(f"{Colors.ERROR}❌ Error: {str(e)}{Colors.RESET}")
     
     def do_show(self, arg):
         """
@@ -185,22 +217,24 @@ class GSQLCLI(cmd.Cmd):
           show functions
         """
         if not arg:
-            print("❌ Please specify: tables|functions")
+            print(f"{Colors.ERROR}❌ Please specify: tables|functions{Colors.RESET}")
             return
         
         arg = arg.lower().strip()
         
         try:
             if arg == 'tables':
+                print(f"{Colors.INFO}📊 Listing tables...{Colors.RESET}")
                 result = self.db.execute("SHOW TABLES")
-                self._display_result(result)
+                print(fmt.format_result(result))
             elif arg == 'functions':
+                print(f"{Colors.INFO}🔧 Listing functions...{Colors.RESET}")
                 result = self.db.execute("SHOW FUNCTIONS")
-                self._display_result(result)
+                print(fmt.format_result(result))
             else:
-                print(f"❌ Unknown show command: {arg}")
+                print(f"{Colors.ERROR}❌ Unknown show command: {arg}{Colors.RESET}")
         except Exception as e:
-            print(f"❌ Error: {str(e)}")
+            print(f"{Colors.ERROR}❌ Error: {str(e)}{Colors.RESET}")
     
     def do_tables(self, arg):
         """List all tables (alias for .tables)"""
@@ -217,16 +251,25 @@ class GSQLCLI(cmd.Cmd):
         Example: describe users
         """
         if not arg:
-            print("❌ Please provide table name")
+            print(f"{Colors.ERROR}❌ Please provide table name{Colors.RESET}")
             return
         
         try:
-            # Simple implementation - would need schema support
-            print(f"📋 Table: {arg}")
-            print("   Columns would be listed here")
-            print("   (Full schema support coming soon)")
+            print(f"{Colors.INFO}📋 Table: {Colors.TABLE}{arg}{Colors.RESET}")
+            print(f"{Colors.INFO}   Columns would be listed here{Colors.RESET}")
+            print(f"{Colors.INFO}   (Full schema support coming soon){Colors.RESET}")
+            
+            # Essaye de récupérer le schéma
+            try:
+                result = self.db.execute(f"PRAGMA table_info({arg})")
+                if result and 'rows' in result and result['rows']:
+                    print(f"\n{Colors.INFO}📋 Schema found:{Colors.RESET}")
+                    Colors.print_table(None, result['rows'])
+            except:
+                pass
+                
         except Exception as e:
-            print(f"❌ Error: {str(e)}")
+            print(f"{Colors.ERROR}❌ Error: {str(e)}{Colors.RESET}")
     
     def do_import(self, arg):
         """
@@ -237,7 +280,7 @@ class GSQLCLI(cmd.Cmd):
           import data.csv mytable
         """
         if not arg:
-            print("❌ Please provide filename")
+            print(f"{Colors.ERROR}❌ Please provide filename{Colors.RESET}")
             return
         
         parts = arg.split()
@@ -245,10 +288,11 @@ class GSQLCLI(cmd.Cmd):
         table_name = parts[1] if len(parts) > 1 else None
         
         try:
+            print(f"{Colors.INFO}📥 Importing {filename}...{Colors.RESET}")
             result = self.db.import_csv(filename, table_name)
-            print(f"✅ {result}")
+            print(f"{Colors.SUCCESS}✅ {result}{Colors.RESET}")
         except Exception as e:
-            print(f"❌ Import error: {str(e)}")
+            print(f"{Colors.ERROR}❌ Import error: {str(e)}{Colors.RESET}")
     
     def do_export(self, arg):
         """
@@ -259,7 +303,7 @@ class GSQLCLI(cmd.Cmd):
           export products products.csv
         """
         if not arg:
-            print("❌ Please provide table name")
+            print(f"{Colors.ERROR}❌ Please provide table name{Colors.RESET}")
             return
         
         parts = arg.split()
@@ -267,15 +311,16 @@ class GSQLCLI(cmd.Cmd):
         filename = parts[1] if len(parts) > 1 else f"{table_name}.csv"
         
         try:
+            print(f"{Colors.INFO}📤 Exporting {table_name} to {filename}...{Colors.RESET}")
             result = self.db.export_csv(table_name, filename)
-            print(f"✅ {result}")
+            print(f"{Colors.SUCCESS}✅ {result}{Colors.RESET}")
         except Exception as e:
-            print(f"❌ Export error: {str(e)}")
+            print(f"{Colors.ERROR}❌ Export error: {str(e)}{Colors.RESET}")
     
     def do_cache(self, arg):
         """Cache operations: cache stats, cache clear"""
         if not arg:
-            print("❌ Available subcommands: stats, clear")
+            print(f"{Colors.ERROR}❌ Available subcommands: stats, clear{Colors.RESET}")
             return
         
         subcmd = arg.lower().strip()
@@ -283,24 +328,25 @@ class GSQLCLI(cmd.Cmd):
         if subcmd == 'stats':
             try:
                 stats = self.db.get_cache_stats()
-                print("\n" + "="*60)
-                print(f"{'CACHE STATISTICS':^60}")
-                print("="*60)
+                print(f"\n{Colors.HEADER}{'='*60}{Colors.RESET}")
+                print(f"{Colors.TITLE}{'CACHE STATISTICS':^60}{Colors.RESET}")
+                print(f"{Colors.HEADER}{'='*60}{Colors.RESET}")
                 for key, value in stats.items():
-                    print(f"{key.replace('_', ' ').title():20}: {value}")
-                print("="*60)
+                    key_display = key.replace('_', ' ').title()
+                    print(f"{Colors.COLUMN}{key_display:20}{Colors.RESET}: {Colors.INFO}{value}{Colors.RESET}")
+                print(f"{Colors.HEADER}{'='*60}{Colors.RESET}")
             except Exception as e:
-                print(f"❌ Error: {str(e)}")
+                print(f"{Colors.ERROR}❌ Error: {str(e)}{Colors.RESET}")
         
         elif subcmd == 'clear':
             try:
                 result = self.db.clear_cache()
-                print(f"✅ {result}")
+                print(f"{Colors.SUCCESS}✅ {result}{Colors.RESET}")
             except Exception as e:
-                print(f"❌ Error: {str(e)}")
+                print(f"{Colors.ERROR}❌ Error: {str(e)}{Colors.RESET}")
         
         else:
-            print(f"❌ Unknown subcommand: {subcmd}")
+            print(f"{Colors.ERROR}❌ Unknown subcommand: {subcmd}{Colors.RESET}")
     
     def do_clear(self, arg):
         """Clear the screen"""
@@ -308,7 +354,7 @@ class GSQLCLI(cmd.Cmd):
     
     def do_exit(self, arg):
         """Exit GSQL"""
-        print("👋 Goodbye!")
+        print(f"{Colors.SUCCESS}👋 Goodbye!{Colors.RESET}")
         if hasattr(self, 'db'):
             self.db.close()
         return True
@@ -343,216 +389,105 @@ class GSQLCLI(cmd.Cmd):
         
         # Handle SQL/GSQL commands
         try:
+            # Afficher le SQL colorisé
+            if line.upper().startswith(('SELECT', 'INSERT', 'UPDATE', 'DELETE', 'CREATE', 'DROP', 'ALTER')):
+                print(f"{Colors.INFO}📝 Executing...{Colors.RESET}")
+                print(f"{Colors.SQL_KEYWORD}{fmt.format_sql(line)}{Colors.RESET}")
+            
             result = self.db.execute(line)
-            self._display_result(result)
+            print(fmt.format_result(result))
         except Exception as e:
-            print(f"❌ Error: {str(e)}")
+            print(f"{Colors.ERROR}❌ Error: {str(e)}{Colors.RESET}")
     
     def _handle_dot_command(self, command):
         """Handle SQLite-style dot commands"""
         cmd = command[1:].lower().strip()
         
         if cmd in ['tables', 'table']:
+            print(f"{Colors.INFO}📊 Listing tables...{Colors.RESET}")
             self.do_show('tables')
         elif cmd in ['help', '?']:
             self._display_help()
         elif cmd in ['exit', 'quit']:
             self.do_exit('')
         elif cmd == 'schema':
-            print("📋 Schema commands:")
-            print("  .tables - List tables")
-            print("  .help   - Show help")
-            print("  .exit   - Exit shell")
+            print(f"{Colors.INFO}📋 Schema commands:{Colors.RESET}")
+            print(f"  {Colors.PROMPT}.tables{Colors.RESET} - List tables")
+            print(f"  {Colors.PROMPT}.help{Colors.RESET}   - Show help")
+            print(f"  {Colors.PROMPT}.exit{Colors.RESET}   - Exit shell")
         elif cmd == 'version':
-            print("📋 GSQL Version 2.0")
+            print(f"{Colors.TITLE}📋 GSQL Version 2.0 with Colors{Colors.RESET}")
         elif cmd == 'timer':
-            print("⏱️  Timer: ON (always)")
+            print(f"{Colors.INFO}⏱️  Timer: ON (always){Colors.RESET}")
         elif cmd == 'headers':
-            print("📋 Headers: ON (always)")
+            print(f"{Colors.INFO}📋 Headers: ON (always){Colors.RESET}")
         elif cmd == 'mode':
-            print("📋 Mode: list (tabular)")
+            print(f"{Colors.INFO}📋 Mode: list (tabular){Colors.RESET}")
+        elif cmd == 'colors':
+            if COLORS_AVAILABLE:
+                print(f"{Colors.SUCCESS}✅ Colors: ENABLED{Colors.RESET}")
+                self._demo_colors()
+            else:
+                print(f"{Colors.WARNING}⚠ Colors: DISABLED (install colorama){Colors.RESET}")
         elif cmd == '':
-            print("❌ Empty dot command")
+            print(f"{Colors.ERROR}❌ Empty dot command{Colors.RESET}")
         else:
-            print(f"❌ Unknown dot command: {command}")
-            print("   Try: .tables, .help, .exit")
+            print(f"{Colors.ERROR}❌ Unknown dot command: {command}{Colors.RESET}")
+            print(f"   Try: {Colors.PROMPT}.tables{Colors.RESET}, {Colors.PROMPT}.help{Colors.RESET}, {Colors.PROMPT}.exit{Colors.RESET}")
+    
+    def _demo_colors(self):
+        """Démonstration des couleurs disponibles"""
+        print(f"\n{Colors.TITLE}🎨 Available Colors:{Colors.RESET}")
+        print(f"  {Colors.SUCCESS}Success message{Colors.RESET}")
+        print(f"  {Colors.ERROR}Error message{Colors.RESET}")
+        print(f"  {Colors.WARNING}Warning message{Colors.RESET}")
+        print(f"  {Colors.INFO}Info message{Colors.RESET}")
+        print(f"  {Colors.HELP}Help text{Colors.RESET}")
+        print(f"\n{Colors.SQL_KEYWORD}SQL keywords{Colors.RESET}, {Colors.SQL_FUNCTION}functions(){Colors.RESET}")
+        print(f"{Colors.SQL_STRING}'String values'{Colors.RESET}, {Colors.SQL_NUMBER}123.45{Colors.RESET}")
     
     def _display_help(self):
-        """Display help information"""
-        help_text = """
-GSQL Interactive Shell Help:
+        """Display help information with colors"""
+        help_text = f"""
+{Colors.TITLE}GSQL Interactive Shell Help:{Colors.RESET}
 
-General Commands:
-  help                        - Show this help
-  exit, quit                  - Exit the shell
-  clear                       - Clear screen
+{Colors.HEADER}General Commands:{Colors.RESET}
+  {Colors.PROMPT}help{Colors.RESET}                        - Show this help
+  {Colors.PROMPT}exit, quit{Colors.RESET}                  - Exit the shell
+  {Colors.PROMPT}clear{Colors.RESET}                       - Clear screen
+  {Colors.PROMPT}.colors{Colors.RESET}                     - Show color demo
 
-SQL Commands:
-  sql <statement>             - Execute SQL statement
-  select <columns> FROM <table> - Query data
-  insert INTO <table> VALUES  - Insert data
-  create table|function       - Create objects
+{Colors.HEADER}SQL Commands:{Colors.RESET}
+  {Colors.PROMPT}sql <statement>{Colors.RESET}             - Execute SQL statement
+  {Colors.PROMPT}select <columns> FROM <table>{Colors.RESET} - Query data
+  {Colors.PROMPT}insert INTO <table> VALUES{Colors.RESET}  - Insert data
+  {Colors.PROMPT}create table|function{Colors.RESET}       - Create objects
 
-GSQL Commands:
-  show tables|functions       - List tables/functions
-  tables, functions           - Aliases for show commands
-  nl <question>               - Natural language query
-  describe <table>            - Show table structure
+{Colors.HEADER}GSQL Commands:{Colors.RESET}
+  {Colors.PROMPT}show tables|functions{Colors.RESET}       - List tables/functions
+  {Colors.PROMPT}tables, functions{Colors.RESET}           - Aliases for show commands
+  {Colors.PROMPT}nl <question>{Colors.RESET}               - Natural language query
+  {Colors.PROMPT}describe <table>{Colors.RESET}            - Show table structure
 
-Data Import/Export:
-  import <file.csv> [table]   - Import CSV file
-  export <table> [file.csv]   - Export to CSV
+{Colors.HEADER}Data Import/Export:{Colors.RESET}
+  {Colors.PROMPT}import <file.csv> [table]{Colors.RESET}   - Import CSV file
+  {Colors.PROMPT}export <table> [file.csv]{Colors.RESET}   - Export to CSV
 
-Dot Commands (SQLite-style):
-  .tables                     - List all tables
-  .help                       - Show this help
-  .exit, .quit               - Exit shell
+{Colors.HEADER}Dot Commands (SQLite-style):{Colors.RESET}
+  {Colors.PROMPT}.tables{Colors.RESET}                     - List all tables
+  {Colors.PROMPT}.help{Colors.RESET}                       - Show this help
+  {Colors.PROMPT}.exit, .quit{Colors.RESET}               - Exit shell
+  {Colors.PROMPT}.version{Colors.RESET}                    - Show version
 
-Natural Language Examples:
-  "montrer tables"            -> Show tables
-  "table users"               -> SELECT * FROM users
-  "combien de users"          -> SELECT COUNT(*) FROM users
-  "aide"                      -> Show help
+{Colors.HEADER}Natural Language Examples:{Colors.RESET}
+  {Colors.NLP_QUESTION}"montrer tables"{Colors.RESET}            -> Show tables
+  {Colors.NLP_QUESTION}"table users"{Colors.RESET}               -> SELECT * FROM users
+  {Colors.NLP_QUESTION}"combien de users"{Colors.RESET}          -> SELECT COUNT(*) FROM users
+  {Colors.NLP_QUESTION}"aide"{Colors.RESET}                      -> Show help
 
 Type any SQL statement to execute it directly.
 """
         print(help_text)
-    
-    def _display_result(self, result):
-        """Display query results in a readable format"""
-        if result is None:
-            print("✅ Command executed successfully")
-            return
-        
-        if isinstance(result, str):
-            print(f"📋 {result}")
-            return
-        
-        if isinstance(result, dict):
-            # Handle different result types
-            
-            # HELP messages
-            if result.get('type') == 'help' and 'message' in result:
-                print(result['message'])
-                return
-            
-            # SHOW TABLES
-            if result.get('type') in ['show_tables', 'tables'] and 'rows' in result:
-                rows = result['rows']
-                if rows:
-                    message = result.get('message', f'Found {len(rows)} table(s):')
-                    print(f"\n📊 {message}")
-                    
-                    # Try to use tabulate for nice formatting
-                    try:
-                        from tabulate import tabulate
-                        print(tabulate(rows, headers="keys", tablefmt="grid"))
-                    except ImportError:
-                        # Simple formatting
-                        for row in rows:
-                            if isinstance(row, dict):
-                                table_name = row.get('table', 'unknown')
-                                row_count = row.get('rows', 0)
-                                print(f"  {table_name}: {row_count} rows")
-                            else:
-                                print(f"  {row}")
-                else:
-                    print("📭 No tables found")
-                return
-            
-            # SHOW FUNCTIONS
-            if result.get('type') == 'show_functions' and 'rows' in result:
-                rows = result['rows']
-                if rows:
-                    message = result.get('message', f'Found {len(rows)} function(s):')
-                    print(f"\n🔧 {message}")
-                    
-                    for row in rows:
-                        if isinstance(row, dict):
-                            func_name = row.get('name', 'unknown')
-                            func_type = row.get('type', 'unknown')
-                            desc = row.get('description', '')
-                            
-                            if func_type == 'builtin':
-                                print(f"  📦 {func_name} - {desc}")
-                            else:
-                                created = row.get('created_at', '')
-                                if hasattr(created, 'strftime'):
-                                    created = created.strftime('%Y-%m-%d')
-                                print(f"  👤 {func_name} - User function ({created})")
-                        else:
-                            print(f"  {row}")
-                else:
-                    print("📭 No functions found")
-                return
-            
-            # SELECT results
-            if 'rows' in result and result['rows']:
-                rows = result['rows']
-                count = result.get('count', len(rows))
-                
-                print(f"\n📊 Results: {count} row(s)")
-                
-                if rows:
-                    # Try to use tabulate for nice formatting
-                    try:
-                        from tabulate import tabulate
-                        print(tabulate(rows, headers="keys", tablefmt="grid"))
-                    except ImportError:
-                        # Simple table formatting
-                        if isinstance(rows[0], dict):
-                            headers = list(rows[0].keys())
-                            
-                            # Calculate column widths
-                            col_widths = {}
-                            for header in headers:
-                                col_widths[header] = len(str(header))
-                                for row in rows:
-                                    if header in row:
-                                        col_widths[header] = max(col_widths[header], len(str(row[header])))
-                            
-                            # Print header
-                            header_line = " | ".join([str(h).ljust(col_widths[h]) for h in headers])
-                            separator = "-+-".join(["-" * col_widths[h] for h in headers])
-                            print(header_line)
-                            print(separator)
-                            
-                            # Print rows
-                            for row in rows[:50]:  # Limit to 50 rows
-                                row_line = " | ".join([str(row.get(h, '')).ljust(col_widths[h]) for h in headers])
-                                print(row_line)
-                            
-                            if len(rows) > 50:
-                                print(f"... and {len(rows) - 50} more rows")
-                        else:
-                            for i, row in enumerate(rows[:50], 1):
-                                print(f"{i:3}. {row}")
-                            if len(rows) > 50:
-                                print(f"... and {len(rows) - 50} more")
-                else:
-                    print("📭 No rows returned")
-            
-            elif 'message' in result:
-                print(f"📋 {result['message']}")
-            
-            elif 'error' in result:
-                print(f"❌ Error: {result['error']}")
-            
-            else:
-                print(f"📋 Result: {result}")
-        
-        elif isinstance(result, list):
-            if result:
-                print(f"\n📊 Results: {len(result)} row(s)")
-                for i, row in enumerate(result[:50], 1):
-                    print(f"{i:3}. {row}")
-                if len(result) > 50:
-                    print(f"... and {len(result) - 50} more")
-            else:
-                print("📭 No results")
-        
-        else:
-            print(f"📋 Result: {result}")
     
     def do_help(self, arg):
         """Show help information"""
@@ -560,9 +495,9 @@ Type any SQL statement to execute it directly.
             # Specific command help
             cmd_func = getattr(self, 'do_' + arg, None)
             if cmd_func and cmd_func.__doc__:
-                print(f"\n{arg}: {cmd_func.__doc__}")
+                print(f"\n{Colors.TITLE}{arg}:{Colors.RESET} {cmd_func.__doc__}")
             else:
-                print(f"\nNo help available for '{arg}'")
+                print(f"\n{Colors.ERROR}No help available for '{arg}'{Colors.RESET}")
         else:
             self._display_help()
 
@@ -571,12 +506,12 @@ def main():
     parser = argparse.ArgumentParser(
         description='GSQL Database Engine with Natural Language Interface',
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
+        epilog=f"""
 Examples:
-  gsql mydb.gsql                    # Interactive mode
-  gsql --sql "SELECT * FROM users"  # Single SQL command
-  gsql --nl "show all users"        # Natural language query
-  gsql --no-nlp                     # Disable NLP features
+  {Colors.PROMPT}gsql mydb.gsql{Colors.RESET}                    # Interactive mode
+  {Colors.PROMPT}gsql --sql "SELECT * FROM users"{Colors.RESET}  # Single SQL command
+  {Colors.PROMPT}gsql --nl "show all users"{Colors.RESET}        # Natural language query
+  {Colors.PROMPT}gsql --no-nlp{Colors.RESET}                     # Disable NLP features
         """
     )
     
@@ -600,6 +535,11 @@ Examples:
         help='Disable natural language processing'
     )
     parser.add_argument(
+        '--no-colors',
+        action='store_true',
+        help='Disable colors in output'
+    )
+    parser.add_argument(
         '--verbose', '-v',
         action='store_true',
         help='Verbose output'
@@ -607,10 +547,15 @@ Examples:
     parser.add_argument(
         '--version',
         action='version',
-        version='GSQL 2.0'
+        version='GSQL 2.0 with Colors'
     )
     
     args = parser.parse_args()
+    
+    # Disable colors if requested
+    if args.no_colors:
+        global COLORS_AVAILABLE
+        COLORS_AVAILABLE = False
     
     # Set logging level
     if args.verbose:
@@ -625,11 +570,11 @@ Examples:
             result = db.execute(args.sql)
             
             cli = GSQLCLI(args.database, use_nlp=not args.no_nlp)
-            cli._display_result(result)
+            print(fmt.format_result(result))
             
             db.close()
         except Exception as e:
-            print(f"❌ Error: {str(e)}")
+            print(f"{Colors.ERROR}❌ Error: {str(e)}{Colors.RESET}")
             sys.exit(1)
     
     elif args.nl:
@@ -639,11 +584,11 @@ Examples:
             result = db.execute_nl(args.nl)
             
             cli = GSQLCLI(args.database, use_nlp=not args.no_nlp)
-            cli._display_result(result)
+            print(fmt.format_result(result))
             
             db.close()
         except Exception as e:
-            print(f"❌ Error: {str(e)}")
+            print(f"{Colors.ERROR}❌ Error: {str(e)}{Colors.RESET}")
             sys.exit(1)
     
     else:
@@ -652,10 +597,10 @@ Examples:
             cli = GSQLCLI(args.database, use_nlp=not args.no_nlp)
             cli.cmdloop()
         except KeyboardInterrupt:
-            print("\n\nInterrupted. Exiting...")
+            print(f"\n\n{Colors.WARNING}Interrupted. Exiting...{Colors.RESET}")
             sys.exit(0)
         except Exception as e:
-            print(f"❌ Fatal error: {str(e)}")
+            print(f"{Colors.ERROR}❌ Fatal error: {str(e)}{Colors.RESET}")
             sys.exit(1)
 
 if __name__ == '__main__':
