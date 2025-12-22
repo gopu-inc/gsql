@@ -1,3 +1,4 @@
+# gsql/exceptions.py - Ajouter StorageError
 class GSQLBaseException(Exception):
     """Exception de base pour GSQL"""
     pass
@@ -28,4 +29,12 @@ class NLError(GSQLBaseException):
 
 class BufferPoolError(GSQLBaseException):
     """Erreur du buffer pool"""
+    pass
+
+class StorageError(GSQLBaseException):  # <-- AJOUTER CETTE LIGNE
+    """Erreur de stockage"""
+    pass
+
+class QueryError(GSQLBaseException):    # <-- AJOUTER CETTE LIGNE
+    """Erreur de requête"""
     pass
