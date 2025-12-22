@@ -223,94 +223,122 @@ class Database:
                 raise SQLExecutionError(f"Database recovery failed after {MAX_RECURSION} attempts: {e}")
     
     def execute(self, sql: str, params: Dict = None, 
-                use_cache: bool = True, timeout: int = None) -> Dict:
-        """
-        Exécute une requête SQL sur la base de données
-        
-        Args:
-            sql: Requête SQL à exécuter
-            params: Paramètres pour la requête préparée
-            use_cache: Utiliser le cache de requêtes
-            timeout: Timeout en secondes
-        
-        Returns:
-            Dict: Résultats formatés de la requête
-        """
-        if not self.is_open:
-            raise SQLExecutionError("Database is closed")
-        
-        # Détecter les commandes spéciales GSQL
-        special_result = self._handle_special_commands(sql)
-        if special_result:
-            return special_result
-        
-        start_time = datetime.now()
-        query_hash = None
-        
-        # Générer un hash pour le cache
-        if use_cache and params is None:
-            query_hash = hashlib.md5(sql.encode()).hexdigest()[:16]
-            cached = self.query_cache.get(query_hash)
-            if cached:
-                self.stats['queries_cached'] += 1
-                logger.debug(f"Query cache hit: {query_hash}")
-                return cached
-        
-        try:
-            with self.lock:
-                # Exécuter la requête via le storage
-                # AVANT :
-                result = self.storage.execute(
-                    query_type, params, query, query_hash
-                )
-                return result
-                
-                # Ajouter des métadonnées
-                execution_time = (datetime.now() - start_time).total_seconds()
-                result['execution_time'] = round(execution_time, 3)
-                result['timestamp'] = datetime.now().isoformat()
-                
-                # Mettre à jour les statistiques
-                self.stats['queries_executed'] += 1
-                
-                # Mettre en cache les requêtes SELECT réussies
-                if (use_cache and query_hash and 
-                    result.get('success') and 
-                    result.get('type') == 'select'):
-                    
-                    # Limiter la taille du cache
-                    if len(self.query_cache) >= self.config['max_query_cache']:
-                        # Supprimer la plus ancienne entrée
-                        oldest_key = min(self.query_cache.keys(), 
-                                        key=lambda k: self.query_cache[k]['timestamp'])
-                        del self.query_cache[oldest_key]
-                    
-                    self.query_cache[query_hash] = result
-                
-                # Logger les requêtes importantes
-                if execution_time > 1.0:  # Plus d'1 seconde
-                    logger.warning(f"Slow query ({execution_time:.2f}s): {sql[:100]}...")
-                
-                return result
-                
-        except SQLExecutionError as e:
-            self.stats['errors'] += 1
-            logger.error(f"Query execution error: {e}")
+            use_cache: bool = True, timeout: int = None) -> Dict:
+    """
+    Exécute une requête SQL sur la base de données
+    
+    Args:
+        sql: Requête SQL à exécuter
+        params: Paramètres pour la requête préparée
+        use_cache: Utiliser le cache de requêtes
+        timeout: Timeout en secondes
+    
+    Returns:
+        Dict: Résultats formatés de la requête
+    """
+    if not self.is_open:
+        raise SQLExecutionError("Database is closed")
+    
+    # Détecter les commandes spéciales GSQL
+    special_result = self._handle_special_commands(sql)
+    if special_result:
+        return special_result
+    
+    start_time = datetime.now()
+    query_hash = None
+    
+    # Générer un hash pour le cache
+    if use_cache and params is None:
+        query_hash = hashlib.md5(sql.encode()).hexdigest()[:16]
+        cached = self.query_cache.get(query_hash)
+        if cached:
+            self.stats['queries_cached'] += 1
+            logger.debug(f"Query cache hit: {query_hash}")
+            return cached
+    
+    try:
+        with self.lock:
+            # Analyser la requête pour obtenir le type
+            # NOTE: Vous devez vérifier comment votre parser fonctionne
+            parsed_query = self.parser.parse(sql)
             
-            # Tentative de récupération pour certaines erreurs
-            if "database is locked" in str(e) and self.config['auto_recovery']:
-                logger.info("Database locked, attempting recovery...")
-                self._auto_recover()
+            # Extraire le type de requête (ajuster selon votre implémentation)
+            if isinstance(parsed_query, dict) and 'type' in parsed_query:
+                query_type = parsed_query['type']
+            else:
+                # Déterminer le type basé sur le SQL
+                sql_upper = sql.upper().strip()
+                if sql_upper.startswith('SELECT'):
+                    query_type = 'select'
+                elif sql_upper.startswith('INSERT'):
+                    query_type = 'insert'
+                elif sql_upper.startswith('UPDATE'):
+                    query_type = 'update'
+                elif sql_upper.startswith('DELETE'):
+                    query_type = 'delete'
+                elif sql_upper.startswith('CREATE'):
+                    query_type = 'create'
+                elif sql_upper.startswith('DROP'):
+                    query_type = 'drop'
+                elif sql_upper.startswith('ALTER'):
+                    query_type = 'alter'
+                else:
+                    query_type = 'unknown'
+            
+            # Exécuter la requête via le storage
+            result = self.storage.execute(
+                query_type, params, sql, query_hash
+            )
+            
+            # Ajouter des métadonnées
+            execution_time = (datetime.now() - start_time).total_seconds()
+            result['execution_time'] = round(execution_time, 3)
+            result['timestamp'] = datetime.now().isoformat()
+            
+            # Ajouter le type de requête au résultat
+            result['type'] = query_type
+            
+            # Mettre à jour les statistiques
+            self.stats['queries_executed'] += 1
+            
+            # Mettre en cache les requêtes SELECT réussies
+            if (use_cache and query_hash and 
+                result.get('success') and 
+                query_type == 'select'):
                 
-                # Réessayer la requête
-                return self.execute(sql, params, use_cache=False)
+                # Limiter la taille du cache
+                if len(self.query_cache) >= self.config['max_query_cache']:
+                    # Supprimer la plus ancienne entrée
+                    oldest_key = min(self.query_cache.keys(), 
+                                    key=lambda k: self.query_cache[k]['timestamp'])
+                    del self.query_cache[oldest_key]
+                
+                self.query_cache[query_hash] = result
             
-            raise
+            # Logger les requêtes importantes
+            if execution_time > 1.0:  # Plus d'1 seconde
+                logger.warning(f"Slow query ({execution_time:.2f}s): {sql[:100]}...")
             
-        except Exception as e:
-            self.stats['errors'] += 1
-            logger.error(f"Unexpected error: {e}")
-            raise SQLExecutionError(f"Database error: {str(e)}")
+            return result
+            
+    except SQLExecutionError as e:
+        self.stats['errors'] += 1
+        logger.error(f"Query execution error: {e}")
+        
+        # Tentative de récupération pour certaines erreurs
+        if "database is locked" in str(e) and self.config['auto_recovery']:
+            logger.info("Database locked, attempting recovery...")
+            self._auto_recover()
+            
+            # Réessayer la requête
+            return self.execute(sql, params, use_cache=False)
+        
+        raise
+        
+    except Exception as e:
+        self.stats['errors'] += 1
+        logger.error(f"Unexpected error: {e}")
+        raise SQLExecutionError(f"Database error: {str(e)}")
     
     def _handle_special_commands(self, sql: str) -> Optional[Dict]:
         """Gère les commandes spéciales GSQL"""
