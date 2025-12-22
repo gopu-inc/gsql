@@ -2,10 +2,14 @@
 GSQL - A lightweight SQL database engine with natural language interface
 """
 
-__version__ = "1.0.0"
-__author__ = "Gopu Inc"
-__license__ = "MIT"
 
+"""
+GSQL - A lightweight SQL database management system
+"""
+
+__version__ = "1.0.0"
+__author__ = "Gopu Inc."
+__description__ = "GSQL Database Management System"
 # Import Database first to avoid circular imports
 try:
     from .database import Database, create_database, get_default_database, set_default_database
