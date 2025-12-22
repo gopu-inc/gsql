@@ -11,6 +11,7 @@ Main CLI Interface - Version 3.0
 # GARDER:
 # Ajoutez cet import en haut du fichier __main__.py
 import cmd
+import sys
 import os
 import sqlite3
 import json
