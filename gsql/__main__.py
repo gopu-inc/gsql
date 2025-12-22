@@ -27,6 +27,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Union
 import re
+from .functions import FunctionManager
 from .database import create_database
 from .storage import SQLiteStorage, create_storage
 from .exceptions import (
