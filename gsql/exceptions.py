@@ -1,30 +1,31 @@
-# gsql/gsql/exceptions.py
-"""
-Custom exceptions for GSQL
-"""
-
-class GQLError(Exception):
-    """Base exception"""
+class GSQLBaseException(Exception):
+    """Exception de base pour GSQL"""
     pass
 
-class GSQLSyntaxError(GQLError):
-    """SQL syntax error"""
+class SQLSyntaxError(GSQLBaseException):
+    """Erreur de syntaxe SQL"""
     pass
 
-class GSQLExecutionError(GQLError):
-    """Query execution error"""
+class SQLExecutionError(GSQLBaseException):
+    """Erreur d'exécution SQL"""
     pass
 
-class GSQLTableError(GQLError):
-    """Table error"""
+class ConstraintViolationError(GSQLBaseException):
+    """Violation de contrainte"""
     pass
 
-class GSQLColumnError(GQLError):
-    """Column error"""
+class TransactionError(GSQLBaseException):
+    """Erreur de transaction"""
     pass
 
-# Pour la rétrocompatibilité
-GQLSyntaxError = GSQLSyntaxError
-GQLExecutionError = GSQLExecutionError
-GQLTableError = GSQLTableError
-GQLColumnError = GSQLColumnError
+class FunctionError(GSQLBaseException):
+    """Erreur dans les fonctions"""
+    pass
+
+class NLError(GSQLBaseException):
+    """Erreur de traitement du langage naturel"""
+    pass
+
+class BufferPoolError(GSQLBaseException):
+    """Erreur du buffer pool"""
+    pass
