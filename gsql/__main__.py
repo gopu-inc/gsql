@@ -61,13 +61,6 @@ class GSQLCLI:
                 print("Warning: YAMLStorage non disponible")
                 
             try:
-                from config.defaults import load_default_config
-                self.load_default_config = load_default_config
-                self.CONFIG_AVAILABLE = True
-            except ImportError:
-                self.CONFIG_AVAILABLE = False
-                
-            try:
                 from functions.user_functions import register_user_functions
                 self.register_user_functions = register_user_functions
                 self.FUNCTIONS_AVAILABLE = True
@@ -125,15 +118,16 @@ class GSQLCLI:
         parser = argparse.ArgumentParser(
             description=__description__,
             formatter_class=argparse.RawDescriptionHelpFormatter,
+            add_help=False,  # Désactiver l'aide automatique pour éviter le conflit
             epilog="""
 Exemples d'utilisation:
   gsql                            # Mode interactif
-  gsql --help                     # Afficher l'aide
-  gsql --version                  # Afficher la version
-  gsql -e "SELECT * FROM users"   # Exécuter une commande
-  gsql -f query.sql               # Exécuter un fichier SQL
-  gsql --init-db mydatabase       # Initialiser une nouvelle base
-  gsql -d mydb                    # Se connecter à une base
+  gsql -h                        # Afficher l'aide
+  gsql -v                        # Afficher la version
+  gsql -e "SELECT * FROM users"  # Exécuter une commande
+  gsql -f query.sql              # Exécuter un fichier SQL
+  gsql --init-db mydatabase      # Initialiser une nouvelle base
+  gsql -d mydb                   # Se connecter à une base
             
 Commandes interactives:
   \\q, \\quit, exit     - Quitter GSQL
@@ -192,7 +186,7 @@ Commandes interactives:
         )
         info_group.add_argument(
             '-h', '--help',
-            action='help',
+            action='store_true',
             help='Afficher ce message d\'aide'
         )
         
@@ -259,6 +253,11 @@ Auteur: {__author__}
 Description: {__description__}
         """
         print(version_info)
+    
+    def print_cli_help(self):
+        """Affiche l'aide de la ligne de commande"""
+        parser = self.setup_argparse()
+        parser.print_help()
     
     def init_database(self, db_name: str):
         """Initialise une nouvelle base de données"""
@@ -635,8 +634,6 @@ Description: {__description__}
     
     def run(self, args=None):
         """Point d'entrée principal"""
-        parser = self.setup_argparse()
-        
         if args is None:
             args = sys.argv[1:]
         
@@ -645,16 +642,22 @@ Description: {__description__}
             self.interactive_mode()
             return
         
+        # Vérifier les options simples d'abord
+        if '-h' in args or '--help' in args:
+            self.print_cli_help()
+            return
+        
+        if '-v' in args or '--version' in args:
+            self.print_version()
+            return
+        
         # Parser les arguments
+        parser = self.setup_argparse()
+        
         try:
             parsed_args = parser.parse_args(args)
         except SystemExit:
-            return  # L'utilisateur a demandé --help
-        
-        # Version
-        if parsed_args.version:
-            self.print_version()
-            return
+            return  # Erreur de parsing
         
         # Initialiser une base de données
         if parsed_args.init_db:
