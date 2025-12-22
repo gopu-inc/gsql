@@ -3,6 +3,12 @@
 GSQL Storage Engine Complete - SQLite avec Buffer Pool, Transactions et Auto-Recovery
 """
 
+# Dans storage.py - Remplacer le début du fichier :
+
+# SUPPRIMER:
+# import yaml
+
+# GARDER:
 import os
 import sqlite3
 import json
@@ -19,8 +25,9 @@ import re
 
 from .exceptions import (
     SQLExecutionError, TransactionError, BufferPoolError,
-    SQLSyntaxError, ConstraintViolationError
+    SQLSyntaxError, ConstraintViolationError, StorageError  # Ajouter StorageError
 )
+
 
 logger = logging.getLogger(__name__)
 
