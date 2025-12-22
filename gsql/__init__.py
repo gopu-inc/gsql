@@ -1,6 +1,7 @@
 """
 GSQL - A lightweight SQL database engine with natural language interface
 Version: 3.0.0
+SQLite Only - No YAML dependency
 """
 
 import os
@@ -102,12 +103,10 @@ class FeatureDetection:
     
     @staticmethod
     def check_yaml() -> bool:
-        """Vérifie si PyYAML est disponible"""
-        try:
-            import yaml
-            return True
-        except ImportError:
-            return True
+        """Vérifie si PyYAML est disponible - OPTIONNEL maintenant"""
+        # YAML n'est plus requis pour GSQL
+        # Nous utilisons uniquement JSON et SQLite
+        return True  # Toujours True car optionnel
     
     @staticmethod
     def get_all_features() -> Dict[str, bool]:
@@ -115,7 +114,7 @@ class FeatureDetection:
         return {
             'nltk': FeatureDetection.check_nltk(),
             'sqlite': FeatureDetection.check_sqlite(),
-            'yaml': FeatureDetection.check_yaml(),
+            'yaml': FeatureDetection.check_yaml(),  # Optionnel
             'colorama': FeatureDetection.check_colorama(),
             'tabulate': FeatureDetection.check_tabulate(),
             'rich': FeatureDetection.check_rich()
@@ -191,7 +190,7 @@ try:
     )
     STORAGE_AVAILABLE = True
 except ImportError as e:
-    logger.warning(f"Could not import storage module: {e}")
+    logger.error(f"Could not import storage module: {e}")
     SQLiteStorage = None
     BufferPool = None
     TransactionManager = None
@@ -210,7 +209,7 @@ try:
     )
     DATABASE_AVAILABLE = True
 except ImportError as e:
-    logger.warning(f"Could not import database module: {e}")
+    logger.error(f"Could not import database module: {e}")
     Database = None
     create_database = None
     get_default_database = None
@@ -228,7 +227,7 @@ try:
     )
     EXECUTOR_AVAILABLE = True
 except ImportError as e:
-    logger.warning(f"Could not import executor module: {e}")
+    logger.error(f"Could not import executor module: {e}")
     QueryExecutor = None
     create_executor = None
     get_default_executor = None
@@ -389,22 +388,27 @@ def check_health() -> Dict[str, Any]:
         'recommendations': []
     }
     
-    # Vérifications critiques
+    # Vérifications CRITIQUES (doivent être disponibles)
     if not features['sqlite']:
         health_report['status'] = 'CRITICAL'
         health_report['issues'].append('SQLite not available or version too old')
         health_report['recommendations'].append('Install/update SQLite to version 3.8+')
     
     if not STORAGE_AVAILABLE:
-        health_report['status'] = 'DEGRADED'
+        health_report['status'] = 'CRITICAL' if health_report['status'] != 'CRITICAL' else 'CRITICAL'
         health_report['issues'].append('Storage module not available')
     
     if not DATABASE_AVAILABLE:
-        health_report['status'] = 'DEGRADED'
+        health_report['status'] = 'CRITICAL' if health_report['status'] != 'CRITICAL' else 'CRITICAL'
         health_report['issues'].append('Database module not available')
     
-    # Recommandations
+    if not EXECUTOR_AVAILABLE:
+        health_report['status'] = 'DEGRADED' if health_report['status'] != 'CRITICAL' else 'CRITICAL'
+        health_report['issues'].append('Executor module not available')
+    
+    # Vérifications IMPORTANTES mais non critiques
     if not features['nltk'] and config.get('nlp_enabled', True):
+        health_report['status'] = 'DEGRADED' if health_report['status'] == 'HEALTHY' else health_report['status']
         health_report['recommendations'].append(
             "Install NLTK for natural language features: pip install nltk"
         )
@@ -413,6 +417,16 @@ def check_health() -> Dict[str, Any]:
         health_report['recommendations'].append(
             "Install colorama for colored output on Windows: pip install colorama"
         )
+    
+    # YAML est OPTIONNEL - juste une info
+    if not FeatureDetection.check_yaml():
+        health_report['recommendations'].append(
+            "YAML optional for advanced configuration (not required for core functionality)"
+        )
+    
+    # Si pas d'issues critiques, vérifier les warnings
+    if health_report['status'] == 'HEALTHY' and health_report['issues']:
+        health_report['status'] = 'DEGRADED'
     
     return health_report
 
@@ -434,6 +448,11 @@ def initialize(
     Returns:
         Database: Instance de base de données initialisée
     """
+    # Vérifier d'abord la santé
+    health = check_health()
+    if health['status'] == 'CRITICAL':
+        raise RuntimeError(f"GSQL health check failed: {health['issues']}")
+    
     # Mettre à jour la configuration
     if base_dir:
         config.set('base_dir', Path(base_dir))
@@ -447,13 +466,8 @@ def initialize(
     if kwargs:
         config.update(**kwargs)
     
-    # Vérifier la santé
-    health = check_health()
-    if health['status'] == 'CRITICAL':
-        raise RuntimeError(f"GSQL health check failed: {health['issues']}")
-    
     # Créer la base de données
-    if not DATABASE_AVAILABLE:
+    if not DATABASE_AVAILABLE or Database is None:
         raise ImportError("Database module not available")
     
     db_path = config.get('database_path')
@@ -494,6 +508,12 @@ def run_shell(database_path: Optional[str] = None):
     Args:
         database_path: Chemin vers la base de données
     """
+    # Vérifier la santé d'abord
+    health = check_health()
+    if health['status'] == 'CRITICAL':
+        print(f"CRITICAL: GSQL cannot start. Issues: {', '.join(health['issues'])}")
+        sys.exit(1)
+    
     from .__main__ import GSQLShell
     
     # Configurer pour le shell
@@ -645,6 +665,41 @@ def vacuum(database_path: str) -> bool:
         result = db.execute("VACUUM")
         return result.get('success', False)
 
+def show_tables(database_path: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    Affiche la liste des tables
+    
+    Args:
+        database_path: Chemin vers la base de données
+    
+    Returns:
+        List: Liste des tables
+    """
+    with context(database_path) as db:
+        result = db.execute("SHOW TABLES")
+        if result.get('success'):
+            return result.get('tables', [])
+        else:
+            raise SQLExecutionError(result.get('message', 'Failed to show tables'))
+
+def describe_table(table_name: str, database_path: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Décrit la structure d'une table
+    
+    Args:
+        table_name: Nom de la table
+        database_path: Chemin vers la base de données
+    
+    Returns:
+        Dict: Structure de la table
+    """
+    with context(database_path) as db:
+        result = db.execute(f"DESCRIBE {table_name}")
+        if result.get('success'):
+            return result
+        else:
+            raise SQLExecutionError(result.get('message', f'Failed to describe table {table_name}'))
+
 # ==================== EXPORT DES SYMBOLES ====================
 
 __all__ = [
@@ -676,6 +731,8 @@ __all__ = [
     'select',
     'backup',
     'vacuum',
+    'show_tables',
+    'describe_table',
     
     # Exceptions
     'GSQLBaseException',
@@ -750,7 +807,7 @@ def _initialize_package():
     # Vérifier les fonctionnalités
     features = get_features()
     
-    # Avertissements
+    # Avertissements pour les fonctionnalités importantes
     if not features['sqlite']:
         warnings.warn(
             "SQLite not available or version too old. GSQL requires SQLite 3.8+.",
@@ -763,8 +820,15 @@ def _initialize_package():
             "Install with: pip install nltk"
         )
     
-    logger.info(f"GSQL v{__version__} initialized")
-    logger.debug(f"Features: {features}")
+    # YAML est optionnel - juste une info
+    try:
+        import yaml
+        logger.debug("YAML support available (optional)")
+    except ImportError:
+        logger.debug("YAML not installed (optional dependency)")
+    
+    logger.info(f"GSQL v{__version__} initialized (SQLite only)")
+    logger.debug(f"Core features: SQLite={features['sqlite']}, NLTK={features['nltk']}")
 
 # Initialiser au chargement du module
 _initialize_package()
@@ -778,8 +842,8 @@ def __dir__():
 def __getattr__(name: str):
     """Gère l'accès aux attributs dynamiques"""
     if name in __all__:
-        # Recharger les imports si nécessaire
-        if name in ['Database', 'create_database'] and not DATABASE_AVAILABLE:
+        # Vérifier la disponibilité des modules critiques
+        if name in ['Database', 'create_database', 'connect'] and not DATABASE_AVAILABLE:
             raise ImportError(f"Database module not available. Cannot access {name}")
         elif name in ['SQLiteStorage', 'BufferPool'] and not STORAGE_AVAILABLE:
             raise ImportError(f"Storage module not available. Cannot access {name}")
@@ -812,8 +876,12 @@ if __name__ == "__main__":
     health = check_health()
     print(f"\nHealth: {health['status']}")
     
-    if health['issues']:
-        print("Issues:")
+    if health['status'] == 'CRITICAL':
+        print("\nCRITICAL ISSUES (must be fixed):")
+        for issue in health['issues']:
+            print(f"  • {issue}")
+    elif health['status'] == 'DEGRADED':
+        print("\nISSUES (functionality limited):")
         for issue in health['issues']:
             print(f"  • {issue}")
     
@@ -821,3 +889,21 @@ if __name__ == "__main__":
         print("\nRecommendations:")
         for rec in health['recommendations']:
             print(f"  • {rec}")
+    
+    # Tester les fonctionnalités de base
+    if health['status'] != 'CRITICAL':
+        print("\nTesting basic functionality...")
+        try:
+            # Test avec base en mémoire
+            db = connect(":memory:")
+            db.execute("CREATE TABLE test (id INTEGER, name TEXT)")
+            db.execute("INSERT INTO test VALUES (1, 'Test')")
+            result = db.execute("SELECT * FROM test")
+            db.close()
+            
+            if result.get('success'):
+                print("✓ Basic SQL functionality: OK")
+            else:
+                print("✗ Basic SQL functionality: FAILED")
+        except Exception as e:
+            print(f"✗ Basic test failed: {e}")
