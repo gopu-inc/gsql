@@ -93,34 +93,34 @@ class Database:
         logger.info(f"GSQL Database initialized (v{self.config['version']})")
     
     def _initialize_database(self, skip_recovery=False):
-    """Initialise les tables et structures système"""
-    try:
-        with self.lock:
-            # Vérifier si les tables système existent
-            tables = self.storage.get_tables()
-            
-            # Créer des tables par défaut si nécessaire
-            default_tables = self._get_default_tables()
-            
-            for table_name, table_sql in default_tables.items():
-                table_exists = any(t['table_name'] == table_name for t in tables)
+        """Initialise les tables et structures système"""
+        try:
+            with self.lock:
+                # Vérifier si les tables système existent
+                tables = self.storage.get_tables()
                 
-                if not table_exists:
-                    logger.info(f"Creating default table: {table_name}")
-                    self.storage.execute(table_sql)
-            
-            self.initialized = True
-            
-            # Sauvegarder la configuration
-            self._save_config()
-            
-    except Exception as e:
-        logger.error(f"Failed to initialize database: {e}")
-        if self.config['auto_recovery'] and not skip_recovery:
-            logger.warning("Attempting auto-recovery...")
-            self._auto_recover()
-        else:
-            raise
+                # Créer des tables par défaut si nécessaire
+                default_tables = self._get_default_tables()
+                
+                for table_name, table_sql in default_tables.items():
+                    table_exists = any(t['table_name'] == table_name for t in tables)
+                    
+                    if not table_exists:
+                        logger.info(f"Creating default table: {table_name}")
+                        self.storage.execute(table_sql)
+                
+                self.initialized = True
+                
+                # Sauvegarder la configuration
+                self._save_config()
+                
+        except Exception as e:
+            logger.error(f"Failed to initialize database: {e}")
+            if self.config['auto_recovery'] and not skip_recovery:
+                logger.warning("Attempting auto-recovery...")
+                self._auto_recover()
+            else:
+                raise
     
     def _get_default_tables(self) -> Dict[str, str]:
         """Retourne les tables par défaut à créer"""
