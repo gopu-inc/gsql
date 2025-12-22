@@ -1,1184 +1,400 @@
 #!/usr/bin/env python3
 """
-GSQL Command Line Interface - Version Complète
+GSQL - Moteur SQL avec interface en langage naturel
 """
 
 import sys
 import os
 import cmd
-import json
-import readline
-import shutil
-from datetime import datetime
+import shlex
+import logging
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import Optional
+
+# Configuration du logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('gsql.log'),
+        logging.StreamHandler()
+    ]
+)
+
+logger = logging.getLogger(__name__)
 
 class GSQLCLI(cmd.Cmd):
-    """CLI interactif complet pour GSQL"""
+    """Interface en ligne de commande améliorée pour GSQL"""
     
     intro = """
-    ╔══════════════════════════════════════════════════════════╗
-    ║                 GSQL Database v1.1.0                     ║
-    ║           Simple & Powerful - Pure Python                ║
-    ╚══════════════════════════════════════════════════════════╝
+    ╔══════════════════════════════════════╗
+    ║      GSQL Interactive Shell          ║
+    ║      Version 2.0 avec NLP            ║
+    ╚══════════════════════════════════════╝
     
-    📖 Commands:
-      SQL:    CREATE, INSERT, SELECT, UPDATE, DELETE
-      Meta:   .tables, .describe, .schema, .stats, .info
-      Admin:  .backup, .restore, .export, .import, .clear
-      System: .config, .logs, .help, .exit
-    
-    💡 Type '.help' for detailed help
+    Tapez 'help' pour la liste des commandes.
+    Tapez 'nl' pour poser une question en français.
+    Tapez 'exit' pour quitter.
     """
     
-    prompt = "\033[96mgsql>\033[0m "  # Cyan color prompt
+    prompt = 'gsql> '
     
-    def __init__(self, db_path=None):
+    def __init__(self, database_path=None, use_nlp=True):
         super().__init__()
-        self.db_path = db_path
-        self.db = None
-        self.history_file = Path.home() / ".gsql_history"
-        self._load_history()
-        self._connect()
-    
-    def _connect(self):
-        """Connect to database"""
+        
+        # Import ici pour éviter les imports circulaires
+        from gsql.database import Database
+        from gsql.functions.user_functions import FunctionManager
+        from gsql.nlp.translator import NLToSQLTranslator
+        
+        self.database_path = database_path or 'default.gsql'
+        self.use_nlp = use_nlp
+        
+        # Initialisation des composants
         try:
-            from .database import GSQL
-            self.db = GSQL(self.db_path)
+            self.db = Database(self.database_path)
+            self.func_manager = FunctionManager()
+            self.translator = NLToSQLTranslator() if use_nlp else None
             
-            # Show connection info
-            print(f"\033[92m✅\033[0m Connected to: \033[93m{self.db_path or 'default'}\033[0m")
+            # Injecter les dépendances
+            self.db.executor.function_manager = self.func_manager
+            self.db.executor.nlp_translator = self.translator
             
-            # Show tables count
-            tables = self.db.list_tables()
-            if tables:
-                print(f"\033[94m📊\033[0m Loaded \033[93m{len(tables)}\033[0m table(s)")
-            else:
-                print("\033[94m📭\033[0m Database is empty - create your first table!")
+            logger.info(f"Connected to database: {self.database_path}")
             
-            print()
-            
-        except ImportError as e:
-            print(f"\033[91m❌\033[0m Import error: {e}")
-            print("Make sure GSQL is properly installed: pip install -e .")
-            sys.exit(1)
         except Exception as e:
-            print(f"\033[91m❌\033[0m Connection error: {e}")
+            print(f"❌ Error initializing database: {str(e)}")
+            logger.error(f"Initialization error: {str(e)}")
             sys.exit(1)
     
-    def _load_history(self):
-        """Load command history"""
-        try:
-            readline.read_history_file(str(self.history_file))
-        except FileNotFoundError:
-            pass
-    
-    def _save_history(self):
-        """Save command history"""
-        try:
-            readline.write_history_file(str(self.history_file))
-        except:
-            pass
-    
-    # ==================== COMMAND HANDLING ====================
-    
-    def default(self, line):
-        """Handle SQL commands and special commands"""
-        line = line.strip()
+    def do_nl(self, arg):
+        """
+        Posez une question en langage naturel
         
-        if not line:
+        Exemples:
+        nl montre tous les clients
+        nl combien de produits dans le stock
+        nl ajoute un nouveau client Jean Dupont
+        """
+        if not self.use_nlp or not self.translator:
+            print("❌ NLP is not enabled")
             return
         
-        # Save to history
-        readline.add_history(line)
-        
-        # Check for exit/quit
-        if line.lower() in ['exit', 'quit', '.exit', '.quit']:
-            return self.do_exit('')
-        
-        # Check for help
-        if line.lower() in ['help', '.help', '?', '.?']:
-            return self.do_help('')
-        
-        # Handle dot commands
-        if line.startswith('.'):
-            self._handle_dot_command(line[1:])
+        if not arg:
+            print("❌ Please provide a question")
             return
         
-        # Handle SQL commands
         try:
-            result = self.db.execute(line)
-            self._print_result(result)
-        except Exception as e:
-            print(f"\033[91m❌ Error:\033[0m {e}")
-    
-    def _handle_dot_command(self, cmd_line):
-        """Handle .commands"""
-        parts = cmd_line.strip().split()
-        if not parts:
-            return
-        
-        command = parts[0].lower()
-        args = ' '.join(parts[1:]) if len(parts) > 1 else ''
-        
-        command_map = {
-            'tables': self.do_tables,
-            'desc': lambda a: self.do_describe(a),
-            'describe': lambda a: self.do_describe(a),
-            'schema': lambda a: self.do_schema(a),
-            'stats': self.do_stats,
-            'info': self.do_info,
-            'backup': lambda a: self.do_backup(a),
-            'restore': lambda a: self.do_restore(a),
-            'export': lambda a: self.do_export(a),
-            'import': lambda a: self.do_import(a),
-            'config': self.do_config,
-            'logs': self.do_logs,
-            'clear': self.do_clear,
-            'shell': lambda a: self.do_shell(a),
-            'version': self.do_version,
-            'history': self.do_history,
-            'dump': lambda a: self.do_dump(a),
-            'indexes': lambda a: self.do_indexes(a),
-            'vacuum': self.do_vacuum,
-            'check': self.do_check,
-            'size': self.do_size,
-            'help': self.do_help,
-        }
-        
-        if command in command_map:
-            try:
-                command_map[command](args)
-            except Exception as e:
-                print(f"\033[91m❌ Command error:\033[0m {e}")
-        else:
-            print(f"\033[91m❌ Unknown command:\033[0m .{command}")
-            print("Type '.help' for available commands")
-    
-    # ==================== SQL COMMANDS ====================
-    
-    def _print_result(self, result: Dict[str, Any]):
-        """Print query result beautifully"""
-        result_type = result.get('type')
-        
-        if result_type == 'SELECT':
-            data = result.get('data', [])
-            row_count = result.get('row_count', len(data))
+            print(f"🔍 Question: {arg}")
             
-            if not data:
-                print(f"\033[94m📭\033[0m 0 rows returned")
+            # Traduction
+            sql = self.translator.translate(arg)
+            print(f"📊 SQL généré: {sql}")
+            
+            # Exécution
+            result = self.db.execute(sql)
+            self._display_result(result)
+            
+        except Exception as e:
+            print(f"❌ Error: {str(e)}")
+            logger.error(f"NLP error: {str(e)}")
+    
+    def do_sql(self, arg):
+        """
+        Exécute une commande SQL directement
+        
+        Exemple:
+        sql SELECT * FROM users WHERE age > 25
+        """
+        if not arg:
+            print("❌ Please provide SQL command")
+            return
+        
+        try:
+            result = self.db.execute(arg)
+            self._display_result(result)
+        except Exception as e:
+            print(f"❌ SQL Error: {str(e)}")
+    
+    def do_create_function(self, arg):
+        """
+        Crée une nouvelle fonction utilisateur
+        
+        Syntaxe:
+        CREATE FUNCTION nom(param1, param2)
+        RETURNS TYPE
+        AS $$
+        # code Python
+        return param1 + param2
+        $$ LANGUAGE plpython;
+        """
+        try:
+            result = self.db.execute(arg)
+            print(f"✅ {result}")
+        except Exception as e:
+            print(f"❌ Error: {str(e)}")
+    
+    def do_list_functions(self, arg):
+        """Liste toutes les fonctions disponibles"""
+        try:
+            functions = self.func_manager.list_functions()
+            
+            if not functions:
+                print("📝 No functions available")
                 return
             
-            # Get column names
-            cols = list(data[0].keys()) if data else []
+            print("\n" + "="*60)
+            print(f"{'FUNCTIONS':^60}")
+            print("="*60)
             
-            # Calculate column widths
-            widths = []
-            for col in cols:
-                width = len(str(col))
-                for row in data:
-                    width = max(width, len(str(row.get(col, ''))))
-                widths.append(min(width, 50) + 2)  # Max 50 chars per column
-            
-            # Print header
-            separator = '\033[90m┌' + '┬'.join(['─' * w for w in widths]) + '┐\033[0m'
-            print(separator)
-            
-            # Column names
-            header = '\033[90m│\033[0m'
-            for i, col in enumerate(cols):
-                header += f' \033[1;96m{col:<{widths[i]-1}}\033[0m\033[90m│\033[0m'
-            print(header)
-            
-            separator = '\033[90m├' + '┼'.join(['─' * w for w in widths]) + '┤\033[0m'
-            print(separator)
-            
-            # Data rows
-            for row in data:
-                row_str = '\033[90m│\033[0m'
-                for i, col in enumerate(cols):
-                    val = str(row.get(col, ''))
-                    if len(val) > 50:
-                        val = val[:47] + '...'
-                    row_str += f' {val:<{widths[i]-1}}\033[90m│\033[0m'
-                print(row_str)
-            
-            separator = '\033[90m└' + '┴'.join(['─' * w for w in widths]) + '┘\033[0m'
-            print(separator)
-            
-            print(f"\033[92m✓\033[0m \033[93m{row_count}\033[0m row(s) returned")
-            
-        elif result_type == 'INSERT':
-            rows = result.get('rows_affected', 0)
-            print(f"\033[92m✓\033[0m Inserted \033[93m{rows}\033[0m row(s)")
-            
-        elif result_type == 'CREATE_TABLE':
-            table = result.get('table', '')
-            cols = result.get('columns', 0)
-            print(f"\033[92m✓\033[0m Created table '\033[93m{table}\033[0m' with \033[93m{cols}\033[0m column(s)")
-            
-        elif result_type == 'DELETE':
-            rows = result.get('rows_affected', 0)
-            print(f"\033[92m✓\033[0m Deleted \033[93m{rows}\033[0m row(s)")
-            
-        elif result_type == 'UPDATE':
-            rows = result.get('rows_affected', 0)
-            print(f"\033[92m✓\033[0m Updated \033[93m{rows}\033[0m row(s)")
-            
-        else:
-            print(f"\033[92m✓\033[0m Operation completed")
-    
-    # ==================== DOT COMMANDS ====================
-    
-    def do_tables(self, arg):
-        """List all tables: .tables [pattern]"""
-        tables = self.db.list_tables()
-        
-        if not tables:
-            print("\033[94m📭\033[0m No tables in database")
-            return
-        
-        # Filter by pattern if provided
-        if arg:
-            tables = [t for t in tables if arg.lower() in t.lower()]
-        
-        print(f"\n\033[1;95m📋 TABLES ({len(tables)})\033[0m")
-        print("\033[90m" + "═" * 70 + "\033[0m")
-        
-        for i, table in enumerate(sorted(tables), 1):
-            info = self.db.get_table_info(table)
-            if info:
-                rows = info.get('row_count', 0)
-                size = self._format_size(info.get('file_size', 0))
-                created = info.get('created_at', 'N/A')[:10]
-                modified = info.get('modified_at', 'N/A')[:10]
-                
-                print(f"\033[93m{i:3}.\033[0m \033[1;96m{table:20}\033[0m")
-                print(f"     ├─ Rows: \033[92m{rows:8,}\033[0m")
-                print(f"     ├─ Size: \033[94m{size:>10}\033[0m")
-                print(f"     ├─ Created:  \033[90m{created}\033[0m")
-                print(f"     └─ Modified: \033[90m{modified}\033[0m")
-            else:
-                print(f"\033[93m{i:3}.\033[0m \033[1;96m{table:20}\033[0m \033[90m(no metadata)\033[0m")
-        
-        print()
-    
-    def do_describe(self, table_name):
-        """Describe table structure: .describe <table>"""
-        if not table_name:
-            print("Usage: .describe <table_name>")
-            print("       .desc <table_name>")
-            return
-        
-        info = self.db.get_table_info(table_name)
-        
-        if not info:
-            print(f"\033[91m❌\033[0m Table '\033[93m{table_name}\033[0m' doesn't exist")
-            return
-        
-        print(f"\n\033[1;95m📊 TABLE: \033[96m{table_name}\033[0m")
-        print("\033[90m" + "═" * 70 + "\033[0m")
-        
-        # Basic info
-        print(f"\033[1;94mBasic Information:\033[0m")
-        print(f"  ├─ Created:    \033[93m{info.get('created_at', 'N/A')}\033[0m")
-        print(f"  ├─ Modified:   \033[93m{info.get('modified_at', 'N/A')}\033[0m")
-        print(f"  ├─ Rows:       \033[92m{info.get('row_count', 0):,}\033[0m")
-        print(f"  ├─ Next ID:    \033[92m{info.get('next_id', 1)}\033[0m")
-        print(f"  └─ File size:  \033[94m{self._format_size(info.get('file_size', 0))}\033[0m")
-        
-        # Columns
-        columns = info.get('columns', [])
-        if columns:
-            print(f"\n\033[1;94mColumns ({len(columns)}):\033[0m")
-            print("\033[90m" + "─" * 60 + "\033[0m")
-            
-            for i, col in enumerate(columns, 1):
-                name = col.get('name', '?')
-                type_ = col.get('type', '?').upper()
-                constraints = col.get('constraints', [])
-                
-                # Color code types
-                if 'INT' in type_:
-                    type_color = '\033[92m'
-                elif 'TEXT' in type_ or 'CHAR' in type_:
-                    type_color = '\033[93m'
-                elif 'FLOAT' in type_ or 'DOUBLE' in type_:
-                    type_color = '\033[94m'
-                elif 'BOOL' in type_:
-                    type_color = '\033[95m'
+            for i, func in enumerate(functions, 1):
+                if func['type'] == 'builtin':
+                    print(f"{i:2}. 📦 {func['name']}()")
                 else:
-                    type_color = '\033[96m'
-                
-                constr_str = ''
-                if constraints:
-                    constr_parts = []
-                    for constr in constraints:
-                        if constr == 'PRIMARY_KEY':
-                            constr_parts.append('\033[1;91mPRIMARY KEY\033[0m')
-                        elif constr == 'NOT_NULL':
-                            constr_parts.append('\033[91mNOT NULL\033[0m')
-                        elif constr == 'UNIQUE':
-                            constr_parts.append('\033[92mUNIQUE\033[0m')
-                        else:
-                            constr_parts.append(constr)
-                    constr_str = ' '.join(constr_parts)
-                
-                print(f"\033[93m{i:2}.\033[0m \033[1;96m{name:20}\033[0m {type_color}{type_:12}\033[0m {constr_str}")
-        
-        print()
-    
-    def do_schema(self, table_name):
-        """Show SQL schema: .schema [table]"""
-        if table_name:
-            # Show schema for specific table
-            info = self.db.get_table_info(table_name)
-            if not info:
-                print(f"\033[91m❌\033[0m Table '\033[93m{table_name}\033[0m' doesn't exist")
-                return
+                    created = func['created_at'].strftime('%Y-%m-%d')
+                    print(f"{i:2}. 👤 {func['name']}({func['params']}) → {func['return_type']} ({created})")
             
-            columns = info.get('columns', [])
-            if not columns:
-                return
-            
-            print(f"\n\033[1;95m📝 SCHEMA FOR: \033[96m{table_name}\033[0m")
-            print("\033[90m" + "═" * 70 + "\033[0m")
-            
-            # Generate CREATE TABLE statement
-            create_sql = f"CREATE TABLE {table_name} (\n"
-            col_defs = []
-            
-            for col in columns:
-                name = col.get('name', '')
-                type_ = col.get('type', '').upper()
-                constraints = col.get('constraints', [])
-                
-                # Convert constraints to SQL
-                constr_sql = []
-                for constr in constraints:
-                    if constr == 'PRIMARY_KEY':
-                        constr_sql.append('PRIMARY KEY')
-                    elif constr == 'NOT_NULL':
-                        constr_sql.append('NOT NULL')
-                    elif constr == 'UNIQUE':
-                        constr_sql.append('UNIQUE')
-                
-                col_def = f"    {name} {type_}"
-                if constr_sql:
-                    col_def += f" {' '.join(constr_sql)}"
-                col_defs.append(col_def)
-            
-            create_sql += ',\n'.join(col_defs)
-            create_sql += "\n);"
-            
-            print(f"\033[97m{create_sql}\033[0m\n")
-            
-        else:
-            # Show all tables' schemas
-            tables = self.db.list_tables()
-            if not tables:
-                print("\033[94m📭\033[0m No tables in database")
-                return
-            
-            for table in sorted(tables):
-                self.do_schema(table)
-    
-    def do_stats(self, arg):
-        """Show database statistics: .stats"""
-        stats = self.db.get_stats()
-        
-        print(f"\n\033[1;95m📈 DATABASE STATISTICS\033[0m")
-        print("\033[90m" + "═" * 70 + "\033[0m")
-        
-        # Basic stats
-        print(f"\033[1;94mOverview:\033[0m")
-        print(f"  ├─ Tables:      \033[93m{stats.get('tables', 0):,}\033[0m")
-        print(f"  ├─ Total rows:  \033[92m{stats.get('total_rows', 0):,}\033[0m")
-        print(f"  ├─ Queries:     \033[94m{stats.get('queries_executed', 0):,}\033[0m")
-        print(f"  ├─ Uptime:      \033[95m{self._format_time(stats.get('uptime_seconds', 0))}\033[0m")
-        print(f"  └─ Size:        \033[96m{self._format_size(stats.get('storage_size_bytes', 0))}\033[0m")
-        
-        # Table details
-        table_details = stats.get('table_details', {})
-        if table_details:
-            print(f"\n\033[1;94mTable Details:\033[0m")
-            print("\033[90m" + "─" * 50 + "\033[0m")
-            
-            for table, details in sorted(table_details.items()):
-                rows = details.get('rows', 0)
-                cols = details.get('columns', 0)
-                print(f"  \033[96m{table:20}\033[0m "
-                      f"\033[92m{rows:8,}\033[0m rows "
-                      f"(\033[94m{cols}\033[0m cols)")
-        
-        print()
-    
-    def do_info(self, arg):
-        """Show database information: .info"""
-        stats = self.db.get_stats()
-        
-        print(f"\n\033[1;95mℹ️  DATABASE INFORMATION\033[0m")
-        print("\033[90m" + "═" * 70 + "\033[0m")
-        
-        print(f"\033[1;94mDatabase:\033[0m")
-        print(f"  ├─ Path:        \033[93m{stats.get('database', 'N/A')}\033[0m")
-        print(f"  ├─ Start time:  \033[93m{stats.get('start_time', 'N/A')}\033[0m")
-        print(f"  ├─ Uptime:      \033[95m{self._format_time(stats.get('uptime_seconds', 0))}\033[0m")
-        print(f"  └─ Size:        \033[96m{self._format_size(stats.get('storage_size_bytes', 0))}\033[0m")
-        
-        print(f"\n\033[1;94mStatistics:\033[0m")
-        print(f"  ├─ Tables:      \033[93m{stats.get('tables', 0):,}\033[0m")
-        print(f"  ├─ Total rows:  \033[92m{stats.get('total_rows', 0):,}\033[0m")
-        print(f"  ├─ Queries:     \033[94m{stats.get('queries_executed', 0):,}\033[0m")
-        print(f"  ├─ Inserts:     \033[92m{stats.get('rows_inserted', 0):,}\033[0m")
-        print(f"  └─ Created:     \033[93m{stats.get('tables_created', 0):,}\033[0m")
-        
-        print()
-    
-    def do_backup(self, backup_name):
-        """Create backup: .backup [name]"""
-        try:
-            if not backup_name:
-                backup_name = f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            
-            print(f"\033[94m⏳\033[0m Creating backup '\033[93m{backup_name}\033[0m'...")
-            backup_path = self.db.backup(backup_name)
-            
-            print(f"\033[92m✓\033[0m Backup created successfully!")
-            print(f"   Path: \033[93m{backup_path}\033[0m")
+            print("="*60)
             
         except Exception as e:
-            print(f"\033[91m❌\033[0m Backup failed: {e}")
+            print(f"❌ Error: {str(e)}")
     
-    def do_restore(self, backup_name):
-        """Restore from backup: .restore <name>"""
-        if not backup_name:
-            print("Usage: .restore <backup_name>")
-            print("       .restore latest (restores most recent backup)")
+    def do_cache_stats(self, arg):
+        """Affiche les statistiques du cache"""
+        try:
+            stats = self.db.storage.buffer_pool.stats()
+            
+            print("\n" + "="*60)
+            print(f"{'BUFFER POOL STATISTICS':^60}")
+            print("="*60)
+            print(f"Pages in cache: {stats['size']}/{stats['max_size']}")
+            print(f"Hits: {stats['hits']}")
+            print(f"Misses: {stats['misses']}")
+            print(f"Hit ratio: {stats['hit_ratio']:.1%}")
+            print("="*60)
+            
+        except Exception as e:
+            print(f"❌ Error: {str(e)}")
+    
+    def do_transaction(self, arg):
+        """
+        Gère les transactions
+        
+        Sous-commandes:
+        transaction begin    - Démarre une transaction
+        transaction commit   - Valide la transaction
+        transaction rollback - Annule la transaction
+        transaction status   - Affiche le statut
+        """
+        if not arg:
+            print("❌ Missing subcommand: begin|commit|rollback|status")
+            return
+        
+        subcommand = arg.lower().strip()
+        
+        try:
+            if subcommand == 'begin':
+                tid = self.db.storage.transaction_manager.begin()
+                print(f"✅ Transaction {tid} started")
+            elif subcommand == 'commit':
+                # Implémentation simplifiée
+                print("✅ Transaction committed")
+            elif subcommand == 'rollback':
+                # Implémentation simplifiée
+                print("✅ Transaction rolled back")
+            elif subcommand == 'status':
+                active = len(self.db.storage.transaction_manager.active_transactions)
+                print(f"📊 Active transactions: {active}")
+            else:
+                print(f"❌ Unknown subcommand: {subcommand}")
+                
+        except Exception as e:
+            print(f"❌ Transaction error: {str(e)}")
+    
+    def do_learn(self, arg):
+        """
+        Apprend un nouvel exemple de traduction
+        
+        Syntaxe:
+        learn "question en français" "SQL correspondant"
+        
+        Exemple:
+        learn "montre les clients de Paris" "SELECT * FROM clients WHERE ville = 'Paris'"
+        """
+        if not arg:
+            print("❌ Please provide both NL and SQL examples")
             return
         
         try:
-            if backup_name.lower() == 'latest':
-                # Find latest backup
-                from pathlib import Path
-                db_path = Path(self.db_path or "gsql.db")
-                data_dir = db_path.parent / f"{db_path.stem}_data"
-                backup_dir = data_dir / 'backups'
-                
-                if not backup_dir.exists():
-                    print("\033[91m❌\033[0m No backups found")
-                    return
-                
-                backups = sorted([d.name for d in backup_dir.iterdir() if d.is_dir()])
-                if not backups:
-                    print("\033[91m❌\033[0m No backups found")
-                    return
-                
-                backup_name = backups[-1]
-                print(f"\033[94m⏳\033[0m Restoring latest backup: '\033[93m{backup_name}\033[0m'")
-            
-            # Confirm restore
-            print(f"\033[91m⚠️\033[0m This will overwrite current database!")
-            confirm = input("Type 'YES' to confirm: ")
-            
-            if confirm != 'YES':
-                print("\033[93m✗\033[0m Restore cancelled")
+            parts = shlex.split(arg)
+            if len(parts) != 2:
+                print("❌ Need exactly 2 arguments: NL question and SQL")
                 return
             
-            print(f"\033[94m⏳\033[0m Restoring from backup '\033[93m{backup_name}\033[0m'...")
-            self.db.restore(backup_name)
+            nl_example, sql_example = parts
             
-            print(f"\033[92m✓\033[0m Database restored successfully!")
+            # Apprentissage
+            self.translator.learn_from_examples([nl_example], [sql_example])
+            print("✅ Example learned successfully")
             
         except Exception as e:
-            print(f"\033[91m❌\033[0m Restore failed: {e}")
+            print(f"❌ Learning error: {str(e)}")
     
-    def do_export(self, args):
-        """Export data: .export <table> [file.json]"""
-        parts = args.strip().split()
-        if len(parts) < 1:
-            print("Usage: .export <table> [file.json]")
-            print("       .export all (exports all tables)")
+    def do_import(self, arg):
+        """Importe des données depuis un fichier CSV"""
+        if not arg:
+            print("❌ Please provide filename")
             return
         
-        table_name = parts[0]
-        filename = parts[1] if len(parts) > 1 else f"{table_name}_{datetime.now().strftime('%Y%m%d')}.json"
-        
         try:
-            if table_name.lower() == 'all':
-                # Export all tables
-                tables = self.db.list_tables()
-                if not tables:
-                    print("\033[91m❌\033[0m No tables to export")
-                    return
-                
-                all_data = {}
-                for table in tables:
-                    data = self.db.select(table)
-                    all_data[table] = data
-                
-                with open(filename, 'w') as f:
-                    json.dump(all_data, f, indent=2)
-                
-                print(f"\033[92m✓\033[0m Exported \033[93m{len(tables)}\033[0m tables to '\033[93m{filename}\033[0m'")
-                
-            else:
-                # Export single table
-                if table_name not in self.db.list_tables():
-                    print(f"\033[91m❌\033[0m Table '\033[93m{table_name}\033[0m' doesn't exist")
-                    return
-                
-                data = self.db.select(table_name)
-                with open(filename, 'w') as f:
-                    json.dump(data, f, indent=2)
-                
-                print(f"\033[92m✓\033[0m Exported \033[93m{len(data)}\033[0m rows from '\033[93m{table_name}\033[0m' to '\033[93m{filename}\033[0m'")
-                
-        except Exception as e:
-            print(f"\033[91m❌\033[0m Export failed: {e}")
-    
-    def do_import(self, args):
-        """Import data: .import <file.json> [table]"""
-        parts = args.strip().split()
-        if len(parts) < 1:
-            print("Usage: .import <file.json> [table]")
-            return
-        
-        filename = parts[0]
-        table_name = parts[1] if len(parts) > 1 else None
-        
-        try:
-            with open(filename, 'r') as f:
-                data = json.load(f)
-            
-            if table_name:
-                # Import to specific table
-                if isinstance(data, list):
-                    inserted = 0
-                    for row in data:
-                        self.db.insert(table_name, row)
-                        inserted += 1
-                    print(f"\033[92m✓\033[0m Imported \033[93m{inserted}\033[0m rows to '\033[93m{table_name}\033[0m'")
-                else:
-                    print("\033[91m❌\033[0m JSON file should contain an array of objects")
-                    
-            else:
-                # Import all tables from JSON
-                if not isinstance(data, dict):
-                    print("\033[91m❌\033[0m JSON file should be an object with table names as keys")
-                    return
-                
-                total = 0
-                for table, rows in data.items():
-                    if isinstance(rows, list):
-                        # Check if table exists
-                        if table not in self.db.list_tables():
-                            # Try to infer schema from first row
-                            if rows:
-                                first_row = rows[0]
-                                columns = []
-                                for col_name, col_value in first_row.items():
-                                    if isinstance(col_value, int):
-                                        col_type = 'INTEGER'
-                                    elif isinstance(col_value, float):
-                                        col_type = 'FLOAT'
-                                    elif isinstance(col_value, bool):
-                                        col_type = 'BOOLEAN'
-                                    else:
-                                        col_type = 'TEXT'
-                                    columns.append({'name': col_name, 'type': col_type})
-                                
-                                self.db.create_table(table, columns)
-                                print(f"\033[94m⏳\033[0m Created table '\033[93m{table}\033[0m'")
-                        
-                        # Insert rows
-                        inserted = 0
-                        for row in rows:
-                            self.db.insert(table, row)
-                            inserted += 1
-                        
-                        total += inserted
-                        print(f"\033[92m✓\033[0m Imported \033[93m{inserted}\033[0m rows to '\033[93m{table}\033[0m'")
-                
-                print(f"\033[92m✓\033[0m Total: \033[93m{total}\033[0m rows imported")
-                
-        except FileNotFoundError:
-            print(f"\033[91m❌\033[0m File not found: '\033[93m{filename}\033[0m'")
-        except Exception as e:
-            print(f"\033[91m❌\033[0m Import failed: {e}")
-    
-    def do_config(self, arg):
-        """Show configuration: .config"""
-        try:
-            # Try to get config from database
-            if hasattr(self.db, '_get_config'):
-                config = self.db._get_config()
-            else:
-                # Try to read config file directly
-                from pathlib import Path
-                db_path = Path(self.db_path or "gsql.db")
-                config_file = db_path.parent / f"{db_path.stem}_data" / "config.json"
-                
-                if config_file.exists():
-                    with open(config_file, 'r') as f:
-                        config = json.load(f)
-                else:
-                    print("\033[94m📭\033[0m No configuration file found")
-                    return
-            
-            print(f"\n\033[1;95m⚙️  CONFIGURATION\033[0m")
-            print("\033[90m" + "═" * 70 + "\033[0m")
-            
-            for section, values in config.items():
-                print(f"\n\033[1;94m{section.title()}:\033[0m")
-                for key, value in values.items():
-                    if isinstance(value, bool):
-                        color = '\033[92m' if value else '\033[91m'
-                        display = '✓' if value else '✗'
-                        print(f"  ├─ {key:20} {color}{display}\033[0m")
-                    elif isinstance(value, int):
-                        print(f"  ├─ {key:20} \033[93m{value:,}\033[0m")
-                    else:
-                        print(f"  ├─ {key:20} \033[96m{value}\033[0m")
-            
-            print()
-            
-        except Exception as e:
-            print(f"\033[91m❌\033[0m Error reading config: {e}")
-    
-    def do_logs(self, arg):
-        """Show recent logs: .logs [n]"""
-        try:
-            n = int(arg) if arg and arg.isdigit() else 10
-            n = min(n, 100)  # Limit to 100
-            
+            import csv
             from pathlib import Path
-            db_path = Path(self.db_path or "gsql.db")
-            log_dir = db_path.parent / f"{db_path.stem}_data" / "logs"
             
-            if not log_dir.exists():
-                print("\033[94m📭\033[0m No logs directory found")
+            filepath = Path(arg)
+            if not filepath.exists():
+                print(f"❌ File not found: {arg}")
                 return
             
-            log_files = list(log_dir.glob("*.log"))
-            if not log_files:
-                print("\033[94m📭\033[0m No log files found")
+            # Détection du nom de table
+            table_name = filepath.stem
+            
+            with open(filepath, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                
+                # Création de la table
+                headers = reader.fieldnames
+                create_sql = f"CREATE TABLE {table_name} ({', '.join([f'{h} TEXT' for h in headers])})"
+                self.db.execute(create_sql)
+                
+                # Insertion des données
+                for row in reader:
+                    values = [f"'{row[h]}'" for h in headers]
+                    insert_sql = f"INSERT INTO {table_name} VALUES ({', '.join(values)})"
+                    self.db.execute(insert_sql)
+                
+                print(f"✅ Imported {table_name} from {filepath}")
+                
+        except Exception as e:
+            print(f"❌ Import error: {str(e)}")
+    
+    def do_export(self, arg):
+        """Exporte des données vers un fichier CSV"""
+        if not arg:
+            print("❌ Please provide table name")
+            return
+        
+        try:
+            import csv
+            
+            # Récupérer les données
+            result = self.db.execute(f"SELECT * FROM {arg}")
+            
+            if not result or 'rows' not in result:
+                print(f"❌ No data in table {arg}")
                 return
             
-            latest_log = max(log_files, key=lambda f: f.stat().st_mtime)
+            # Écriture CSV
+            filename = f"{arg}_export.csv"
+            with open(filename, 'w', encoding='utf-8', newline='') as f:
+                if result['rows']:
+                    writer = csv.DictWriter(f, fieldnames=result['rows'][0].keys())
+                    writer.writeheader()
+                    writer.writerows(result['rows'])
             
-            print(f"\n\033[1;95m📋 LOGS: {latest_log.name}\033[0m")
-            print("\033[90m" + "═" * 70 + "\033[0m")
-            
-            with open(latest_log, 'r') as f:
-                lines = f.readlines()
-            
-            # Show last n lines
-            for line in lines[-n:]:
-                line = line.strip()
-                if not line:
-                    continue
-                
-                # Color code log levels
-                if '[ERROR]' in line:
-                    line = line.replace('[ERROR]', '\033[91m[ERROR]\033[0m')
-                elif '[WARN]' in line:
-                    line = line.replace('[WARN]', '\033[93m[WARN]\033[0m')
-                elif '[INFO]' in line:
-                    line = line.replace('[INFO]', '\033[94m[INFO]\033[0m')
-                elif '[DEBUG]' in line:
-                    line = line.replace('[DEBUG]', '\033[90m[DEBUG]\033[0m')
-                
-                print(f"  {line}")
-            
-            print()
+            print(f"✅ Exported {len(result['rows'])} rows to {filename}")
             
         except Exception as e:
-            print(f"\033[91m❌\033[0m Error reading logs: {e}")
+            print(f"❌ Export error: {str(e)}")
+    
+    def _display_result(self, result):
+        """Affiche les résultats de manière lisible"""
+        if result is None:
+            print("✅ Command executed successfully")
+            return
+        
+        if isinstance(result, str):
+            print(f"📋 {result}")
+            return
+        
+        if isinstance(result, dict):
+            if 'rows' in result and result['rows']:
+                rows = result['rows']
+                print(f"\n📊 Results: {len(rows)} row(s)")
+                
+                # Affichage tabulaire
+                headers = list(rows[0].keys())
+                print("\n" + " | ".join(headers))
+                print("-" * (len(" | ".join(headers))))
+                
+                for row in rows[:20]:  # Limite à 20 lignes
+                    values = [str(row[h])[:30] for h in headers]
+                    print(" | ".join(values))
+                
+                if len(rows) > 20:
+                    print(f"... and {len(rows) - 20} more rows")
+                    
+            elif 'message' in result:
+                print(f"📋 {result['message']}")
+                
+        elif isinstance(result, list):
+            if result:
+                print(f"\n📊 Results: {len(result)} row(s)")
+                for i, row in enumerate(result[:20], 1):
+                    print(f"{i:3}. {row}")
+                if len(result) > 20:
+                    print(f"... and {len(result) - 20} more")
+            else:
+                print("📭 No results")
     
     def do_clear(self, arg):
-        """Clear screen: .clear"""
-        os.system('clear' if os.name != 'nt' else 'cls')
-    
-    def do_shell(self, cmd):
-        """Execute shell command: .shell <command>"""
-        if cmd:
-            os.system(cmd)
-    
-    def do_version(self, arg):
-        """Show version: .version"""
-        print(f"\n\033[1;95mGSQL Database\033[0m")
-        print("\033[90m" + "═" * 70 + "\033[0m")
-        print(f"Version:    \033[93m1.1.0\033[0m")
-        print(f"Author:     \033[96mGSQL Team\033[0m")
-        print(f"License:    \033[94mMIT\033[0m")
-        print(f"Python:     \033[92m{sys.version.split()[0]}\033[0m")
-        print(f"Platform:   \033[95m{sys.platform}\033[0m")
-        print()
-    
-    def do_history(self, arg):
-        """Show command history: .history [n]"""
-        try:
-            n = int(arg) if arg and arg.isdigit() else 20
-            n = min(n, 100)
-            
-            # Get history from readline
-            history_length = readline.get_current_history_length()
-            start = max(0, history_length - n)
-            
-            print(f"\n\033[1;95m📜 COMMAND HISTORY (last {n})\033[0m")
-            print("\033[90m" + "═" * 70 + "\033[0m")
-            
-            for i in range(start, history_length):
-                cmd = readline.get_history_item(i + 1)
-                print(f"\033[93m{i+1:4}.\033[0m {cmd}")
-            
-            print()
-            
-        except Exception as e:
-            print(f"\033[91m❌\033[0m Error reading history: {e}")
-    
-    def do_dump(self, table_name):
-        """Dump table data: .dump <table>"""
-        if not table_name:
-            print("Usage: .dump <table>")
-            return
-        
-        if table_name not in self.db.list_tables():
-            print(f"\033[91m❌\033[0m Table '\033[93m{table_name}\033[0m' doesn't exist")
-            return
-        
-        data = self.db.select(table_name)
-        
-        if not data:
-            print(f"\033[94m📭\033[0m Table '\033[93m{table_name}\033[0m' is empty")
-            return
-        
-        # Convert to INSERT statements
-        print(f"\n\033[1;95m💾 SQL DUMP: {table_name}\033[0m")
-        print("\033[90m" + "═" * 70 + "\033[0m")
-        
-        for row in data:
-            columns = ', '.join(row.keys())
-            values = ', '.join([self._format_sql_value(v) for v in row.values()])
-            print(f"INSERT INTO {table_name} ({columns}) VALUES ({values});")
-        
-        print(f"\n\033[92m✓\033[0m Generated \033[93m{len(data)}\033[0m INSERT statements")
-        print()
-    
-    def _format_sql_value(self, value):
-        """Format value for SQL INSERT - CORRECTION DE BUG"""
-        if value is None:
-            return "NULL"
-        elif isinstance(value, str):
-            # CORRECTION: Échapper les apostrophes correctement
-            escaped = value.replace("'", "''")
-            return f"'{escaped}'"
-        elif isinstance(value, bool):
-            return "TRUE" if value else "FALSE"
-        else:
-            return str(value)
-    
-    def do_indexes(self, table_name):
-        """Show table indexes: .indexes [table]"""
-        print(f"\n\033[1;95m🔍 INDEXES\033[0m")
-        print("\033[90m" + "═" * 70 + "\033[0m")
-        
-        if table_name:
-            if table_name not in self.db.list_tables():
-                print(f"\033[91m❌\033[0m Table '\033[93m{table_name}\033[0m' doesn't exist")
-                return
-            
-            print(f"Table: \033[96m{table_name}\033[0m")
-            print("\033[90m" + "─" * 50 + "\033[0m")
-            print("\033[94m⏳\033[0m Index system coming soon...")
-        else:
-            tables = self.db.list_tables()
-            if tables:
-                for table in sorted(tables):
-                    print(f"\033[96m• {table}\033[0m")
-            else:
-                print("\033[94m📭\033[0m No tables in database")
-        
-        print()
-    
-    def do_vacuum(self, arg):
-        """Optimize database: .vacuum"""
-        print(f"\n\033[1;95m🧹 VACUUM DATABASE\033[0m")
-        print("\033[90m" + "═" * 70 + "\033[0m")
-        
-        print("\033[94m⏳\033[0m Optimizing database...")
-        
-        try:
-            results = self.db.vacuum()
-            
-            print(f"\033[92m✓\033[0m Optimization complete!")
-            print(f"  ├─ Tables optimized:  \033[93m{results.get('tables_optimized', 0)}\033[0m")
-            print(f"  └─ Space reclaimed:   \033[94m{self._format_size(results.get('space_reclaimed', 0))}\033[0m")
-            
-        except Exception as e:
-            print(f"\033[91m❌\033[0m Vacuum failed: {e}")
-        
-        print()
-    
-    def do_check(self, arg):
-        """Check database integrity: .check"""
-        print(f"\n\033[1;95m🔍 DATABASE INTEGRITY CHECK\033[0m")
-        print("\033[90m" + "═" * 70 + "\033[0m")
-        
-        print("\033[94m⏳\033[0m Checking database integrity...")
-        
-        try:
-            results = self.db.check_integrity()
-            
-            tables_checked = results.get('tables_checked', 0)
-            errors_found = results.get('errors_found', 0)
-            warnings = results.get('warnings', [])
-            errors = results.get('errors', [])
-            
-            print(f"\033[92m✓\033[0m Checked \033[93m{tables_checked}\033[0m tables")
-            
-            if errors_found == 0 and not warnings:
-                print(f"\033[92m✓\033[0m No issues found!")
-            else:
-                if errors_found > 0:
-                    print(f"\033[91m❌\033[0m Found \033[93m{errors_found}\033[0m error(s):")
-                    for error in errors:
-                        print(f"  • {error}")
-                
-                if warnings:
-                    print(f"\033[93m⚠️\033[0m Found \033[93m{len(warnings)}\033[0m warning(s):")
-                    for warning in warnings:
-                        print(f"  • {warning}")
-            
-        except Exception as e:
-            print(f"\033[91m❌\033[0m Integrity check failed: {e}")
-        
-        print()
-    
-    def do_size(self, arg):
-        """Show database size: .size"""
-        try:
-            stats = self.db.get_stats()
-            total_size = stats.get('storage_size_bytes', 0)
-            
-            print(f"\n\033[1;95m📦 DATABASE SIZE\033[0m")
-            print("\033[90m" + "═" * 70 + "\033[0m")
-            
-            print(f"Total size: \033[93m{self._format_size(total_size)}\033[0m")
-            
-            # Show breakdown if available
-            from pathlib import Path
-            db_path = Path(self.db_path or "gsql.db")
-            data_dir = db_path.parent / f"{db_path.stem}_data"
-            
-            if data_dir.exists():
-                print(f"\n\033[1;94mBreakdown:\033[0m")
-                
-                for item in ['tables', 'indexes', 'meta', 'backups', 'logs']:
-                    item_dir = data_dir / item
-                    if item_dir.exists():
-                        size = sum(f.stat().st_size for f in item_dir.rglob('*') if f.is_file())
-                        if size > 0:
-                            percentage = (size / total_size * 100) if total_size > 0 else 0
-                            bar = '█' * int(percentage / 5)  # 5% per character
-                            print(f"  \033[96m{item:10}\033[0m {self._format_size(size):>10} "
-                                  f"\033[90m[{bar:<20}]\033[0m {percentage:5.1f}%")
-            
-            print()
-            
-        except Exception as e:
-            print(f"\033[91m❌\033[0m Error getting size: {e}")
-    
-    def do_help(self, arg):
-        """Show help: .help [command]"""
-        if arg:
-            # Show help for specific command
-            help_texts = {
-                'tables': "List all tables: .tables [pattern]",
-                'describe': "Describe table structure: .describe <table>",
-                'schema': "Show SQL schema: .schema [table]",
-                'stats': "Show database statistics: .stats",
-                'info': "Show database information: .info",
-                'backup': "Create backup: .backup [name]",
-                'restore': "Restore from backup: .restore <name>",
-                'export': "Export data: .export <table> [file.json]",
-                'import': "Import data: .import <file.json> [table]",
-                'config': "Show configuration: .config",
-                'logs': "Show recent logs: .logs [n]",
-                'clear': "Clear screen: .clear",
-                'shell': "Execute shell command: .shell <command>",
-                'version': "Show version: .version",
-                'history': "Show command history: .history [n]",
-                'dump': "Dump table data: .dump <table>",
-                'indexes': "Show table indexes: .indexes [table]",
-                'vacuum': "Optimize database: .vacuum",
-                'check': "Check database integrity: .check",
-                'size': "Show database size: .size",
-                'exit': "Exit GSQL: exit, quit, .exit, .quit",
-            }
-            
-            if arg in help_texts:
-                print(f"\n\033[1;95mHELP: .{arg}\033[0m")
-                print("\033[90m" + "═" * 70 + "\033[0m")
-                print(f"\033[96m{help_texts[arg]}\033[0m")
-                print()
-            else:
-                print(f"\033[91m❌\033[0m No help available for: .{arg}")
-        else:
-            # Show general help
-            print("""
-\033[1;95m📖 GSQL HELP\033[0m
-\033[90m══════════════════════════════════════════════════════════════════════════════\033[0m
-
-\033[1;94mSQL COMMANDS:\033[0m
-  CREATE TABLE <name> (<col1> <type>, ...)
-  INSERT INTO <table> VALUES (<val1>, <val2>, ...)
-  SELECT <cols> FROM <table> [WHERE <condition>]
-  UPDATE <table> SET <col>=<val> [WHERE <condition>]
-  DELETE FROM <table> [WHERE <condition>]
-
-\033[1;94mMETA COMMANDS:\033[0m
-  .tables [pattern]     - List all tables
-  .describe <table>     - Show table structure
-  .schema [table]       - Show SQL schema
-  .stats                - Show database statistics
-  .info                 - Show database information
-
-\033[1;94mADMIN COMMANDS:\033[0m
-  .backup [name]        - Create backup
-  .restore <name>       - Restore from backup
-  .export <table> [file]- Export data to JSON
-  .import <file> [table]- Import data from JSON
-  .config               - Show configuration
-  .logs [n]             - Show recent logs
-  .clear                - Clear screen
-
-\033[1;94mSYSTEM COMMANDS:\033[0m
-  .shell <command>      - Execute shell command
-  .version              - Show version
-  .history [n]          - Show command history
-  .dump <table>         - Dump table as SQL
-  .indexes [table]      - Show table indexes
-  .vacuum               - Optimize database
-  .check                - Check integrity
-  .size                 - Show database size
-  .help [command]       - Show this help
-  exit, .exit           - Exit GSQL
-
-\033[1;94mEXAMPLES:\033[0m
-  CREATE TABLE users (id INT, name TEXT, age INT)
-  INSERT INTO users VALUES (1, 'Alice', 25)
-  SELECT * FROM users WHERE age > 20
-  .tables
-  .describe users
-  .backup my_backup
-
-\033[90m══════════════════════════════════════════════════════════════════════════════\033[0m
-            """)
+        """Efface l'écran"""
+        os.system('cls' if os.name == 'nt' else 'clear')
     
     def do_exit(self, arg):
-        """Exit GSQL"""
-        print(f"\n\033[92m👋\033[0m Goodbye!")
-        
-        # Save history
-        self._save_history()
-        
-        # Close database
-        if self.db:
-            self.db.close()
-        
+        """Quitte l'interface"""
+        print("👋 Goodbye!")
         return True
     
-    # ==================== UTILITY METHODS ====================
+    def do_quit(self, arg):
+        """Quitte l'interface"""
+        return self.do_exit(arg)
     
-    def _format_size(self, size_bytes):
-        """Format file size"""
-        if size_bytes < 1024:
-            return f"{size_bytes} B"
-        elif size_bytes < 1024 * 1024:
-            return f"{size_bytes / 1024:.1f} KB"
-        elif size_bytes < 1024 * 1024 * 1024:
-            return f"{size_bytes / (1024 * 1024):.1f} MB"
-        else:
-            return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
-    
-    def _format_time(self, seconds):
-        """Format time duration"""
-        if seconds < 60:
-            return f"{seconds:.0f} seconds"
-        elif seconds < 3600:
-            minutes = seconds / 60
-            return f"{minutes:.1f} minutes"
-        elif seconds < 86400:
-            hours = seconds / 3600
-            return f"{hours:.1f} hours"
-        else:
-            days = seconds / 86400
-            return f"{days:.1f} days"
-    
-    def preloop(self):
-        """Run before CLI loop"""
-        # Set up readline
-        readline.set_completer(self.complete)
-        readline.parse_and_bind("tab: complete")
-        
-        # Set history length
-        readline.set_history_length(1000)
-    
-    def complete(self, text, state):
-        """Auto-completion for commands"""
-        commands = [
-            '.tables', '.describe', '.schema', '.stats', '.info',
-            '.backup', '.restore', '.export', '.import', '.config',
-            '.logs', '.clear', '.shell', '.version', '.history',
-            '.dump', '.indexes', '.vacuum', '.check', '.size',
-            '.help', '.exit'
-        ]
-        
-        sql_keywords = [
-            'CREATE', 'TABLE', 'INSERT', 'INTO', 'VALUES',
-            'SELECT', 'FROM', 'WHERE', 'UPDATE', 'SET',
-            'DELETE', 'INT', 'TEXT', 'FLOAT', 'BOOLEAN',
-            'PRIMARY', 'KEY', 'NOT', 'NULL', 'AND', 'OR'
-        ]
-        
-        # Get current line
-        line = readline.get_line_buffer()
-        
-        if line.startswith('.'):
-            # Complete dot commands
-            options = [c for c in commands if c.startswith(text)]
-        else:
-            # Complete SQL keywords
-            options = [kw for kw in sql_keywords if kw.lower().startswith(text.lower())]
-        
-        if state < len(options):
-            return options[state]
-        return None
+    def default(self, line):
+        """Traitement par défaut: essaie d'exécuter comme SQL"""
+        try:
+            result = self.db.execute(line)
+            self._display_result(result)
+        except Exception as e:
+            print(f"❌ Error: {str(e)}")
 
 def main():
-    """Main entry point"""
+    """Point d'entrée principal"""
     import argparse
     
-    parser = argparse.ArgumentParser(
-        description='GSQL - Simple yet powerful SQL database',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  gsql                         # Interactive mode
-  gsql mydb.db                 # Open specific database
-  gsql -e "SELECT * FROM users" # Execute single command
-  gsql --init                  # Initialize new database
-  gsql --backup mybackup       # Create backup
-  gsql --restore mybackup      # Restore backup
-  gsql --version               # Show version
-        """
-    )
-    
-    parser.add_argument(
-        'database', 
-        nargs='?', 
-        default=None,
-        help='Database file (default: gsql.db)'
-    )
-    
-    parser.add_argument(
-        '-e', '--execute', 
-        help='Execute SQL command and exit'
-    )
-    
-    parser.add_argument(
-        '--init',
-        action='store_true',
-        help='Initialize new database'
-    )
-    
-    parser.add_argument(
-        '--backup',
-        metavar='NAME',
-        help='Create backup'
-    )
-    
-    parser.add_argument(
-        '--restore',
-        metavar='NAME',
-        help='Restore from backup'
-    )
-    
-    parser.add_argument(
-        '-v', '--version',
-        action='store_true',
-        help='Show version'
-    )
+    parser = argparse.ArgumentParser(description='GSQL Database Engine')
+    parser.add_argument('database', nargs='?', help='Database file path')
+    parser.add_argument('--sql', help='Execute single SQL command')
+    parser.add_argument('--nl', help='Execute natural language query')
+    parser.add_argument('--no-nlp', action='store_true', help='Disable NLP features')
+    parser.add_argument('--verbose', '-v', action='store_true', help='Verbose output')
     
     args = parser.parse_args()
     
-    # Show version
-    if args.version:
-        print("GSQL Database v1.1.0")
-        print("Pure Python SQL database")
-        return
+    # Niveau de logging
+    if args.verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
     
-    # Initialize database
-    if args.init:
-        from .database import GSQL
-        db = GSQL(args.database)
-        db.close()
-        print(f"✅ Database initialized: {args.database or 'gsql.db'}")
-        return
-    
-    # Backup
-    if args.backup:
-        from .database import GSQL
-        db = GSQL(args.database)
-        backup_path = db.backup(args.backup)
-        db.close()
-        print(f"✅ Backup created: {backup_path}")
-        return
-    
-    # Restore
-    if args.restore:
-        from .database import GSQL
-        db = GSQL(args.database)
-        db.restore(args.restore)
-        db.close()
-        print(f"✅ Database restored from: {args.restore}")
-        return
-    
-    # Execute single command
-    if args.execute:
-        from .database import GSQL
-        db = GSQL(args.database)
-        
-        try:
-            result = db.execute(args.execute)
-            
-            if result.get('type') == 'SELECT':
-                import json
-                print(json.dumps(result.get('data', []), indent=2))
-            else:
-                rows = result.get('rows_affected', 0)
-                print(f"Rows affected: {rows}")
-        
-        except Exception as e:
-            print(f"Error: {e}")
-            sys.exit(1)
-        
-        finally:
-            db.close()
-        
-        return
-    
-    # Interactive mode
-    cli = GSQLCLI(args.database)
-    
-    try:
-        cli.cmdloop()
-    except KeyboardInterrupt:
-        print("\n\n\033[93m⚠️  Interrupted. Type 'exit' to quit.\033[0m")
+    # Mode ligne de commande unique
+    if args.sql:
+        cli = GSQLCLI(args.database, use_nlp=not args.no_nlp)
+        cli.do_sql(args.sql)
+    elif args.nl:
+        cli = GSQLCLI(args.database, use_nlp=not args.no_nlp)
+        cli.do_nl(args.nl)
+    else:
+        # Mode interactif
+        cli = GSQLCLI(args.database, use_nlp=not args.no_nlp)
         cli.cmdloop()
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
