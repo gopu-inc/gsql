@@ -91,7 +91,14 @@ class Database:
         self._initialize_database()
         
         logger.info(f"GSQL Database initialized (v{self.config['version']})")
-    
+    def _save_config(self):
+        """Sauvegarde la configuration dans un fichier JSON"""
+        config_file = self.base_dir / "gsql_config.json"
+        try:
+            with open(config_file, 'w') as f:
+                json.dump(self.config, f, indent=2)
+        except Exception as e:
+            logger.warning(f"Failed to save config: {e}")
     def _initialize_database(self, skip_recovery=False):
         """Initialise les tables et structures système"""
         try:
