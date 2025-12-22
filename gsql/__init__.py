@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 GSQL - A lightweight SQL database engine with natural language interface
 Version: 3.0.0
@@ -109,18 +110,6 @@ class FeatureDetection:
         return True  # Toujours True car optionnel
     
     @staticmethod
-    def get_all_features() -> Dict[str, bool]:
-        """Retourne l'état de toutes les fonctionnalités"""
-        return {
-            'nltk': FeatureDetection.check_nltk(),
-            'sqlite': FeatureDetection.check_sqlite(),
-            'yaml': FeatureDetection.check_yaml(),  # Optionnel
-            'colorama': FeatureDetection.check_colorama(),
-            'tabulate': FeatureDetection.check_tabulate(),
-            'rich': FeatureDetection.check_rich()
-        }
-    
-    @staticmethod
     def check_colorama() -> bool:
         """Vérifie si colorama est disponible (pour couleurs Windows)"""
         try:
@@ -146,6 +135,18 @@ class FeatureDetection:
             return True
         except ImportError:
             return False
+    
+    @staticmethod
+    def get_all_features() -> Dict[str, bool]:
+        """Retourne l'état de toutes les fonctionnalités"""
+        return {
+            'nltk': FeatureDetection.check_nltk(),
+            'sqlite': FeatureDetection.check_sqlite(),
+            'yaml': FeatureDetection.check_yaml(),  # Optionnel
+            'colorama': FeatureDetection.check_colorama(),
+            'tabulate': FeatureDetection.check_tabulate(),
+            'rich': FeatureDetection.check_rich()
+        }
 
 # ==================== IMPORT DES MODULES ====================
 
@@ -234,16 +235,15 @@ except ImportError as e:
     set_default_executor = None
     EXECUTOR_AVAILABLE = False
 
-# Import des fonctions utilisateur
+# IMPORT CORRIGÉ : Import des fonctions utilisateur
 try:
-    from .functions.user_functions import (
-        FunctionManager,
-        UserFunctionRegistry
-    )
+    from .functions import FunctionManager, FunctionError
     FUNCTIONS_AVAILABLE = True
+    UserFunctionRegistry = None  # Pas utilisé dans notre version
 except ImportError as e:
     logger.warning(f"Could not import functions module: {e}")
     FunctionManager = None
+    FunctionError = None
     UserFunctionRegistry = None
     FUNCTIONS_AVAILABLE = False
 
@@ -764,9 +764,10 @@ __all__ = [
     'get_default_executor',
     'set_default_executor',
     
-    # Fonctions
+    # Fonctions - CORRIGÉ
     'FunctionManager',
-    'UserFunctionRegistry',
+    'FunctionError',
+    'UserFunctionRegistry',  # Gardé pour compatibilité
     
     # NLP
     'NLToSQLTranslator',
