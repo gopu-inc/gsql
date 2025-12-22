@@ -997,7 +997,14 @@ DOT COMMANDS (compatible SQLite):
 # ==================== FACTORY FUNCTIONS ====================
 
 def create_database(db_path=None, **kwargs) -> Database:
-    """Crée une nouvelle instance de base de données"""
+    """
+    Crée une nouvelle instance de base de données
+    Accepte 'path' comme alias pour 'db_path' pour la compatibilité
+    """
+    # Si 'path' est fourni dans kwargs, l'utiliser comme db_path
+    if 'path' in kwargs:
+        db_path = kwargs.pop('path')
+    
     return Database(db_path, **kwargs)
 
 def get_default_database() -> Optional[Database]:
