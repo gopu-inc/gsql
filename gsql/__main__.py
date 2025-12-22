@@ -1,980 +1,825 @@
 #!/usr/bin/env python3
 """
-GSQL COMPLETE - Version finale avec toutes les fonctionnalités
+GSQL - Un système de gestion de base de données SQL simplifié
+Point d'entrée principal pour l'interface en ligne de commande
 """
 
 import sys
 import os
-import cmd
-import sqlite3
-import json
-import re
-from datetime import datetime
+import argparse
+import readline
+import shlex
+from typing import List, Optional, Dict, Any
 from pathlib import Path
 
-# ==================== COULEURS ====================
+# Import des modules GSQL
+try:
+    from gsql import __version__, __author__, __description__
+    from gsql.database import Database
+    from gsql.parser import Parser
+    from gsql.executor import Executor
+    from gsql.exceptions import GSQLException, TableNotFoundError, SyntaxError
+    from gsql.stockage.yaml_storage import YAMLStorage
+    from gsql.config.defaults import load_default_config
+    from gsql.functions.user_functions import register_user_functions
+except ImportError as e:
+    print(f"Erreur d'importation: {e}")
+    print("Assurez-vous que tous les modules GSQL sont disponibles.")
+    sys.exit(1)
 
-class Colors:
-    """Couleurs pour le terminal"""
-    GREEN = '\033[92m'
-    RED = '\033[91m'
-    YELLOW = '\033[93m'
-    BLUE = '\033[94m'
-    CYAN = '\033[96m'
-    MAGENTA = '\033[95m'
-    WHITE = '\033[97m'
-    RESET = '\033[0m'
-    BOLD = '\033[1m'
-    
-    @staticmethod
-    def success(msg): return f"{Colors.GREEN}✓ {msg}{Colors.RESET}"
-    @staticmethod
-    def error(msg): return f"{Colors.RED}✗ {msg}{Colors.RESET}"
-    @staticmethod
-    def warning(msg): return f"{Colors.YELLOW}⚠ {msg}{Colors.RESET}"
-    @staticmethod
-    def info(msg): return f"{Colors.CYAN}ℹ {msg}{Colors.RESET}"
-    @staticmethod
-    def bold(msg): return f"{Colors.BOLD}{msg}{Colors.RESET}"
-    @staticmethod
-    def sql(msg): return f"{Colors.YELLOW}{msg}{Colors.RESET}"
 
-# ==================== GESTION DES FONCTIONS ====================
+class GSQLCLI:
+    """Interface en ligne de commande pour GSQL"""
+    
+    def __init__(self):
+        self.database = None
+        self.parser = None
+        self.executor = None
+        self.storage = None
+        self.config = load_default_config()
+        self.running = True
+        self.current_db = None
+        self.command_history = []
+        self.prompt = "gsql> "
+        
+    def setup_argparse(self) -> argparse.ArgumentParser:
+        """Configure le parser d'arguments de ligne de commande"""
+        parser = argparse.ArgumentParser(
+            description=__description__,
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+            epilog="""
+Exemples d'utilisation:
+  gsql                            # Mode interactif
+  gsql --help                     # Afficher l'aide
+  gsql --version                  # Afficher la version
+  gsql --execute "SELECT * FROM users"  # Exécuter une commande
+  gsql --file query.sql           # Exécuter un fichier SQL
+  gsql --init-db mydatabase       # Initialiser une nouvelle base de données
+  gsql --database mydb            # Se connecter à une base spécifique
+  gsql --interactive              # Mode interactif (par défaut)
+  gsql --config ./config.yaml     # Spécifier un fichier de configuration
+            
+Commandes interactives:
+  \\q, \\quit, exit     - Quitter GSQL
+  \\h, \\help          - Afficher l'aide des commandes
+  \\v, \\version       - Afficher la version
+  \\d, \\dt            - Lister les tables
+  \\d table_name       - Décrire une table
+  \\l, \\list          - Lister les bases de données
+  \\c db_name         - Se connecter à une base
+  \\e command         - Exécuter une commande système
+  \\history           - Afficher l'historique
+  \\clear, \\cls       - Effacer l'écran
+  \\config            - Afficher la configuration
+  \\stats             - Afficher les statistiques
+  \\backup [path]     - Sauvegarder la base
+  \\restore [path]    - Restaurer une sauvegarde
+  \\nlp "requête"     - Traduire une requête naturelle en SQL
+            """
+        )
+        
+        # Mode d'exécution
+        mode_group = parser.add_argument_group('Mode d\'exécution')
+        mode_group.add_argument(
+            '-e', '--execute',
+            type=str,
+            help='Exécuter une commande SQL et quitter'
+        )
+        mode_group.add_argument(
+            '-f', '--file',
+            type=str,
+            help='Exécuter les commandes depuis un fichier'
+        )
+        mode_group.add_argument(
+            '-i', '--interactive',
+            action='store_true',
+            default=False,
+            help='Lancer le mode interactif (défaut)'
+        )
+        
+        # Gestion de la base de données
+        db_group = parser.add_argument_group('Gestion de base de données')
+        db_group.add_argument(
+            '-d', '--database',
+            type=str,
+            help='Nom de la base de données à utiliser'
+        )
+        db_group.add_argument(
+            '-I', '--init-db',
+            type=str,
+            help='Initialiser une nouvelle base de données'
+        )
+        db_group.add_argument(
+            '--data-dir',
+            type=str,
+            default=None,
+            help='Répertoire des données (défaut: ~/.gsql)'
+        )
+        
+        # Configuration
+        config_group = parser.add_argument_group('Configuration')
+        config_group.add_argument(
+            '-c', '--config',
+            type=str,
+            help='Fichier de configuration à utiliser'
+        )
+        config_group.add_argument(
+            '--verbose',
+            action='store_true',
+            help='Mode verbeux'
+        )
+        config_group.add_argument(
+            '--quiet',
+            action='store_true',
+            help='Mode silencieux'
+        )
+        
+        # Informations
+        info_group = parser.add_argument_group('Informations')
+        info_group.add_argument(
+            '-v', '--version',
+            action='store_true',
+            help='Afficher la version et quitter'
+        )
+        info_group.add_argument(
+            '--license',
+            action='store_true',
+            help='Afficher les informations de licence'
+        )
+        
+        return parser
+    
+    def print_banner(self):
+        """Affiche la bannière d'accueil"""
+        banner = f"""
+╔══════════════════════════════════════════════════════════╗
+║                    GSQL v{__version__}                          ║
+║          Système de Gestion de Base de Données          ║
+║                Développé par {__author__}                ║
+╚══════════════════════════════════════════════════════════╝
+Tapez '\\help' pour l'aide, '\\quit' pour quitter.
+        """
+        print(banner)
+    
+    def print_help(self):
+        """Affiche l'aide des commandes"""
+        help_text = """
+Commandes GSQL:
 
-class FunctionManager:
-    """Gestionnaire de fonctions utilisateur"""
+GÉNÉRALES:
+  \\q, \\quit, exit     - Quitter GSQL
+  \\h, \\help          - Afficher cette aide
+  \\v, \\version       - Afficher la version
+  \\e command         - Exécuter une commande système
+  
+BASES DE DONNÉES:
+  \\l, \\list          - Lister les bases de données
+  \\c db_name         - Se connecter à une base
+  \\create db_name    - Créer une nouvelle base
+  \\drop db_name      - Supprimer une base
+  
+TABLES:
+  \\d, \\dt            - Lister les tables
+  \\d table_name      - Décrire une table
+  \\di                - Lister les index
+  \\dv                - Lister les vues
+  
+EXÉCUTION:
+  ;                  - Terminer une commande (optionnel)
+  \\g                 - Exécuter la dernière commande
+  \\p                - Afficher le tampon de commande
+  \\r                - Réinitialiser le tampon
+  
+HISTORIQUE:
+  \\history           - Afficher l'historique
+  \\history clear     - Effacer l'historique
+  
+AFFICHAGE:
+  \\pset [opt]        - Configurer l'affichage
+  \\x                 - Mode affichage étendu
+  \\timing            - Activer/désactiver le chronométrage
+  
+ADMINISTRATION:
+  \\config            - Afficher la configuration
+  \\stats             - Afficher les statistiques
+  \\backup [path]     - Sauvegarder la base
+  \\restore [path]    - Restaurer une sauvegarde
+  \\vacuum            - Nettoyer la base
+  
+INTELLIGENCE ARTIFICIELLE:
+  \\nlp "requête"     - Traduire une requête naturelle en SQL
+  \\explain           - Expliquer une requête SQL
+  
+SQL STANDARD:
+  Toutes les commandes SQL standard sont supportées:
+  - SELECT, INSERT, UPDATE, DELETE
+  - CREATE, DROP, ALTER TABLE
+  - CREATE INDEX, DROP INDEX
+  - BEGIN, COMMIT, ROLLBACK
+        """
+        print(help_text)
     
-    def __init__(self, db_path=":memory:"):
-        self.db_path = db_path
-        self.functions = {}
-        self._init_builtins()
+    def print_version(self):
+        """Affiche la version"""
+        version_info = f"""
+GSQL Version: {__version__}
+Auteur: {__author__}
+Description: {__description__}
+
+Modules chargés:
+  - Database: {'✓' if self.database else '✗'}
+  - Parser: {'✓' if self.parser else '✗'}
+  - Executor: {'✓' if self.executor else '✗'}
+  - Storage: {'✓' if self.storage else '✗'}
+  - NLP Translator: {'✓' if hasattr(self, 'translator') else '✗'}
+        """
+        print(version_info)
     
-    def _init_builtins(self):
-        """Initialise les fonctions intégrées"""
-        self.functions = {
-            'UPPER': {
-                'type': 'builtin',
-                'description': 'Convert to uppercase',
-                'call': lambda args: str(args[0]).upper() if args else ''
-            },
-            'LOWER': {
-                'type': 'builtin', 
-                'description': 'Convert to lowercase',
-                'call': lambda args: str(args[0]).lower() if args else ''
-            },
-            'LENGTH': {
-                'type': 'builtin',
-                'description': 'String length',
-                'call': lambda args: len(str(args[0])) if args else 0
-            },
-            'ABS': {
-                'type': 'builtin',
-                'description': 'Absolute value',
-                'call': lambda args: abs(float(args[0])) if args else 0
-            },
-            'ROUND': {
-                'type': 'builtin',
-                'description': 'Round number',
-                'call': lambda args: round(float(args[0]), int(args[1]) if len(args) > 1 else 0)
-            },
-            'CONCAT': {
-                'type': 'builtin',
-                'description': 'Concatenate strings',
-                'call': lambda args: ''.join(str(a) for a in args)
-            },
-            'NOW': {
-                'type': 'builtin',
-                'description': 'Current timestamp',
-                'call': lambda args: datetime.now().isoformat()
-            },
-            'DATE': {
-                'type': 'builtin',
-                'description': 'Current date',
-                'call': lambda args: datetime.now().strftime('%Y-%m-%d')
-            }
-        }
+    def init_database(self, db_name: str):
+        """Initialise une nouvelle base de données"""
+        try:
+            data_dir = self.config.get('storage', {}).get('data_dir', '~/.gsql')
+            data_path = Path(data_dir).expanduser() / db_name
+            data_path.mkdir(parents=True, exist_ok=True)
+            
+            print(f"Base de données '{db_name}' créée dans {data_path}")
+            return True
+        except Exception as e:
+            print(f"Erreur lors de la création de la base: {e}")
+            return False
     
-    def create_function(self, name, params, body, returns="TEXT"):
-        """Crée une nouvelle fonction utilisateur"""
-        if name in self.functions:
-            return False, f"Function '{name}' already exists"
+    def connect_database(self, db_name: str):
+        """Se connecte à une base de données"""
+        try:
+            if self.database:
+                self.database.close()
+            
+            data_dir = self.config.get('storage', {}).get('data_dir', '~/.gsql')
+            db_path = Path(data_dir).expanduser() / db_name
+            
+            if not db_path.exists():
+                print(f"Base de données '{db_name}' non trouvée.")
+                print(f"Utilisez '\\create {db_name}' pour la créer.")
+                return False
+            
+            self.storage = YAMLStorage(str(db_path))
+            self.database = Database(self.storage)
+            self.parser = Parser()
+            self.executor = Executor(self.database)
+            self.current_db = db_name
+            self.prompt = f"gsql[{db_name}]> "
+            
+            # Enregistrer les fonctions utilisateur
+            register_user_functions(self.executor)
+            
+            print(f"Connecté à la base de données '{db_name}'")
+            return True
+        except Exception as e:
+            print(f"Erreur de connexion: {e}")
+            return False
+    
+    def list_databases(self):
+        """Liste les bases de données disponibles"""
+        try:
+            data_dir = self.config.get('storage', {}).get('data_dir', '~/.gsql')
+            db_path = Path(data_dir).expanduser()
+            
+            if not db_path.exists():
+                print("Aucune base de données trouvée.")
+                return
+            
+            databases = [d.name for d in db_path.iterdir() if d.is_dir()]
+            
+            if not databases:
+                print("Aucune base de données trouvée.")
+                return
+            
+            print("\nListe des bases de données:")
+            print("-" * 40)
+            for db in sorted(databases):
+                size = sum(f.stat().st_size for f in (db_path/db).rglob('*') if f.is_file())
+                size_mb = size / (1024 * 1024)
+                marker = " *" if db == self.current_db else ""
+                print(f"  {db:20} {size_mb:6.2f} MB{marker}")
+            print()
+        except Exception as e:
+            print(f"Erreur: {e}")
+    
+    def list_tables(self):
+        """Liste les tables de la base courante"""
+        if not self.database:
+            print("Non connecté à une base de données.")
+            return
         
         try:
-            # Valider le nom
-            if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', name):
-                return False, f"Invalid function name: '{name}'"
+            tables = self.database.list_tables()
+            if not tables:
+                print("Aucune table dans la base de données.")
+                return
             
-            # Créer la fonction dynamiquement
-            func_code = f"""
-def user_func({', '.join(params) if params else ''}):
-    {body}
-"""
+            print("\nListe des tables:")
+            print("-" * 60)
+            print(f"{'Nom':20} {'Lignes':10} {'Taille':10} {'Index'}")
+            print("-" * 60)
             
-            # Compiler et exécuter
-            exec_globals = {}
-            exec(func_code, {}, exec_globals)
+            for table in tables:
+                table_info = self.database.get_table_info(table)
+                row_count = table_info.get('row_count', 0)
+                size = table_info.get('size', 0)
+                indexes = len(table_info.get('indexes', []))
+                print(f"{table:20} {row_count:10} {size:10} {indexes:5}")
+            print()
+        except Exception as e:
+            print(f"Erreur: {e}")
+    
+    def describe_table(self, table_name: str):
+        """Décrit une table"""
+        if not self.database:
+            print("Non connecté à une base de données.")
+            return
+        
+        try:
+            schema = self.database.get_table_schema(table_name)
+            if not schema:
+                print(f"Table '{table_name}' non trouvée.")
+                return
             
-            # Enregistrer
-            self.functions[name] = {
-                'type': 'user',
-                'params': params,
-                'returns': returns,
-                'body': body,
-                'call': exec_globals['user_func'],
-                'created': datetime.now().isoformat()
-            }
+            print(f"\nStructure de la table '{table_name}':")
+            print("-" * 60)
+            print(f"{'Colonne':20} {'Type':15} {'Nullable':10} {'Default'}")
+            print("-" * 60)
             
-            return True, f"Function '{name}' created successfully"
+            for column in schema.get('columns', []):
+                name = column.get('name', '')
+                type_ = column.get('type', '')
+                nullable = "YES" if column.get('nullable', True) else "NO"
+                default = str(column.get('default', ''))
+                print(f"{name:20} {type_:15} {nullable:10} {default}")
+            
+            # Afficher les index
+            indexes = self.database.get_table_indexes(table_name)
+            if indexes:
+                print("\nIndexes:")
+                for idx in indexes:
+                    print(f"  - {idx.get('name')} ({', '.join(idx.get('columns', []))})")
+            print()
+        except Exception as e:
+            print(f"Erreur: {e}")
+    
+    def execute_system_command(self, cmd: str):
+        """Exécute une commande système"""
+        try:
+            import subprocess
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+            print(result.stdout)
+            if result.stderr:
+                print(result.stderr)
+        except Exception as e:
+            print(f"Erreur: {e}")
+    
+    def show_history(self):
+        """Affiche l'historique des commandes"""
+        if not self.command_history:
+            print("Historique vide.")
+            return
+        
+        print("\nHistorique des commandes:")
+        print("-" * 60)
+        for i, cmd in enumerate(self.command_history[-20:], 1):
+            print(f"{i:3}: {cmd}")
+        print()
+    
+    def show_config(self):
+        """Affiche la configuration"""
+        print("\nConfiguration GSQL:")
+        print("-" * 60)
+        
+        # Configuration de la base
+        if self.current_db:
+            print(f"Base courante:      {self.current_db}")
+        else:
+            print("Base courante:      Aucune")
+        
+        # Configuration du stockage
+        storage_config = self.config.get('storage', {})
+        print(f"Répertoire données: {storage_config.get('data_dir', '~/.gsql')}")
+        print(f"Format stockage:    {storage_config.get('format', 'yaml')}")
+        
+        # Configuration de l'exécuteur
+        executor_config = self.config.get('executor', {})
+        print(f"Mode transaction:   {executor_config.get('transaction_mode', 'auto')}")
+        print(f"Timeout:            {executor_config.get('timeout', 30)}s")
+        
+        # Configuration NLP
+        nlp_config = self.config.get('nlp', {})
+        print(f"NLP activé:         {nlp_config.get('enabled', False)}")
+        print(f"Langue par défaut:  {nlp_config.get('default_language', 'fr')}")
+        print()
+    
+    def show_stats(self):
+        """Affiche les statistiques"""
+        if not self.database:
+            print("Non connecté à une base de données.")
+            return
+        
+        try:
+            stats = self.database.get_stats()
+            print("\nStatistiques de la base de données:")
+            print("-" * 60)
+            print(f"Tables:             {stats.get('table_count', 0)}")
+            print(f"Lignes totales:     {stats.get('total_rows', 0)}")
+            print(f"Indexes:            {stats.get('index_count', 0)}")
+            print(f"Taille données:     {stats.get('data_size', 0):.2f} KB")
+            print(f"Taille index:       {stats.get('index_size', 0):.2f} KB")
+            print(f"Transactions:       {stats.get('transaction_count', 0)}")
+            print(f"Requêtes exécutées: {stats.get('query_count', 0)}")
+            print()
+        except Exception as e:
+            print(f"Erreur: {e}")
+    
+    def backup_database(self, path: str = None):
+        """Sauvegarde la base de données"""
+        if not self.database:
+            print("Non connecté à une base de données.")
+            return
+        
+        try:
+            if not path:
+                import datetime
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                path = f"backup_{self.current_db}_{timestamp}.zip"
+            
+            backup_path = self.database.backup(path)
+            print(f"Sauvegarde créée: {backup_path}")
+        except Exception as e:
+            print(f"Erreur lors de la sauvegarde: {e}")
+    
+    def translate_nlp(self, query: str):
+        """Traduit une requête en langage naturel en SQL"""
+        try:
+            from gsql.nlp.translator import translate_natural_language
+            sql_query = translate_natural_language(query, self.config)
+            print(f"\nRequête SQL générée:")
+            print("-" * 60)
+            print(sql_query)
+            print("-" * 60)
+            return sql_query
+        except ImportError:
+            print("Module NLP non disponible.")
+            return None
+        except Exception as e:
+            print(f"Erreur de traduction: {e}")
+            return None
+    
+    def handle_meta_command(self, command: str) -> bool:
+        """Gère les commandes méta (commençant par \\)"""
+        cmd_parts = shlex.split(command.strip())
+        if not cmd_parts:
+            return True
+        
+        cmd = cmd_parts[0].lower()
+        args = cmd_parts[1:] if len(cmd_parts) > 1 else []
+        
+        # Commandes de sortie
+        if cmd in ('\\q', '\\quit', 'quit', 'exit'):
+            self.running = False
+            print("Au revoir!")
+            return True
+        
+        # Aide
+        elif cmd in ('\\h', '\\help', 'help'):
+            self.print_help()
+            return True
+        
+        # Version
+        elif cmd in ('\\v', '\\version', 'version'):
+            self.print_version()
+            return True
+        
+        # Lister les bases
+        elif cmd in ('\\l', '\\list'):
+            self.list_databases()
+            return True
+        
+        # Se connecter à une base
+        elif cmd in ('\\c',):
+            if not args:
+                print("Usage: \\c db_name")
+                return True
+            self.connect_database(args[0])
+            return True
+        
+        # Créer une base
+        elif cmd in ('\\create',):
+            if not args:
+                print("Usage: \\create db_name")
+                return True
+            self.init_database(args[0])
+            return True
+        
+        # Lister les tables
+        elif cmd in ('\\d', '\\dt'):
+            if len(args) == 0:
+                self.list_tables()
+            else:
+                self.describe_table(args[0])
+            return True
+        
+        # Exécuter une commande système
+        elif cmd in ('\\e',):
+            if not args:
+                print("Usage: \\e command")
+                return True
+            self.execute_system_command(' '.join(args))
+            return True
+        
+        # Historique
+        elif cmd in ('\\history',):
+            if args and args[0] == 'clear':
+                self.command_history.clear()
+                print("Historique effacé.")
+            else:
+                self.show_history()
+            return True
+        
+        # Configuration
+        elif cmd in ('\\config',):
+            self.show_config()
+            return True
+        
+        # Statistiques
+        elif cmd in ('\\stats',):
+            self.show_stats()
+            return True
+        
+        # Sauvegarde
+        elif cmd in ('\\backup',):
+            self.backup_database(args[0] if args else None)
+            return True
+        
+        # Restauration
+        elif cmd in ('\\restore',):
+            print("Fonctionnalité de restauration à implémenter.")
+            return True
+        
+        # Nettoyage
+        elif cmd in ('\\vacuum',):
+            if self.database:
+                self.database.vacuum()
+                print("Nettoyage terminé.")
+            return True
+        
+        # NLP
+        elif cmd in ('\\nlp',):
+            if not args:
+                print("Usage: \\nlp \"requête en langage naturel\"")
+                return True
+            sql_query = self.translate_nlp(' '.join(args))
+            if sql_query and input("\nExécuter cette requête? (o/n): ").lower() == 'o':
+                return self.execute_query(sql_query)
+            return True
+        
+        # Effacer l'écran
+        elif cmd in ('\\clear', '\\cls'):
+            os.system('cls' if os.name == 'nt' else 'clear')
+            return True
+        
+        # Commande méta inconnue
+        else:
+            print(f"Commande méta inconnue: {cmd}")
+            print("Tapez \\help pour la liste des commandes.")
+            return True
+    
+    def execute_query(self, query: str) -> bool:
+        """Exécute une requête SQL"""
+        if not self.database:
+            print("Erreur: Non connecté à une base de données.")
+            print("Utilisez '\\c db_name' pour vous connecter ou '\\create db_name' pour en créer une.")
+            return False
+        
+        try:
+            # Parser la requête
+            parsed = self.parser.parse(query)
+            
+            # Exécuter la requête
+            result = self.executor.execute(parsed)
+            
+            # Afficher le résultat
+            if result:
+                if isinstance(result, list):
+                    # Résultat tabulaire
+                    if result:
+                        headers = list(result[0].keys())
+                        # Calculer les largeurs de colonnes
+                        col_widths = [len(h) for h in headers]
+                        for row in result:
+                            for i, h in enumerate(headers):
+                                col_widths[i] = max(col_widths[i], len(str(row.get(h, ''))))
+                        
+                        # Afficher l'en-tête
+                        header_line = " | ".join(h.ljust(col_widths[i]) for i, h in enumerate(headers))
+                        separator = "-+-".join("-" * w for w in col_widths)
+                        print(f"\n{header_line}")
+                        print(separator)
+                        
+                        # Afficher les lignes
+                        for row in result:
+                            line = " | ".join(str(row.get(h, '')).ljust(col_widths[i]) 
+                                            for i, h in enumerate(headers))
+                            print(line)
+                        
+                        print(f"\n({len(result)} ligne{'s' if len(result) > 1 else ''})\n")
+                    else:
+                        print("\n(Aucun résultat)\n")
+                else:
+                    # Résultat simple (CREATE, INSERT, etc.)
+                    print(f"\n{result}\n")
+            
+            return True
             
         except SyntaxError as e:
-            return False, f"Syntax error: {e}"
+            print(f"Erreur de syntaxe: {e}")
+            return False
+        except TableNotFoundError as e:
+            print(f"Table non trouvée: {e}")
+            return False
+        except GSQLException as e:
+            print(f"Erreur GSQL: {e}")
+            return False
         except Exception as e:
-            return False, f"Error creating function: {e}"
+            print(f"Erreur inattendue: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
     
-    def call_function(self, name, args):
-        """Appelle une fonction"""
-        if name not in self.functions:
-            raise ValueError(f"Function '{name}' not found")
+    def interactive_mode(self):
+        """Lance le mode interactif"""
+        self.print_banner()
         
-        func = self.functions[name]
+        # Configuration de readline pour l'historique
+        readline.parse_and_bind('tab: complete')
+        history_file = Path.home() / '.gsql_history'
+        
         try:
-            return func['call'](args)
-        except Exception as e:
-            raise ValueError(f"Error calling '{name}': {e}")
-    
-    def list_functions(self):
-        """Liste toutes les fonctions"""
-        result = []
-        for name, info in self.functions.items():
-            result.append({
-                'name': name,
-                'type': info['type'],
-                'params': info.get('params', []),
-                'returns': info.get('returns', 'ANY'),
-                'description': info.get('description', ''),
-                'created': info.get('created', '')
-            })
-        return result
-    
-    def drop_function(self, name):
-        """Supprime une fonction utilisateur"""
-        if name not in self.functions:
-            return False, f"Function '{name}' not found"
+            if history_file.exists():
+                readline.read_history_file(str(history_file))
+        except Exception:
+            pass
         
-        if self.functions[name]['type'] == 'builtin':
-            return False, f"Cannot drop built-in function '{name}'"
+        # Boucle principale interactive
+        current_buffer = []
         
-        del self.functions[name]
-        return True, f"Function '{name}' dropped"
-
-# ==================== BASE DE DONNEES COMPLETE ====================
-
-class CompleteDatabase:
-    """Base de données complète avec fonctions"""
-    
-    def __init__(self, db_path=":memory:"):
-        if db_path == ":memory:":
-            self.conn = sqlite3.connect(":memory:")
-            self.is_temp = True
-        else:
-            if not db_path.endswith('.db'):
-                db_path += '.db'
-            self.db_path = db_path
-            self.conn = sqlite3.connect(db_path)
-            self.is_temp = False
-        
-        self.conn.row_factory = sqlite3.Row
-        self.cursor = self.conn.cursor()
-        
-        # Initialiser le gestionnaire de fonctions
-        self.function_manager = FunctionManager(db_path)
-        
-        # Initialiser la base
-        self._init_database()
-    
-    def _init_database(self):
-        """Initialise la base avec des données d'exemple"""
-        # Table users
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT UNIQUE NOT NULL,
-                email TEXT UNIQUE NOT NULL,
-                full_name TEXT,
-                age INTEGER,
-                city TEXT DEFAULT 'Unknown',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        # Données d'exemple
-        self.cursor.execute("SELECT COUNT(*) FROM users")
-        if self.cursor.fetchone()[0] == 0:
-            users = [
-                ('alice', 'alice@example.com', 'Alice Dupont', 28, 'Paris'),
-                ('bob', 'bob@example.com', 'Bob Martin', 35, 'Lyon'),
-                ('charlie', 'charlie@example.com', 'Charlie Durand', 42, 'Marseille'),
-                ('diana', 'diana@example.com', 'Diana Leroy', 31, 'Toulouse')
-            ]
-            self.cursor.executemany(
-                "INSERT INTO users (username, email, full_name, age, city) VALUES (?, ?, ?, ?, ?)",
-                users
-            )
-        
-        # Table products
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS products (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                description TEXT,
-                price REAL NOT NULL,
-                category TEXT,
-                stock INTEGER DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        self.cursor.execute("SELECT COUNT(*) FROM products")
-        if self.cursor.fetchone()[0] == 0:
-            products = [
-                ('Laptop Pro', 'High-performance laptop', 1299.99, 'Electronics', 15),
-                ('Smartphone X', 'Latest smartphone', 899.99, 'Electronics', 30),
-                ('Tablet Lite', 'Lightweight tablet', 499.99, 'Electronics', 25),
-                ('Headphones', 'Noise-cancelling', 199.99, 'Audio', 40)
-            ]
-            self.cursor.executemany(
-                "INSERT INTO products (name, description, price, category, stock) VALUES (?, ?, ?, ?, ?)",
-                products
-            )
-        
-        # Table pour stocker les fonctions utilisateur
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS gsql_functions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT UNIQUE NOT NULL,
-                params TEXT,
-                body TEXT NOT NULL,
-                returns TEXT DEFAULT 'TEXT',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        # Charger les fonctions depuis la table
-        self._load_functions_from_db()
-        
-        self.conn.commit()
-    
-    def _load_functions_from_db(self):
-        """Charge les fonctions depuis la table"""
-        try:
-            self.cursor.execute("SELECT name, params, body, returns FROM gsql_functions")
-            for row in self.cursor.fetchall():
-                params = json.loads(row['params']) if row['params'] else []
-                success, msg = self.function_manager.create_function(
-                    row['name'], params, row['body'], row['returns']
-                )
-                if not success:
-                    print(Colors.warning(f"Failed to load function {row['name']}: {msg}"))
-        except:
-            pass  # Table peut ne pas exister encore
-    
-    def _save_function_to_db(self, name, params, body, returns):
-        """Sauvegarde une fonction dans la table"""
-        try:
-            params_json = json.dumps(params)
-            self.cursor.execute(
-                "INSERT INTO gsql_functions (name, params, body, returns) VALUES (?, ?, ?, ?)",
-                (name, params_json, body, returns)
-            )
-            self.conn.commit()
-        except sqlite3.IntegrityError:
-            # Mettre à jour si existe déjà
-            self.cursor.execute(
-                "UPDATE gsql_functions SET params = ?, body = ?, returns = ? WHERE name = ?",
-                (params_json, body, returns, name)
-            )
-            self.conn.commit()
-    
-    def execute(self, sql):
-        """Exécute une commande SQL"""
-        sql = sql.strip()
-        sql_upper = sql.upper()
-        
-        # Commandes spéciales
-        if sql_upper == "SHOW TABLES" or sql == ".tables":
-            return self._show_tables()
-        elif sql_upper == "SHOW FUNCTIONS":
-            return self._show_functions()
-        elif sql_upper == "HELP":
-            return self._show_help()
-        
-        # CREATE FUNCTION
-        if sql_upper.startswith("CREATE FUNCTION"):
-            return self._create_function(sql)
-        
-        # DROP FUNCTION
-        if sql_upper.startswith("DROP FUNCTION"):
-            return self._drop_function(sql)
-        
-        # Commandes SQL normales
-        try:
-            # Remplacer les appels de fonction
-            processed_sql = self._process_functions_in_sql(sql)
-            
-            self.cursor.execute(processed_sql)
-            
-            if sql_upper.startswith("SELECT"):
-                rows = self.cursor.fetchall()
-                if self.cursor.description:
-                    columns = [desc[0] for desc in self.cursor.description]
-                    result_rows = []
-                    for row in rows:
-                        row_dict = {}
-                        for i, col in enumerate(columns):
-                            row_dict[col] = row[i]
-                        result_rows.append(row_dict)
-                else:
-                    result_rows = [row[0] for row in rows] if rows else []
-                
-                return {
-                    'type': 'select',
-                    'rows': result_rows,
-                    'count': len(result_rows),
-                    'success': True
-                }
-            else:
-                self.conn.commit()
-                return {
-                    'type': 'command',
-                    'message': 'Command executed successfully',
-                    'rows_affected': self.cursor.rowcount,
-                    'success': True
-                }
-                
-        except Exception as e:
-            return {
-                'type': 'error',
-                'message': str(e),
-                'success': False
-            }
-    
-    def _process_functions_in_sql(self, sql):
-        """Traite les appels de fonction dans le SQL"""
-        # Pattern pour détecter les fonctions: FUNC(arg1, arg2, ...)
-        pattern = r'(\w+)\s*\(([^)]+)\)'
-        
-        def replace_func(match):
-            func_name = match.group(1)
-            args_str = match.group(2)
-            
-            # Vérifier si c'est une fonction connue
-            if func_name in self.function_manager.functions:
-                # Séparer les arguments
-                args = []
-                current = ""
-                in_quotes = False
-                quote_char = None
-                paren_depth = 0
-                
-                for char in args_str:
-                    if char in ['"', "'"] and not in_quotes:
-                        in_quotes = True
-                        quote_char = char
-                        current += char
-                    elif char == quote_char and in_quotes:
-                        in_quotes = False
-                        current += char
-                    elif char == '(' and not in_quotes:
-                        paren_depth += 1
-                        current += char
-                    elif char == ')' and not in_quotes:
-                        paren_depth -= 1
-                        current += char
-                    elif char == ',' and not in_quotes and paren_depth == 0:
-                        args.append(current.strip())
-                        current = ""
-                    else:
-                        current += char
-                
-                if current:
-                    args.append(current.strip())
-                
-                # Évaluer la fonction
+        while self.running:
+            try:
+                # Lire la ligne
                 try:
-                    # Nettoyer les arguments (enlever guillemets)
-                    clean_args = []
-                    for arg in args:
-                        arg = arg.strip()
-                        if (arg.startswith("'") and arg.endswith("'")) or \
-                           (arg.startswith('"') and arg.endswith('"')):
-                            arg = arg[1:-1]
-                        clean_args.append(arg)
+                    line = input(self.prompt).strip()
+                except EOFError:
+                    print("\nAu revoir!")
+                    break
+                except KeyboardInterrupt:
+                    print("\nUtilisez '\\quit' pour quitter.")
+                    continue
+                
+                # Ignorer les lignes vides
+                if not line:
+                    continue
+                
+                # Sauvegarder dans l'historique
+                self.command_history.append(line)
+                readline.add_history(line)
+                
+                # Ajouter à la buffer si multiligne
+                current_buffer.append(line)
+                buffer_text = ' '.join(current_buffer)
+                
+                # Vérifier si la commande est complète (se termine par ; ou est une commande méta)
+                if buffer_text.startswith('\\') or buffer_text.endswith(';') or ';' in buffer_text:
+                    # Nettoyer le point-virgule final
+                    if buffer_text.endswith(';'):
+                        buffer_text = buffer_text[:-1].strip()
                     
-                    result = self.function_manager.call_function(func_name, clean_args)
-                    
-                    # Retourner le résultat selon le type
-                    if isinstance(result, (int, float)):
-                        return str(result)
+                    # Traiter la commande
+                    if buffer_text.startswith('\\'):
+                        self.handle_meta_command(buffer_text)
                     else:
-                        return f"'{result}'"
-                        
-                except Exception as e:
-                    return f"NULL -- Error: {e}"
-            
-            # Si pas une fonction, laisser tel quel
-            return match.group(0)
+                        self.execute_query(buffer_text)
+                    
+                    # Réinitialiser le buffer
+                    current_buffer = []
+                
+            except Exception as e:
+                print(f"Erreur: {e}")
+                current_buffer = []
         
-        # Remplacer toutes les fonctions trouvées
-        processed = re.sub(pattern, replace_func, sql)
-        return processed
+        # Sauvegarder l'historique
+        try:
+            readline.write_history_file(str(history_file))
+        except Exception:
+            pass
     
-    def _create_function(self, sql):
-        """Gère CREATE FUNCTION"""
-        # Pattern: CREATE FUNCTION name(params) RETURNS type AS $$body$$ LANGUAGE plpython
-        pattern = r"CREATE\s+FUNCTION\s+(\w+)\s*\((.*?)\)\s*RETURNS\s+(\w+)\s+AS\s+\$\$(.*?)\$\$\s+LANGUAGE\s+(\w+)"
-        match = re.search(pattern, sql, re.IGNORECASE | re.DOTALL)
-        
-        if not match:
-            return {
-                'type': 'error',
-                'message': 'Invalid CREATE FUNCTION syntax. Use: CREATE FUNCTION name(params) RETURNS type AS $$code$$ LANGUAGE plpython',
-                'success': False
-            }
-        
-        name = match.group(1)
-        params_str = match.group(2)
-        returns = match.group(3)
-        body = match.group(4).strip()
-        language = match.group(5).lower()
-        
-        # Valider le langage
-        if language not in ['plpython', 'python']:
-            return {
-                'type': 'error',
-                'message': f"Unsupported language: {language}. Use 'python' or 'plpython'",
-                'success': False
-            }
-        
-        # Extraire les paramètres
-        params = []
-        if params_str.strip():
-            for param in params_str.split(','):
-                param = param.strip()
-                if param:
-                    # Enlever le type si présent: "param TYPE" -> "param"
-                    parts = param.split()
-                    param_name = parts[0]
-                    params.append(param_name)
-        
-        # Créer la fonction
-        success, message = self.function_manager.create_function(name, params, body, returns)
-        
-        if success:
-            # Sauvegarder dans la table
-            self._save_function_to_db(name, params, body, returns)
+    def execute_file(self, file_path: str):
+        """Exécute les commandes depuis un fichier"""
+        try:
+            with open(file_path, 'r') as f:
+                content = f.read()
             
-            return {
-                'type': 'create_function',
-                'message': message,
-                'name': name,
-                'params': params,
-                'returns': returns,
-                'success': True
-            }
-        else:
-            return {
-                'type': 'error',
-                'message': message,
-                'success': False
-            }
+            # Diviser par les points-virgules
+            queries = [q.strip() for q in content.split(';') if q.strip()]
+            
+            for query in queries:
+                print(f"\n>>> {query}")
+                if query.startswith('\\'):
+                    self.handle_meta_command(query)
+                else:
+                    self.execute_query(query)
+                    
+        except FileNotFoundError:
+            print(f"Fichier non trouvé: {file_path}")
+        except Exception as e:
+            print(f"Erreur lors de l'exécution du fichier: {e}")
     
-    def _drop_function(self, sql):
-        """Gère DROP FUNCTION"""
-        pattern = r"DROP\s+FUNCTION\s+(\w+)"
-        match = re.search(pattern, sql, re.IGNORECASE)
+    def run(self, args=None):
+        """Point d'entrée principal"""
+        parser = self.setup_argparse()
         
-        if not match:
-            return {
-                'type': 'error',
-                'message': 'Invalid DROP FUNCTION syntax. Use: DROP FUNCTION name',
-                'success': False
-            }
+        if args is None:
+            args = sys.argv[1:]
         
-        name = match.group(1)
-        success, message = self.function_manager.drop_function(name)
+        # Si pas d'arguments, mode interactif par défaut
+        if not args:
+            self.interactive_mode()
+            return
         
-        if success:
-            # Supprimer de la table
+        parsed_args = parser.parse_args(args)
+        
+        # Traiter les options qui quittent immédiatement
+        if parsed_args.version:
+            self.print_version()
+            return
+        
+        if parsed_args.license:
+            print("GSQL - Licence MIT")
+            print("Copyright (c) 2024 Gopu Inc.")
+            return
+        
+        # Charger la configuration personnalisée si spécifiée
+        if parsed_args.config:
             try:
-                self.cursor.execute("DELETE FROM gsql_functions WHERE name = ?", (name,))
-                self.conn.commit()
-            except:
-                pass
-            
-            return {
-                'type': 'drop_function',
-                'message': message,
-                'success': True
-            }
-        else:
-            return {
-                'type': 'error',
-                'message': message,
-                'success': False
-            }
-    
-    def _show_tables(self):
-        """Affiche les tables"""
-        self.cursor.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-        tables = []
-        for row in self.cursor.fetchall():
-            table_name = row[0]
-            try:
-                self.cursor.execute(f"SELECT COUNT(*) as count FROM {table_name}")
-                row_count = self.cursor.fetchone()['count']
-            except:
-                row_count = 0
-            
-            tables.append({
-                'table': table_name,
-                'rows': row_count
-            })
+                import yaml
+                with open(parsed_args.config, 'r') as f:
+                    custom_config = yaml.safe_load(f)
+                    self.config.update(custom_config)
+            except Exception as e:
+                print(f"Erreur de chargement de la configuration: {e}")
         
-        return {
-            'type': 'tables',
-            'rows': tables,
-            'count': len(tables),
-            'message': f'Found {len(tables)} table(s)',
-            'success': True
-        }
-    
-    def _show_functions(self):
-        """Affiche les fonctions"""
-        functions = self.function_manager.list_functions()
+        # Définir le répertoire de données
+        if parsed_args.data_dir:
+            if 'storage' not in self.config:
+                self.config['storage'] = {}
+            self.config['storage']['data_dir'] = parsed_args.data_dir
         
-        return {
-            'type': 'functions',
-            'rows': functions,
-            'count': len(functions),
-            'message': f'Found {len(functions)} function(s)',
-            'success': True
-        }
-    
-    def _show_help(self):
-        """Affiche l'aide"""
-        help_text = f"""
-{Colors.bold("GSQL COMPLETE - Command Reference")}
-
-{Colors.GREEN}DATABASE COMMANDS:{Colors.RESET}
-  SHOW TABLES                    - List all tables
-  SHOW FUNCTIONS                 - List all functions
-  HELP                           - This help
-
-{Colors.GREEN}SQL COMMANDS:{Colors.RESET}
-  SELECT * FROM table            - Query data
-  INSERT INTO table VALUES (...) - Insert data
-  CREATE TABLE name (columns)    - Create table
-  DROP TABLE name                - Drop table
-  UPDATE table SET col=value     - Update data
-  DELETE FROM table              - Delete data
-
-{Colors.GREEN}FUNCTION COMMANDS:{Colors.RESET}
-  CREATE FUNCTION name(params) RETURNS type AS $$code$$ LANGUAGE plpython
-  DROP FUNCTION name             - Drop function
-
-{Colors.GREEN}DOT COMMANDS:{Colors.RESET}
-  .tables                        - Alias for SHOW TABLES
-  .functions                     - Alias for SHOW FUNCTIONS
-  .help                          - This help
-  .exit / .quit                  - Exit
-  .clear                         - Clear screen
-
-{Colors.GREEN}EXAMPLE FUNCTIONS:{Colors.RESET}
-  CREATE FUNCTION greeting(name) RETURNS TEXT AS $$
-      return f'Hello, {{name}}!'
-  $$ LANGUAGE plpython
-
-  CREATE FUNCTION discount(price, percent) RETURNS REAL AS $$
-      return price * (1 - percent/100)
-  $$ LANGUAGE plpython
-
-  SELECT username, greeting(username) FROM users
-  SELECT name, price, discount(price, 10) as discounted FROM products
-"""
-        return {
-            'type': 'help',
-            'message': help_text,
-            'success': True
-        }
-    
-    def close(self):
-        """Ferme la connexion"""
-        if self.conn:
-            self.conn.close()
-
-# ==================== INTERFACE CLI ====================
-
-class CompleteCLI(cmd.Cmd):
-    """Interface CLI complète"""
-    
-    intro = f"""
-{Colors.BOLD}{Colors.BLUE}╔═════════════════════════════╗
-║               GSQL          ║
-║                             ║
-╚═════════════════════════════╝{Colors.RESET}
-
-Type {Colors.GREEN}help{Colors.RESET} for commands, {Colors.GREEN}exit{Colors.RESET} to quit.
-Database ready with sample data and functions.
-"""
-    
-    prompt = f'{Colors.GREEN}gsql>{Colors.RESET} '
-    
-    def __init__(self, db_path=":memory:"):
-        super().__init__()
-        self.db = CompleteDatabase(db_path)
-        print(Colors.success(f"Connected to: {db_path}"))
-        
-        # Afficher les tables
-        result = self.db.execute("SHOW TABLES")
-        if result['success'] and result['rows']:
-            tables = [t['table'] for t in result['rows'][:5]]
-            print(Colors.info(f"Tables: {', '.join(tables)}"))
-        
-        # Afficher les fonctions intégrées
-        result = self.db.execute("SHOW FUNCTIONS")
-        if result['success'] and result['rows']:
-            funcs = [f['name'] for f in result['rows'] if f['type'] == 'builtin'][:5]
-            print(Colors.info(f"Built-in functions: {', '.join(funcs)}"))
-    
-    # ===== COMMANDES DE BASE =====
-    
-    def do_exit(self, arg):
-        """Exit GSQL"""
-        print(Colors.success("👋 Goodbye!"))
-        self.db.close()
-        return True
-    
-    def do_quit(self, arg):
-        """Exit GSQL"""
-        return self.do_exit(arg)
-    
-    def do_clear(self, arg):
-        """Clear screen"""
-        os.system('cls' if os.name == 'nt' else 'clear')
-    
-    def do_help(self, arg):
-        """Show help"""
-        result = self.db.execute("HELP")
-        self._print_result(result)
-    
-    # ===== COMMANDES SPECIALES =====
-    
-    def do_tables(self, arg):
-        """Show tables"""
-        result = self.db.execute("SHOW TABLES")
-        self._print_result(result)
-    
-    def do_functions(self, arg):
-        """Show functions"""
-        result = self.db.execute("SHOW FUNCTIONS")
-        self._print_result(result)
-    
-    # ===== COMMANDES SQL & DOT =====
-    
-    def default(self, line):
-        """Handle all commands"""
-        line = line.strip()
-        if not line:
+        # Initialiser une base de données si demandé
+        if parsed_args.init_db:
+            if self.init_database(parsed_args.init_db):
+                print(f"Base de données '{parsed_args.init_db}' initialisée.")
             return
         
-        # Dot commands
-        if line.startswith('.'):
-            cmd = line[1:].lower().split()[0] if ' ' in line else line[1:]
-            
-            if cmd == 'tables':
-                self.do_tables("")
-            elif cmd == 'functions':
-                self.do_functions("")
-            elif cmd == 'help':
-                self.do_help("")
-            elif cmd in ['exit', 'quit']:
-                return self.do_exit("")
-            elif cmd == 'clear':
-                self.do_clear("")
-            else:
-                print(Colors.error(f"Unknown command: {line}"))
-                print(Colors.info("Try: .tables, .functions, .help, .exit"))
-            return
-        
-        # SQL commands
-        self._execute_sql(line)
-    
-    def _execute_sql(self, sql):
-        """Execute SQL command"""
-        # Coloriser les mots-clés SQL
-        colored = sql
-        keywords = ['SELECT', 'FROM', 'WHERE', 'INSERT', 'INTO', 'VALUES',
-                   'CREATE', 'TABLE', 'DROP', 'FUNCTION', 'RETURNS', 'AS',
-                   'LANGUAGE', 'UPDATE', 'SET', 'DELETE', 'SHOW', 'HELP']
-        
-        for kw in keywords:
-            colored = re.sub(r'\b' + kw + r'\b', Colors.sql(kw), colored, flags=re.IGNORECASE)
-        
-        print(f"{Colors.CYAN}SQL:{Colors.RESET} {colored}")
-        
-        # Exécuter
-        result = self.db.execute(sql)
-        self._print_result(result)
-    
-    def _print_result(self, result):
-        """Print formatted result"""
-        if not isinstance(result, dict):
-            print(result)
-            return
-        
-        if not result.get('success', True):
-            print(Colors.error(result.get('message', 'Error')))
-            return
-        
-        if result.get('type') == 'tables':
-            rows = result.get('rows', [])
-            if rows:
-                print(f"\n{Colors.BOLD}📊 Tables ({len(rows)}):{Colors.RESET}")
-                for table in rows:
-                    print(f"  {Colors.GREEN}{table['table']:20}{Colors.RESET} - {table['rows']} rows")
-            else:
-                print(Colors.warning("No tables found"))
-        
-        elif result.get('type') == 'functions':
-            rows = result.get('rows', [])
-            if rows:
-                print(f"\n{Colors.BOLD}🔧 Functions ({len(rows)}):{Colors.RESET}")
-                
-                # Built-in functions
-                builtins = [f for f in rows if f['type'] == 'builtin']
-                if builtins:
-                    print(f"\n  {Colors.CYAN}Built-in:{Colors.RESET}")
-                    for func in builtins[:10]:
-                        print(f"    {Colors.YELLOW}{func['name']}{Colors.RESET} - {func.get('description', '')}")
-                
-                # User functions
-                user_funcs = [f for f in rows if f['type'] == 'user']
-                if user_funcs:
-                    print(f"\n  {Colors.MAGENTA}User-defined:{Colors.RESET}")
-                    for func in user_funcs:
-                        params = ', '.join(func.get('params', []))
-                        print(f"    {Colors.GREEN}{func['name']}({params}){Colors.RESET} → {func.get('returns', 'ANY')}")
-                
-                if len(rows) > 10:
-                    print(Colors.info(f"... and {len(rows)-10} more functions"))
-            else:
-                print(Colors.warning("No functions found"))
-        
-        elif result.get('type') == 'select':
-            rows = result.get('rows', [])
-            count = result.get('count', 0)
-            
-            if count == 0:
-                print(Colors.warning("No results found"))
-                return
-            
-            print(f"\n{Colors.BOLD}📊 Results: {count} row(s){Colors.RESET}")
-            
-            if rows and isinstance(rows[0], dict):
-                headers = list(rows[0].keys())
-                
-                # Calculer les largeurs
-                widths = {h: len(str(h)) for h in headers}
-                for row in rows[:20]:
-                    for h in headers:
-                        widths[h] = max(widths[h], len(str(row.get(h, ''))))
-                
-                # En-tête
-                header_line = " | ".join(f"{Colors.BLUE}{h:<{widths[h]}}{Colors.RESET}" for h in headers)
-                print(header_line)
-                print("-" * sum(widths.values() + [3 * (len(headers) - 1)]))
-                
-                # Données
-                for i, row in enumerate(rows[:20]):
-                    values = []
-                    for h in headers:
-                        value = str(row.get(h, ''))
-                        if i % 2 == 0:
-                            values.append(f"{Colors.WHITE}{value:<{widths[h]}}{Colors.RESET}")
-                        else:
-                            values.append(f"{Colors.CYAN}{value:<{widths[h]}}{Colors.RESET}")
-                    print(" | ".join(values))
-                
-                if len(rows) > 20:
-                    print(Colors.info(f"... and {len(rows)-20} more rows"))
-            else:
-                for i, row in enumerate(rows[:20], 1):
-                    print(f"{i:3}. {row}")
-                if len(rows) > 20:
-                    print(Colors.info(f"... and {len(rows)-20} more rows"))
-        
-        elif result.get('type') in ['command', 'create_function', 'drop_function']:
-            print(Colors.success(result.get('message', 'Command executed')))
-        
-        elif result.get('type') == 'help':
-            print(result.get('message', ''))
-        
-        else:
-            print(result)
-    
-    # ===== NLP SIMPLE =====
-    
-    def do_nl(self, arg):
-        """Natural language query: nl [question]"""
-        if not arg:
-            print(Colors.error("Please provide a question"))
-            return
-        
-        arg_lower = arg.lower()
-        
-        # Traductions simples
-        translations = {
-            'show tables': 'SHOW TABLES',
-            'list tables': 'SHOW TABLES',
-            'show functions': 'SHOW FUNCTIONS',
-            'list functions': 'SHOW FUNCTIONS',
-            'help': 'HELP',
-            'users': 'SELECT * FROM users LIMIT 5',
-            'products': 'SELECT * FROM products LIMIT 5',
-            'create function': 'HELP',
-            'make function': 'HELP'
-        }
-        
-        for key, sql in translations.items():
-            if key in arg_lower:
-                self._execute_sql(sql)
+        # Se connecter à une base de données si spécifiée
+        if parsed_args.database:
+            if not self.connect_database(parsed_args.database):
                 return
         
-        # Si "table" est mentionné
-        if 'table' in arg_lower:
-            words = arg_lower.split()
-            for word in words:
-                if word != 'table' and len(word) > 2:
-                    self._execute_sql(f"SELECT * FROM {word} LIMIT 5")
-                    return
-            self.do_tables("")
+        # Mode exécution de commande unique
+        if parsed_args.execute:
+            if not self.database and not parsed_args.database:
+                print("Erreur: Spécifiez une base de données avec --database")
+                return
+            
+            if parsed_args.execute.startswith('\\'):
+                self.handle_meta_command(parsed_args.execute)
+            else:
+                self.execute_query(parsed_args.execute)
             return
         
-        print(Colors.info("Try: 'show tables', 'show functions', 'users', 'products', 'help'"))
+        # Mode fichier
+        if parsed_args.file:
+            if not self.database and not parsed_args.database:
+                print("Erreur: Spécifiez une base de données avec --database")
+                return
+            
+            self.execute_file(parsed_args.file)
+            return
+        
+        # Mode interactif (par défaut ou avec --interactive)
+        self.interactive_mode()
 
-# ==================== MAIN ====================
 
 def main():
-    """Main function"""
-    import argparse
-    
-    parser = argparse.ArgumentParser(
-        description='GSQL Complete - SQL Database with Functions',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=f"""
-{Colors.BOLD}Examples:{Colors.RESET}
-  gsql                          # Interactive mode
-  gsql mydatabase.db            # Use specific database
-  gsql --sql "SHOW TABLES"      # Single command
-  gsql --demo                   # Run demonstration
+    """Fonction principale"""
+    cli = GSQLCLI()
+    cli.run()
 
-{Colors.BOLD}Quick Start:{Colors.RESET}
-  1. Create a function:
-     {Colors.GREEN}CREATE FUNCTION greeting(name) RETURNS TEXT AS $$ return f'Hello, {{name}}!' $$ LANGUAGE plpython{Colors.RESET}
-  
-  2. Use the function:
-     {Colors.GREEN}SELECT username, greeting(username) FROM users{Colors.RESET}
-  
-  3. See all functions:
-     {Colors.GREEN}SHOW FUNCTIONS{Colors.RESET}
-"""
-    )
-    
-    parser.add_argument(
-        'database',
-        nargs='?',
-        default=':memory:',
-        help='Database file (default: in-memory)'
-    )
-    
-    parser.add_argument(
-        '--sql',
-        help='Execute SQL command and exit'
-    )
-    
-    parser.add_argument(
-        '--demo',
-        action='store_true',
-        help='Run function demonstration'
-    )
-    
-    parser.add_argument(
-        '--no-colors',
-        action='store_true',
-        help='Disable colors'
-    )
-    
-    args = parser.parse_args()
-    
-    # Désactiver les couleurs
-    if args.no_colors:
-        for attr in dir(Colors):
-            if not attr.startswith('_'):
-                setattr(Colors, attr, '')
-    
-    # Mode commande unique
-    if args.sql:
-        db = CompleteDatabase(args.database)
-        result = db.execute(args.sql)
-        cli = CompleteCLI(args.database)
-        cli._print_result(result)
-        db.close()
-        return
-    
-    # Mode démo
-    if args.demo:
-        cli = CompleteCLI(args.database)
-        print(f"\n{Colors.BOLD}🎬 FUNCTION DEMONSTRATION{Colors.RESET}\n")
-        
-        # Créer une fonction
-        print(f"{Colors.CYAN}1. Creating a function:{Colors.RESET}")
-        cli._execute_sql("""
-            CREATE FUNCTION greeting(name) RETURNS TEXT AS $$
-                return f'Hello, {name}!'
-            $$ LANGUAGE plpython
-        """)
-        
-        # Utiliser la fonction
-        print(f"\n{Colors.CYAN}2. Using the function:{Colors.RESET}")
-        cli._execute_sql("SELECT username, greeting(username) FROM users LIMIT 3")
-        
-        # Créer une autre fonction
-        print(f"\n{Colors.CYAN}3. Creating a discount function:{Colors.RESET}")
-        cli._execute_sql("""
-            CREATE FUNCTION discount(price, percent) RETURNS REAL AS $$
-                return price * (1 - percent/100)
-            $$ LANGUAGE plpython
-        """)
-        
-        # Utiliser la fonction de discount
-        print(f"\n{Colors.CYAN}4. Using discount function:{Colors.RESET}")
-        cli._execute_sql("SELECT name, price, discount(price, 10) as discounted FROM products")
-        
-        # Montrer toutes les fonctions
-        print(f"\n{Colors.CYAN}5. All functions:{Colors.RESET}")
-        cli._execute_sql("SHOW FUNCTIONS")
-        
-        cli.db.close()
-        return
-    
-    # Mode interactif
-    try:
-        cli = CompleteCLI(args.database)
-        cli.cmdloop()
-    except KeyboardInterrupt:
-        print(f"\n{Colors.warning('Interrupted')}")
-    except Exception as e:
-        print(Colors.error(f"Fatal error: {e}"))
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
