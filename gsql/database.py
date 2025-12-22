@@ -221,23 +221,24 @@ class Database:
                 return self._auto_recover(recursion_depth + 1)
             else:
                 raise SQLExecutionError(f"Database recovery failed after {MAX_RECURSION} attempts: {e}")
-    
-    def execute(self, sql: str, params: Dict = None, 
-            use_cache: bool = True, timeout: int = None) -> Dict:
-    """
-    Exécute une requête SQL sur la base de données
-    
-    Args:
-        sql: Requête SQL à exécuter
-        params: Paramètres pour la requête préparée
-        use_cache: Utiliser le cache de requêtes
-        timeout: Timeout en secondes
-    
-    Returns:
-        Dict: Résultats formatés de la requête
-    """
-    if not self.is_open:
-        raise SQLExecutionError("Database is closed")
+
+
+  def execute(self, sql: str, params: Dict = None,
+              use_cache: bool = True, timeout: int = None) -> Dict:
+        """
+        Exécute une requête SQL sur la base de données
+        
+        Args:
+            sql: Requête SQL à exécuter
+            params: Paramètres pour la requête préparée
+            use_cache: Utiliser le cache de requêtes
+            timeout: Timeout en secondes
+        
+        Returns:
+            Dict: Résultats formatés de la requête
+        """
+                    if not self.is_open:
+                        raise SQLExecutionError("Database is closed")
     
     # Détecter les commandes spéciales GSQL
     special_result = self._handle_special_commands(sql)
