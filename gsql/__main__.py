@@ -34,6 +34,7 @@ class GSQLCLI(cmd.Cmd):
     
     Type 'help' for commands, 'exit' to quit.
     Use 'nl' for natural language queries.
+    Use '.tables' to list tables, '.help' for help.
     """
     
     prompt = 'gsql> '
@@ -50,7 +51,7 @@ class GSQLCLI(cmd.Cmd):
             print("Please check your installation.")
             sys.exit(1)
         
-        self.database_path = database_path or 'default.gsql'
+        self.database_path = database_path or ':memory:'
         self.use_nlp = use_nlp
         
         # Initialize database
@@ -64,7 +65,14 @@ class GSQLCLI(cmd.Cmd):
             sys.exit(1)
     
     def do_sql(self, arg):
-        """Execute SQL command: sql SELECT * FROM table"""
+        """
+        Execute SQL command: sql SELECT * FROM table
+        
+        Examples:
+          sql SELECT * FROM users
+          sql CREATE TABLE products (id INT, name TEXT)
+          sql INSERT INTO users VALUES (1, 'Alice')
+        """
         if not arg:
             print("❌ Please provide SQL command")
             return
@@ -76,7 +84,15 @@ class GSQLCLI(cmd.Cmd):
             print(f"❌ SQL Error: {str(e)}")
     
     def do_nl(self, arg):
-        """Execute natural language query: nl show all users"""
+        """
+        Execute natural language query
+        
+        Examples:
+          nl montrer tables
+          nl table users
+          nl combien de users
+          nl aide
+        """
         if not arg:
             print("❌ Please provide a question")
             return
@@ -96,44 +112,165 @@ class GSQLCLI(cmd.Cmd):
         """Execute command (alias for default): exec SELECT * FROM table"""
         self.default(arg)
     
-    def do_create_function(self, arg):
-        """Create a user-defined function"""
+    def do_create(self, arg):
+        """
+        Create objects: create table|function
+        
+        Examples:
+          create table users (id INT, name TEXT)
+          create function name(params) RETURNS type AS $$code$$ LANGUAGE plpython
+        """
         if not arg:
-            print("❌ Please provide function definition")
+            print("❌ Please specify what to create: table|function")
             return
         
         try:
-            result = self.db.create_function_from_sql(arg)
-            print(f"✅ {result}")
+            if arg.lower().startswith('table'):
+                sql = f"CREATE {arg}"
+                result = self.db.execute(sql)
+                self._display_result(result)
+            elif arg.lower().startswith('function'):
+                sql = f"CREATE {arg}"
+                result = self.db.execute(sql)
+                self._display_result(result)
+            else:
+                print("❌ Unknown create type. Use: create table|function")
         except Exception as e:
             print(f"❌ Error: {str(e)}")
     
-    def do_list_functions(self, arg):
-        """List all available functions"""
+    def do_insert(self, arg):
+        """
+        Insert data: insert INTO table VALUES (values)
+        
+        Example: insert INTO users VALUES (1, 'Alice')
+        """
+        if not arg:
+            print("❌ Please provide INSERT statement")
+            return
+        
         try:
-            functions = self.db.list_functions()
-            
-            if not functions:
-                print("📝 No functions available")
-                return
-            
-            print("\n" + "="*60)
-            print(f"{'FUNCTIONS':^60}")
-            print("="*60)
-            
-            for i, func in enumerate(functions, 1):
-                if func.get('type') == 'builtin':
-                    print(f"{i:2}. 📦 {func['name']}()")
-                else:
-                    created = func.get('created_at', 'unknown')
-                    if hasattr(created, 'strftime'):
-                        created = created.strftime('%Y-%m-%d')
-                    print(f"{i:2}. 👤 {func['name']}({func.get('params', '')}) → {func.get('return_type', 'TEXT')} ({created})")
-            
-            print("="*60)
-            
+            if not arg.upper().startswith('INTO'):
+                arg = f"INTO {arg}"
+            sql = f"INSERT {arg}"
+            result = self.db.execute(sql)
+            self._display_result(result)
         except Exception as e:
             print(f"❌ Error: {str(e)}")
+    
+    def do_select(self, arg):
+        """
+        Select data: select * FROM table [WHERE condition]
+        
+        Examples:
+          select * FROM users
+          select name, age FROM users WHERE age > 25
+        """
+        if not arg:
+            print("❌ Please provide SELECT statement")
+            return
+        
+        try:
+            sql = f"SELECT {arg}"
+            result = self.db.execute(sql)
+            self._display_result(result)
+        except Exception as e:
+            print(f"❌ Error: {str(e)}")
+    
+    def do_show(self, arg):
+        """
+        Show information: show tables|functions
+        
+        Examples:
+          show tables
+          show functions
+        """
+        if not arg:
+            print("❌ Please specify: tables|functions")
+            return
+        
+        arg = arg.lower().strip()
+        
+        try:
+            if arg == 'tables':
+                result = self.db.execute("SHOW TABLES")
+                self._display_result(result)
+            elif arg == 'functions':
+                result = self.db.execute("SHOW FUNCTIONS")
+                self._display_result(result)
+            else:
+                print(f"❌ Unknown show command: {arg}")
+        except Exception as e:
+            print(f"❌ Error: {str(e)}")
+    
+    def do_tables(self, arg):
+        """List all tables (alias for .tables)"""
+        self.do_show('tables')
+    
+    def do_functions(self, arg):
+        """List all functions (alias for .tables)"""
+        self.do_show('functions')
+    
+    def do_describe(self, arg):
+        """
+        Describe table structure: describe table_name
+        
+        Example: describe users
+        """
+        if not arg:
+            print("❌ Please provide table name")
+            return
+        
+        try:
+            # Simple implementation - would need schema support
+            print(f"📋 Table: {arg}")
+            print("   Columns would be listed here")
+            print("   (Full schema support coming soon)")
+        except Exception as e:
+            print(f"❌ Error: {str(e)}")
+    
+    def do_import(self, arg):
+        """
+        Import CSV file: import file.csv [table_name]
+        
+        Examples:
+          import users.csv
+          import data.csv mytable
+        """
+        if not arg:
+            print("❌ Please provide filename")
+            return
+        
+        parts = arg.split()
+        filename = parts[0]
+        table_name = parts[1] if len(parts) > 1 else None
+        
+        try:
+            result = self.db.import_csv(filename, table_name)
+            print(f"✅ {result}")
+        except Exception as e:
+            print(f"❌ Import error: {str(e)}")
+    
+    def do_export(self, arg):
+        """
+        Export table to CSV: export table_name [file.csv]
+        
+        Examples:
+          export users
+          export products products.csv
+        """
+        if not arg:
+            print("❌ Please provide table name")
+            return
+        
+        parts = arg.split()
+        table_name = parts[0]
+        filename = parts[1] if len(parts) > 1 else f"{table_name}.csv"
+        
+        try:
+            result = self.db.export_csv(table_name, filename)
+            print(f"✅ {result}")
+        except Exception as e:
+            print(f"❌ Export error: {str(e)}")
     
     def do_cache(self, arg):
         """Cache operations: cache stats, cache clear"""
@@ -165,59 +302,6 @@ class GSQLCLI(cmd.Cmd):
         else:
             print(f"❌ Unknown subcommand: {subcmd}")
     
-    def do_import(self, arg):
-        """Import CSV file: import file.csv [table_name]"""
-        if not arg:
-            print("❌ Please provide filename")
-            return
-        
-        parts = arg.split()
-        filename = parts[0]
-        table_name = parts[1] if len(parts) > 1 else None
-        
-        try:
-            result = self.db.import_csv(filename, table_name)
-            print(f"✅ {result}")
-        except Exception as e:
-            print(f"❌ Import error: {str(e)}")
-    
-    def do_export(self, arg):
-        """Export table to CSV: export table_name [file.csv]"""
-        if not arg:
-            print("❌ Please provide table name")
-            return
-        
-        parts = arg.split()
-        table_name = parts[0]
-        filename = parts[1] if len(parts) > 1 else f"{table_name}.csv"
-        
-        try:
-            result = self.db.export_csv(table_name, filename)
-            print(f"✅ {result}")
-        except Exception as e:
-            print(f"❌ Export error: {str(e)}")
-    
-    def do_tables(self, arg):
-        """List all tables in the database"""
-        try:
-            result = self.db.execute("SELECT name FROM sqlite_master WHERE type='table'")
-            self._display_result(result)
-        except Exception as e:
-            print(f"❌ Error: {str(e)}")
-    
-    def do_schema(self, arg):
-        """Show schema of a table: schema table_name"""
-        if not arg:
-            print("❌ Please provide table name")
-            return
-        
-        try:
-            # This is a simplified version - you'll need to implement proper schema query
-            result = self.db.execute(f"PRAGMA table_info({arg})")
-            self._display_result(result)
-        except Exception as e:
-            print(f"❌ Error: {str(e)}")
-    
     def do_clear(self, arg):
         """Clear the screen"""
         os.system('cls' if os.name == 'nt' else 'clear')
@@ -233,16 +317,106 @@ class GSQLCLI(cmd.Cmd):
         """Exit GSQL"""
         return self.do_exit(arg)
     
+    def do_EOF(self, arg):
+        """Exit on Ctrl-D"""
+        print()
+        return self.do_exit(arg)
+    
     def default(self, line):
-        """Default command handler - try to execute as SQL"""
+        """
+        Default command handler
+        
+        Handles:
+        - SQL commands (SELECT, INSERT, etc.)
+        - Dot commands (.tables, .help)
+        - GSQL commands (SHOW TABLES, etc.)
+        """
         if not line.strip():
             return
         
+        line = line.strip()
+        
+        # Handle dot commands
+        if line.startswith('.'):
+            self._handle_dot_command(line)
+            return
+        
+        # Handle SQL/GSQL commands
         try:
             result = self.db.execute(line)
             self._display_result(result)
         except Exception as e:
             print(f"❌ Error: {str(e)}")
+    
+    def _handle_dot_command(self, command):
+        """Handle SQLite-style dot commands"""
+        cmd = command[1:].lower().strip()
+        
+        if cmd in ['tables', 'table']:
+            self.do_show('tables')
+        elif cmd in ['help', '?']:
+            self._display_help()
+        elif cmd in ['exit', 'quit']:
+            self.do_exit('')
+        elif cmd == 'schema':
+            print("📋 Schema commands:")
+            print("  .tables - List tables")
+            print("  .help   - Show help")
+            print("  .exit   - Exit shell")
+        elif cmd == 'version':
+            print("📋 GSQL Version 2.0")
+        elif cmd == 'timer':
+            print("⏱️  Timer: ON (always)")
+        elif cmd == 'headers':
+            print("📋 Headers: ON (always)")
+        elif cmd == 'mode':
+            print("📋 Mode: list (tabular)")
+        elif cmd == '':
+            print("❌ Empty dot command")
+        else:
+            print(f"❌ Unknown dot command: {command}")
+            print("   Try: .tables, .help, .exit")
+    
+    def _display_help(self):
+        """Display help information"""
+        help_text = """
+GSQL Interactive Shell Help:
+
+General Commands:
+  help                        - Show this help
+  exit, quit                  - Exit the shell
+  clear                       - Clear screen
+
+SQL Commands:
+  sql <statement>             - Execute SQL statement
+  select <columns> FROM <table> - Query data
+  insert INTO <table> VALUES  - Insert data
+  create table|function       - Create objects
+
+GSQL Commands:
+  show tables|functions       - List tables/functions
+  tables, functions           - Aliases for show commands
+  nl <question>               - Natural language query
+  describe <table>            - Show table structure
+
+Data Import/Export:
+  import <file.csv> [table]   - Import CSV file
+  export <table> [file.csv]   - Export to CSV
+
+Dot Commands (SQLite-style):
+  .tables                     - List all tables
+  .help                       - Show this help
+  .exit, .quit               - Exit shell
+
+Natural Language Examples:
+  "montrer tables"            -> Show tables
+  "table users"               -> SELECT * FROM users
+  "combien de users"          -> SELECT COUNT(*) FROM users
+  "aide"                      -> Show help
+
+Type any SQL statement to execute it directly.
+"""
+        print(help_text)
     
     def _display_result(self, result):
         """Display query results in a readable format"""
@@ -255,44 +429,142 @@ class GSQLCLI(cmd.Cmd):
             return
         
         if isinstance(result, dict):
+            # Handle different result types
+            
+            # HELP messages
+            if result.get('type') == 'help' and 'message' in result:
+                print(result['message'])
+                return
+            
+            # SHOW TABLES
+            if result.get('type') in ['show_tables', 'tables'] and 'rows' in result:
+                rows = result['rows']
+                if rows:
+                    message = result.get('message', f'Found {len(rows)} table(s):')
+                    print(f"\n📊 {message}")
+                    
+                    # Try to use tabulate for nice formatting
+                    try:
+                        from tabulate import tabulate
+                        print(tabulate(rows, headers="keys", tablefmt="grid"))
+                    except ImportError:
+                        # Simple formatting
+                        for row in rows:
+                            if isinstance(row, dict):
+                                table_name = row.get('table', 'unknown')
+                                row_count = row.get('rows', 0)
+                                print(f"  {table_name}: {row_count} rows")
+                            else:
+                                print(f"  {row}")
+                else:
+                    print("📭 No tables found")
+                return
+            
+            # SHOW FUNCTIONS
+            if result.get('type') == 'show_functions' and 'rows' in result:
+                rows = result['rows']
+                if rows:
+                    message = result.get('message', f'Found {len(rows)} function(s):')
+                    print(f"\n🔧 {message}")
+                    
+                    for row in rows:
+                        if isinstance(row, dict):
+                            func_name = row.get('name', 'unknown')
+                            func_type = row.get('type', 'unknown')
+                            desc = row.get('description', '')
+                            
+                            if func_type == 'builtin':
+                                print(f"  📦 {func_name} - {desc}")
+                            else:
+                                created = row.get('created_at', '')
+                                if hasattr(created, 'strftime'):
+                                    created = created.strftime('%Y-%m-%d')
+                                print(f"  👤 {func_name} - User function ({created})")
+                        else:
+                            print(f"  {row}")
+                else:
+                    print("📭 No functions found")
+                return
+            
+            # SELECT results
             if 'rows' in result and result['rows']:
                 rows = result['rows']
-                print(f"\n📊 Results: {len(rows)} row(s)")
+                count = result.get('count', len(rows))
                 
-                # Simple table display
-                try:
-                    from tabulate import tabulate
-                    print(tabulate(rows, headers="keys", tablefmt="grid"))
-                except ImportError:
-                    # Fallback if tabulate not available
-                    headers = list(rows[0].keys())
-                    print(" | ".join(headers))
-                    print("-" * (len(" | ".join(headers))))
-                    for row in rows[:20]:  # Limit to 20 rows
-                        values = [str(row[h])[:30] for h in headers]
-                        print(" | ".join(values))
-                    
-                    if len(rows) > 20:
-                        print(f"... and {len(rows) - 20} more rows")
+                print(f"\n📊 Results: {count} row(s)")
+                
+                if rows:
+                    # Try to use tabulate for nice formatting
+                    try:
+                        from tabulate import tabulate
+                        print(tabulate(rows, headers="keys", tablefmt="grid"))
+                    except ImportError:
+                        # Simple table formatting
+                        if isinstance(rows[0], dict):
+                            headers = list(rows[0].keys())
+                            
+                            # Calculate column widths
+                            col_widths = {}
+                            for header in headers:
+                                col_widths[header] = len(str(header))
+                                for row in rows:
+                                    if header in row:
+                                        col_widths[header] = max(col_widths[header], len(str(row[header])))
+                            
+                            # Print header
+                            header_line = " | ".join([str(h).ljust(col_widths[h]) for h in headers])
+                            separator = "-+-".join(["-" * col_widths[h] for h in headers])
+                            print(header_line)
+                            print(separator)
+                            
+                            # Print rows
+                            for row in rows[:50]:  # Limit to 50 rows
+                                row_line = " | ".join([str(row.get(h, '')).ljust(col_widths[h]) for h in headers])
+                                print(row_line)
+                            
+                            if len(rows) > 50:
+                                print(f"... and {len(rows) - 50} more rows")
+                        else:
+                            for i, row in enumerate(rows[:50], 1):
+                                print(f"{i:3}. {row}")
+                            if len(rows) > 50:
+                                print(f"... and {len(rows) - 50} more")
+                else:
+                    print("📭 No rows returned")
             
             elif 'message' in result:
                 print(f"📋 {result['message']}")
             
             elif 'error' in result:
                 print(f"❌ Error: {result['error']}")
+            
+            else:
+                print(f"📋 Result: {result}")
         
         elif isinstance(result, list):
             if result:
                 print(f"\n📊 Results: {len(result)} row(s)")
-                for i, row in enumerate(result[:20], 1):
+                for i, row in enumerate(result[:50], 1):
                     print(f"{i:3}. {row}")
-                if len(result) > 20:
-                    print(f"... and {len(result) - 20} more")
+                if len(result) > 50:
+                    print(f"... and {len(result) - 50} more")
             else:
                 print("📭 No results")
         
         else:
             print(f"📋 Result: {result}")
+    
+    def do_help(self, arg):
+        """Show help information"""
+        if arg:
+            # Specific command help
+            cmd_func = getattr(self, 'do_' + arg, None)
+            if cmd_func and cmd_func.__doc__:
+                print(f"\n{arg}: {cmd_func.__doc__}")
+            else:
+                print(f"\nNo help available for '{arg}'")
+        else:
+            self._display_help()
 
 def main():
     """Main entry point for GSQL CLI"""
@@ -335,7 +607,7 @@ Examples:
     parser.add_argument(
         '--version',
         action='version',
-        version='GSQL 1.0.0'
+        version='GSQL 2.0'
     )
     
     args = parser.parse_args()
