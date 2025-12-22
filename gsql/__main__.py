@@ -551,13 +551,8 @@ class GSQLShell(cmd.Cmd):
             
             self.db = create_database(**db_config)
             
-            # Créer l'exécuteur - version corrigée sans auto_translate_nl
-            self.executor = create_executor(
-                storage=self.db.storage,
-                enable_nlp=self.config['executor'].get('enable_nlp', True),
-                enable_learning=self.config['executor'].get('enable_learning', False)
-                # auto_translate_nl supprimé car non supporté par QueryExecutor
-            )
+            # Créer l'exécuteur - version ultra simple
+            self.executor = create_executor(storage=self.db.storage)
             
             # Initialiser les autres composants
             self.function_manager = FunctionManager()
