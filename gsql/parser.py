@@ -1,5 +1,5 @@
 import re
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
 from .exceptions import SQLSyntaxError, FunctionError
 
 class SQLParser:
@@ -122,7 +122,7 @@ class SQLParser:
                 # ... reste de l'analyse ...
             }
         
-        return self.parse_select(sql)  # Fallback
+        return self.parse_select(sql) if hasattr(self, 'parse_select') else {'type': 'select'}
     
     def _split_arguments(self, args_str: str) -> List[str]:
         """Sépare les arguments en respectant les sous-expressions"""
@@ -152,3 +152,40 @@ class SQLParser:
         """Extrait l'alias AS d'une expression"""
         match = re.search(r'AS\s+(\w+)$', expr, re.IGNORECASE)
         return match.group(1) if match else None
+    
+    def parse(self, sql: str) -> Dict[str, Any]:
+        """
+        Parse generic SQL statement
+        
+        Args:
+            sql (str): SQL statement
+            
+        Returns:
+            Dict: Parsed SQL structure
+        """
+        sql = sql.strip()
+        
+        # Check for CREATE FUNCTION
+        if sql.upper().startswith('CREATE FUNCTION'):
+            return self.parse_create_function(sql)
+        
+        # Check for SELECT with functions
+        elif sql.upper().startswith('SELECT'):
+            return self.parse_select_with_functions(sql)
+        
+        # Default parsing for other statements
+        else:
+            # Simple keyword detection
+            sql_upper = sql.upper()
+            if sql_upper.startswith('INSERT'):
+                return {'type': 'insert', 'sql': sql}
+            elif sql_upper.startswith('UPDATE'):
+                return {'type': 'update', 'sql': sql}
+            elif sql_upper.startswith('DELETE'):
+                return {'type': 'delete', 'sql': sql}
+            elif sql_upper.startswith('CREATE TABLE'):
+                return {'type': 'create_table', 'sql': sql}
+            elif sql_upper.startswith('DROP TABLE'):
+                return {'type': 'drop_table', 'sql': sql}
+            else:
+                return {'type': 'unknown', 'sql': sql}
