@@ -1,0 +1,266 @@
+# MANIFEST.in pour GSQL
+# Ce fichier contrôle les fichiers inclus dans les distributions source
+
+# Inclure les fichiers de licence et README
+include LICENSE
+include README.md
+include CHANGELOG.md
+include CONTRIBUTING.md
+include CODE_OF_CONDUCT.md
+
+# Inclure les fichiers de configuration
+include requirements.txt
+include requirements-dev.txt
+include pyproject.toml
+include setup.py
+include setup.cfg
+include MANIFEST.in
+
+# Inclure les fichiers de données du package
+recursive-include gsql/nlp/data *.json
+recursive-include gsql/nlp/data *.txt
+recursive-include gsql/nlp/data *.pkl
+recursive-include gsql/nlp/data *.model
+recursive-include gsql/nlp/models *.json
+recursive-include gsql/nlp/models *.pkl
+recursive-include gsql/nlp/models *.model
+recursive-include gsql/nlp/models *.bin
+
+# Inclure les fichiers de configuration
+recursive-include gsql/config *.yaml
+recursive-include gsql/config *.yml
+recursive-include gsql/config *.json
+recursive-include gsql/config *.toml
+recursive-include gsql/config *.ini
+
+# Inclure les modèles et templates
+recursive-include gsql/templates *.sql
+recursive-include gsql/templates *.html
+recursive-include gsql/templates *.jinja2
+recursive-include gsql/templates *.jinja
+recursive-include gsql/templates *.txt
+recursive-include gsql/templates *.md
+
+# Inclure les fichiers de documentation du package
+recursive-include gsql/docs *.md
+recursive-include gsql/docs *.rst
+recursive-include gsql/docs *.txt
+recursive-include gsql/docs *.png
+recursive-include gsql/docs *.jpg
+recursive-include gsql/docs *.svg
+recursive-include gsql/docs *.gif
+
+# Inclure les fichiers d'exemples
+recursive-include examples *.py
+recursive-include examples *.sql
+recursive-include examples *.json
+recursive-include examples *.yaml
+recursive-include examples *.txt
+recursive-include examples *.md
+recursive-include examples *.csv
+recursive-include examples *.db
+
+# Inclure les scripts utilitaires
+include scripts/gsql-backup
+include scripts/gsql-migrate
+include scripts/gsql-monitor
+include scripts/gsql-check
+include scripts/gsql-export
+include scripts/gsql-import
+
+# Inclure les assets pour le CLI
+recursive-include gsql/cli/assets *.txt
+recursive-include gsql/cli/assets *.json
+recursive-include gsql/cli/assets *.yaml
+recursive-include gsql/cli/assets *.sql
+
+# Inclure les fichiers de schéma SQL
+recursive-include gsql/sql_schema *.sql
+recursive-include gsql/sql_schema *.ddl
+recursive-include gsql/sql_schema *.dml
+
+# Inclure les fichiers de migrations
+recursive-include gsql/migrations *.sql
+recursive-include gsql/migrations *.py
+
+# Inclure les fichiers de tests
+recursive-include tests *.py
+recursive-include tests *.sql
+recursive-include tests *.json
+recursive-include tests *.yaml
+recursive-include tests *.txt
+recursive-include tests/data *.csv
+recursive-include tests/data *.json
+recursive-include tests/data *.yaml
+recursive-include tests/data *.sql
+recursive-include tests/data *.db
+
+# Inclure les fichiers de benchmark
+recursive-include benchmarks *.py
+recursive-include benchmarks *.sql
+recursive-include benchmarks/data *.csv
+recursive-include benchmarks/data *.json
+
+# Inclure les fichiers de localisation
+recursive-include gsql/locales *.po
+recursive-include gsql/locales *.mo
+recursive-include gsql/locales *.json
+
+# Inclure les fichiers d'interface utilisateur
+recursive-include gsql/ui *.py
+recursive-include gsql/ui *.ui
+recursive-include gsql/ui *.qml
+recursive-include gsql/ui/assets *.png
+recursive-include gsql/ui/assets *.jpg
+recursive-include gsql/ui/assets *.svg
+recursive-include gsql/ui/assets *.ico
+recursive-include gsql/ui/assets *.icns
+
+# Inclure les certificats SSL/TLS pour le mode sécurisé
+recursive-include gsql/ssl *.pem
+recursive-include gsql/ssl *.crt
+recursive-include gsql/ssl *.key
+recursive-include gsql/ssl *.csr
+
+# Inclure les fichiers de plugins/extensions
+recursive-include gsql/plugins *.py
+recursive-include gsql/plugins *.json
+recursive-include gsql/plugins *.yaml
+recursive-include gsql/plugins *.txt
+
+# Inclure les fichiers de thème pour le shell
+recursive-include gsql/cli/themes *.json
+recursive-include gsql/cli/themes *.yaml
+recursive-include gsql/cli/themes *.py
+
+# Inclure les fichiers de completion
+recursive-include gsql/completions *.bash
+recursive-include gsql/completions *.zsh
+recursive-include gsql/completions *.fish
+recursive-include gsql/completions *.ps1
+
+# Inclure les fichiers de service systemd
+include systemd/gsql.service
+include systemd/gsql-backup.service
+include systemd/gsql-backup.timer
+
+# Inclure les fichiers Docker
+include Dockerfile
+include docker-compose.yml
+include docker-compose.prod.yml
+include docker-compose.dev.yml
+include .dockerignore
+
+# Inclure les fichiers Kubernetes
+recursive-include k8s *.yaml
+recursive-include k8s *.yml
+recursive-include k8s *.json
+
+# Inclure les fichiers CI/CD
+include .github/workflows/*.yml
+include .github/workflows/*.yaml
+include .gitlab-ci.yml
+include .travis.yml
+include .circleci/config.yml
+include azure-pipelines.yml
+
+# Inclure les fichiers de configuration des outils
+include .flake8
+include .mypy.ini
+include .pylintrc
+include .pre-commit-config.yaml
+include .coveragerc
+include .editorconfig
+include .gitignore
+include .gitattributes
+include .readthedocs.yml
+include mkdocs.yml
+
+# Inclure les fichiers de documentation Sphinx
+include docs/Makefile
+include docs/make.bat
+recursive-include docs/source *.rst
+recursive-include docs/source *.py
+recursive-include docs/source *.md
+recursive-include docs/source *.png
+recursive-include docs/source *.jpg
+recursive-include docs/source *.svg
+recursive-include docs/source *.gif
+
+# Inclure les fichiers de build
+include build.py
+include clean.py
+include release.py
+
+# Inclure les fichiers de metrics et monitoring
+recursive-include gsql/metrics *.json
+recursive-include gsql/metrics *.yaml
+recursive-include gsql/metrics *.prometheus
+
+# Inclure les fichiers de backup et restauration
+recursive-include gsql/backup *.py
+recursive-include gsql/backup *.sql
+recursive-include gsql/backup *.sh
+
+# Inclure les fichiers de logs templates
+recursive-include gsql/logging *.json
+recursive-include gsql/logging *.yaml
+recursive-include gsql/logging *.ini
+
+# Exclure les fichiers temporaires et de développement
+global-exclude *.pyc
+global-exclude *.pyo
+global-exclude __pycache__
+global-exclude *.so
+global-exclude *.dylib
+global-exclude *.dll
+global-exclude *.pyd
+global-exclude *~
+global-exclude *.swp
+global-exclude *.swo
+global-exclude *.log
+global-exclude *.pid
+global-exclude *.db
+global-exclude *.db-journal
+global-exclude *.db-wal
+global-exclude *.db-shm
+global-exclude .DS_Store
+global-exclude Thumbs.db
+global-exclude .coverage
+global-exclude .cache
+global-exclude .pytest_cache
+global-exclude .mypy_cache
+global-exclude .tox
+global-exclude .eggs
+global-exclude .venv
+global-exclude venv
+global-exclude env
+global-exclude .env
+global-exclude node_modules
+global-exclude dist
+global-exclude build
+global-exclude *.egg-info
+global-exclude .ipynb_checkpoints
+global-exclude .idea
+global-exclude .vscode
+global-exclude *.iml
+
+# Exclure les fichiers de tests volumineux
+global-exclude tests/large_data/*
+global-exclude benchmarks/large_data/*
+
+# Exclure les fichiers de sauvegarde personnelle
+global-exclude *-backup.*
+global-exclude backup-*
+global-exclude personal-*
+
+# Exclure les fichiers cryptés/signés
+global-exclude *.gpg
+global-exclude *.asc
+global-exclude *.sig
+
+# Exclure les fichiers de lock
+global-exclude package-lock.json
+global-exclude yarn.lock
+global-exclude poetry.lock
+global-exclude Pipfile.lock
