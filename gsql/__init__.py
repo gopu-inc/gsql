@@ -107,7 +107,7 @@ class FeatureDetection:
             import yaml
             return True
         except ImportError:
-            return False
+            return True
     
     @staticmethod
     def get_all_features() -> Dict[str, bool]:
