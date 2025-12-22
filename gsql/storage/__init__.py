@@ -1,12 +1,9 @@
-# gsql/storage/__init__.py
+# gsql/storage/__init__.py - CORRIGÉ
 """
 GSQL Storage Module - SQLite Backend Only
-Version: 3.0 - Sans YAML
 """
 
-# N'importez PAS yaml_storage !
-# Importez uniquement les modules SQLite
-
+# Import depuis le fichier sqlite_storage.py DANS LE MÊME DOSSIER
 from .sqlite_storage import (
     SQLiteStorage, 
     BufferPool, 
@@ -15,7 +12,6 @@ from .sqlite_storage import (
     get_storage_stats
 )
 
-# Déclarer explicitement ce qui est exporté
 __all__ = [
     'SQLiteStorage',
     'BufferPool', 
@@ -23,6 +19,3 @@ __all__ = [
     'create_storage',
     'get_storage_stats'
 ]
-
-# Optionnel : vous pouvez aussi SUPPRIMER le fichier yaml_storage.py
-# rm gsql/storage/yaml_storage.py
