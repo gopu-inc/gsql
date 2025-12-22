@@ -1,0 +1,61 @@
+name: 🚀 Publication Directe (No-Test)
+
+on:
+  push:
+    tags:
+      - 'v*'  # Se déclenche seulement sur les tags de version
+
+jobs:
+  # PUBLISH TO DOCKER HUB
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+      
+      - name: 🐳 Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ceoseshell
+          password: ${{ secrets.DOCKER_PASSWORD }}
+      
+      - name: 🏗️ Build & Push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ceoseshell/gsql:latest
+            ceoseshell/gsql:${{ github.ref_name }}
+
+  # PUBLISH TO PYPI
+  pypi:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+      
+      - name: 📦 Build Package
+        run: |
+          pip install build
+          python -m build
+      
+      - name: 📤 Upload to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_TOKEN }}
+
+  # PUBLISH TO ANACONDA
+  anaconda:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+      
+      - name: 📤 Direct Anaconda Upload
+        run: |
+          # Télécharge directement depuis PyPI et upload vers Anaconda
+          pip download gsql --no-deps -d ./pkg
+          anaconda upload --user ceoseshell ./pkg/gsql-*.tar.gz
+        env:
+          ANACONDA_TOKEN: ${{ secrets.CONDA_FORGE_TOKEN }}
