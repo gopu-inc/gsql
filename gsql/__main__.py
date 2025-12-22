@@ -7,21 +7,52 @@ Point d'entrée principal pour l'interface en ligne de commande
 import sys
 import os
 import argparse
-import readline
 import shlex
-from typing import List, Optional, Dict, Any
+from typing import List
 from pathlib import Path
+
+# Ajouter le chemin du module parent
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # Import des modules GSQL
 try:
     from gsql import __version__, __author__, __description__
-    from gsql.database import Database
-    from gsql.parser import Parser
-    from gsql.executor import Executor
-    from gsql.exceptions import GSQLException, TableNotFoundError, SyntaxError
-    from gsql.stockage.yaml_storage import YAMLStorage
-    from gsql.config.defaults import load_default_config
-    from gsql.functions.user_functions import register_user_functions
+    
+    # Import des autres modules
+    from database import Database
+    from parser import Parser
+    from executor import Executor
+    from exceptions import GSQLException, TableNotFoundError, SyntaxError
+    
+    # Essayer d'importer les modules optionnels
+    try:
+        from stockage.yaml_storage import YAMLStorage
+        YAML_AVAILABLE = True
+    except ImportError:
+        print("Warning: YAMLStorage non disponible")
+        YAML_AVAILABLE = False
+        
+    try:
+        from config.defaults import load_default_config
+        CONFIG_AVAILABLE = True
+    except ImportError:
+        print("Warning: Configuration par défaut non disponible")
+        CONFIG_AVAILABLE = False
+        
+    try:
+        from functions.user_functions import register_user_functions
+        FUNCTIONS_AVAILABLE = True
+    except ImportError:
+        print("Warning: User functions non disponibles")
+        FUNCTIONS_AVAILABLE = False
+        
+    try:
+        from nlp.translator import translate_natural_language
+        NLP_AVAILABLE = True
+    except ImportError:
+        print("Warning: Module NLP non disponible")
+        NLP_AVAILABLE = False
+        
 except ImportError as e:
     print(f"Erreur d'importation: {e}")
     print("Assurez-vous que tous les modules GSQL sont disponibles.")
@@ -36,11 +67,32 @@ class GSQLCLI:
         self.parser = None
         self.executor = None
         self.storage = None
-        self.config = load_default_config()
+        self.config = self.load_config()
         self.running = True
         self.current_db = None
         self.command_history = []
         self.prompt = "gsql> "
+        
+    def load_config(self):
+        """Charge la configuration"""
+        if CONFIG_AVAILABLE:
+            return load_default_config()
+        else:
+            # Configuration par défaut
+            return {
+                'storage': {
+                    'data_dir': '~/.gsql',
+                    'format': 'yaml'
+                },
+                'executor': {
+                    'transaction_mode': 'auto',
+                    'timeout': 30
+                },
+                'nlp': {
+                    'enabled': NLP_AVAILABLE,
+                    'default_language': 'fr'
+                }
+            }
         
     def setup_argparse(self) -> argparse.ArgumentParser:
         """Configure le parser d'arguments de ligne de commande"""
@@ -52,20 +104,19 @@ Exemples d'utilisation:
   gsql                            # Mode interactif
   gsql --help                     # Afficher l'aide
   gsql --version                  # Afficher la version
-  gsql --execute "SELECT * FROM users"  # Exécuter une commande
-  gsql --file query.sql           # Exécuter un fichier SQL
-  gsql --init-db mydatabase       # Initialiser une nouvelle base de données
-  gsql --database mydb            # Se connecter à une base spécifique
-  gsql --interactive              # Mode interactif (par défaut)
-  gsql --config ./config.yaml     # Spécifier un fichier de configuration
+  gsql -e "SELECT * FROM users"   # Exécuter une commande
+  gsql -f query.sql               # Exécuter un fichier SQL
+  gsql --init-db mydatabase       # Initialiser une nouvelle base
+  gsql -d mydb                    # Se connecter à une base
+  gsql -c ./config.yaml           # Spécifier un fichier de config
             
 Commandes interactives:
   \\q, \\quit, exit     - Quitter GSQL
-  \\h, \\help          - Afficher l'aide des commandes
+  \\h, \\help          - Afficher l'aide
   \\v, \\version       - Afficher la version
   \\d, \\dt            - Lister les tables
   \\d table_name       - Décrire une table
-  \\l, \\list          - Lister les bases de données
+  \\l, \\list          - Lister les bases
   \\c db_name         - Se connecter à une base
   \\e command         - Exécuter une commande système
   \\history           - Afficher l'historique
@@ -73,7 +124,6 @@ Commandes interactives:
   \\config            - Afficher la configuration
   \\stats             - Afficher les statistiques
   \\backup [path]     - Sauvegarder la base
-  \\restore [path]    - Restaurer une sauvegarde
   \\nlp "requête"     - Traduire une requête naturelle en SQL
             """
         )
@@ -94,7 +144,7 @@ Commandes interactives:
             '-i', '--interactive',
             action='store_true',
             default=False,
-            help='Lancer le mode interactif (défaut)'
+            help='Lancer le mode interactif'
         )
         
         # Gestion de la base de données
@@ -147,6 +197,20 @@ Commandes interactives:
             help='Afficher les informations de licence'
         )
         
+        # Arguments positionnels (pour compatibilité)
+        parser.add_argument(
+            'command',
+            nargs='?',
+            type=str,
+            help='Commande SQL à exécuter'
+        )
+        parser.add_argument(
+            'dbname',
+            nargs='?',
+            type=str,
+            help='Nom de la base de données'
+        )
+        
         return parser
     
     def print_banner(self):
@@ -182,21 +246,18 @@ TABLES:
   \\d, \\dt            - Lister les tables
   \\d table_name      - Décrire une table
   \\di                - Lister les index
-  \\dv                - Lister les vues
   
 EXÉCUTION:
   ;                  - Terminer une commande (optionnel)
   \\g                 - Exécuter la dernière commande
   \\p                - Afficher le tampon de commande
-  \\r                - Réinitialiser le tampon
   
 HISTORIQUE:
   \\history           - Afficher l'historique
   \\history clear     - Effacer l'historique
   
 AFFICHAGE:
-  \\pset [opt]        - Configurer l'affichage
-  \\x                 - Mode affichage étendu
+  \\clear, \\cls       - Effacer l'écran
   \\timing            - Activer/désactiver le chronométrage
   
 ADMINISTRATION:
@@ -207,8 +268,7 @@ ADMINISTRATION:
   \\vacuum            - Nettoyer la base
   
 INTELLIGENCE ARTIFICIELLE:
-  \\nlp "requête"     - Traduire une requête naturelle en SQL
-  \\explain           - Expliquer une requête SQL
+  \\nlp "requête"     - Traduire une requête naturelle en SQL (si disponible)
   
 SQL STANDARD:
   Toutes les commandes SQL standard sont supportées:
@@ -226,12 +286,13 @@ GSQL Version: {__version__}
 Auteur: {__author__}
 Description: {__description__}
 
-Modules chargés:
+Modules disponibles:
   - Database: {'✓' if self.database else '✗'}
   - Parser: {'✓' if self.parser else '✗'}
   - Executor: {'✓' if self.executor else '✗'}
-  - Storage: {'✓' if self.storage else '✗'}
-  - NLP Translator: {'✓' if hasattr(self, 'translator') else '✗'}
+  - YAML Storage: {'✓' if YAML_AVAILABLE else '✗'}
+  - NLP Translator: {'✓' if NLP_AVAILABLE else '✗'}
+  - User Functions: {'✓' if FUNCTIONS_AVAILABLE else '✗'}
         """
         print(version_info)
     
@@ -262,18 +323,24 @@ Modules chargés:
                 print(f"Utilisez '\\create {db_name}' pour la créer.")
                 return False
             
-            self.storage = YAMLStorage(str(db_path))
-            self.database = Database(self.storage)
-            self.parser = Parser()
-            self.executor = Executor(self.database)
-            self.current_db = db_name
-            self.prompt = f"gsql[{db_name}]> "
-            
-            # Enregistrer les fonctions utilisateur
-            register_user_functions(self.executor)
-            
-            print(f"Connecté à la base de données '{db_name}'")
-            return True
+            if YAML_AVAILABLE:
+                self.storage = YAMLStorage(str(db_path))
+                self.database = Database(self.storage)
+                self.parser = Parser()
+                self.executor = Executor(self.database)
+                self.current_db = db_name
+                self.prompt = f"gsql[{db_name}]> "
+                
+                # Enregistrer les fonctions utilisateur si disponible
+                if FUNCTIONS_AVAILABLE:
+                    register_user_functions(self.executor)
+                
+                print(f"Connecté à la base de données '{db_name}'")
+                return True
+            else:
+                print("Erreur: YAMLStorage non disponible")
+                return False
+                
         except Exception as e:
             print(f"Erreur de connexion: {e}")
             return False
@@ -319,15 +386,17 @@ Modules chargés:
             
             print("\nListe des tables:")
             print("-" * 60)
-            print(f"{'Nom':20} {'Lignes':10} {'Taille':10} {'Index'}")
+            print(f"{'Nom':20} {'Lignes':10} {'Index'}")
             print("-" * 60)
             
             for table in tables:
-                table_info = self.database.get_table_info(table)
-                row_count = table_info.get('row_count', 0)
-                size = table_info.get('size', 0)
-                indexes = len(table_info.get('indexes', []))
-                print(f"{table:20} {row_count:10} {size:10} {indexes:5}")
+                try:
+                    table_info = self.database.get_table_info(table)
+                    row_count = table_info.get('row_count', 0)
+                    indexes = len(table_info.get('indexes', []))
+                    print(f"{table:20} {row_count:10} {indexes:5}")
+                except:
+                    print(f"{table:20} {'N/A':10} {'N/A':5}")
             print()
         except Exception as e:
             print(f"Erreur: {e}")
@@ -346,22 +415,25 @@ Modules chargés:
             
             print(f"\nStructure de la table '{table_name}':")
             print("-" * 60)
-            print(f"{'Colonne':20} {'Type':15} {'Nullable':10} {'Default'}")
+            print(f"{'Colonne':20} {'Type':15} {'Nullable':10}")
             print("-" * 60)
             
             for column in schema.get('columns', []):
                 name = column.get('name', '')
                 type_ = column.get('type', '')
                 nullable = "YES" if column.get('nullable', True) else "NO"
-                default = str(column.get('default', ''))
-                print(f"{name:20} {type_:15} {nullable:10} {default}")
+                print(f"{name:20} {type_:15} {nullable:10}")
             
-            # Afficher les index
-            indexes = self.database.get_table_indexes(table_name)
-            if indexes:
-                print("\nIndexes:")
-                for idx in indexes:
-                    print(f"  - {idx.get('name')} ({', '.join(idx.get('columns', []))})")
+            # Afficher les index si disponibles
+            try:
+                indexes = self.database.get_table_indexes(table_name)
+                if indexes:
+                    print("\nIndexes:")
+                    for idx in indexes:
+                        print(f"  - {idx.get('name', 'unknown')}")
+            except:
+                pass
+                
             print()
         except Exception as e:
             print(f"Erreur: {e}")
@@ -413,7 +485,6 @@ Modules chargés:
         # Configuration NLP
         nlp_config = self.config.get('nlp', {})
         print(f"NLP activé:         {nlp_config.get('enabled', False)}")
-        print(f"Langue par défaut:  {nlp_config.get('default_language', 'fr')}")
         print()
     
     def show_stats(self):
@@ -428,11 +499,8 @@ Modules chargés:
             print("-" * 60)
             print(f"Tables:             {stats.get('table_count', 0)}")
             print(f"Lignes totales:     {stats.get('total_rows', 0)}")
-            print(f"Indexes:            {stats.get('index_count', 0)}")
             print(f"Taille données:     {stats.get('data_size', 0):.2f} KB")
-            print(f"Taille index:       {stats.get('index_size', 0):.2f} KB")
             print(f"Transactions:       {stats.get('transaction_count', 0)}")
-            print(f"Requêtes exécutées: {stats.get('query_count', 0)}")
             print()
         except Exception as e:
             print(f"Erreur: {e}")
@@ -456,17 +524,17 @@ Modules chargés:
     
     def translate_nlp(self, query: str):
         """Traduit une requête en langage naturel en SQL"""
+        if not NLP_AVAILABLE:
+            print("Module NLP non disponible.")
+            return None
+        
         try:
-            from gsql.nlp.translator import translate_natural_language
             sql_query = translate_natural_language(query, self.config)
             print(f"\nRequête SQL générée:")
             print("-" * 60)
             print(sql_query)
             print("-" * 60)
             return sql_query
-        except ImportError:
-            print("Module NLP non disponible.")
-            return None
         except Exception as e:
             print(f"Erreur de traduction: {e}")
             return None
@@ -557,11 +625,6 @@ Modules chargés:
             self.backup_database(args[0] if args else None)
             return True
         
-        # Restauration
-        elif cmd in ('\\restore',):
-            print("Fonctionnalité de restauration à implémenter.")
-            return True
-        
         # Nettoyage
         elif cmd in ('\\vacuum',):
             if self.database:
@@ -648,23 +711,11 @@ Modules chargés:
             return False
         except Exception as e:
             print(f"Erreur inattendue: {e}")
-            import traceback
-            traceback.print_exc()
             return False
     
     def interactive_mode(self):
         """Lance le mode interactif"""
         self.print_banner()
-        
-        # Configuration de readline pour l'historique
-        readline.parse_and_bind('tab: complete')
-        history_file = Path.home() / '.gsql_history'
-        
-        try:
-            if history_file.exists():
-                readline.read_history_file(str(history_file))
-        except Exception:
-            pass
         
         # Boucle principale interactive
         current_buffer = []
@@ -687,13 +738,12 @@ Modules chargés:
                 
                 # Sauvegarder dans l'historique
                 self.command_history.append(line)
-                readline.add_history(line)
                 
                 # Ajouter à la buffer si multiligne
                 current_buffer.append(line)
                 buffer_text = ' '.join(current_buffer)
                 
-                # Vérifier si la commande est complète (se termine par ; ou est une commande méta)
+                # Vérifier si la commande est complète
                 if buffer_text.startswith('\\') or buffer_text.endswith(';') or ';' in buffer_text:
                     # Nettoyer le point-virgule final
                     if buffer_text.endswith(';'):
@@ -711,12 +761,6 @@ Modules chargés:
             except Exception as e:
                 print(f"Erreur: {e}")
                 current_buffer = []
-        
-        # Sauvegarder l'historique
-        try:
-            readline.write_history_file(str(history_file))
-        except Exception:
-            pass
     
     def execute_file(self, file_path: str):
         """Exécute les commandes depuis un fichier"""
@@ -785,33 +829,48 @@ Modules chargés:
                 print(f"Base de données '{parsed_args.init_db}' initialisée.")
             return
         
+        # Gérer les arguments positionnels (compatibilité)
+        db_to_connect = None
+        if parsed_args.dbname:
+            db_to_connect = parsed_args.dbname
+        elif parsed_args.database:
+            db_to_connect = parsed_args.database
+        
         # Se connecter à une base de données si spécifiée
-        if parsed_args.database:
-            if not self.connect_database(parsed_args.database):
+        if db_to_connect:
+            if not self.connect_database(db_to_connect):
                 return
         
         # Mode exécution de commande unique
+        command_to_execute = None
         if parsed_args.execute:
-            if not self.database and not parsed_args.database:
-                print("Erreur: Spécifiez une base de données avec --database")
+            command_to_execute = parsed_args.execute
+        elif parsed_args.command:
+            command_to_execute = parsed_args.command
+        
+        if command_to_execute:
+            if not self.database:
+                print("Erreur: Non connecté à une base de données.")
+                print("Utilisez: gsql -d dbname -e 'commande'")
                 return
             
-            if parsed_args.execute.startswith('\\'):
-                self.handle_meta_command(parsed_args.execute)
+            if command_to_execute.startswith('\\'):
+                self.handle_meta_command(command_to_execute)
             else:
-                self.execute_query(parsed_args.execute)
+                self.execute_query(command_to_execute)
             return
         
         # Mode fichier
         if parsed_args.file:
-            if not self.database and not parsed_args.database:
-                print("Erreur: Spécifiez une base de données avec --database")
+            if not self.database:
+                print("Erreur: Non connecté à une base de données.")
+                print("Utilisez: gsql -d dbname -f fichier.sql")
                 return
             
             self.execute_file(parsed_args.file)
             return
         
-        # Mode interactif (par défaut ou avec --interactive)
+        # Mode interactif
         self.interactive_mode()
 
 
