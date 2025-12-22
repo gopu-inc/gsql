@@ -193,7 +193,14 @@ class Colors:
     @staticmethod
     def column(text):
         return Colors.colorize(text, Colors.BRIGHT_MAGENTA)
-
+# Dans __main__.py, cherchez la classe Colors et ajoutez :
+    # ... autres méthodes existantes ...
+    
+    @staticmethod
+    def dim(text):
+        """Retourne du texte avec effet 'dim' (moins visible)"""
+        return f"\033[2m{text}\033[0m"
+        
 class TableFormatter:
     """Formatage de tables pour l'affichage"""
     
