@@ -1,0 +1,98 @@
+# config/defaults.yaml
+database:
+  version: "2.0"
+  encoding: "utf-8"
+  auto_commit: true
+  cache_size: 100
+  
+storage:
+  format: "yaml"
+  compression: false
+  backup_count: 5
+  auto_save: true
+  
+tables:
+  # Schémas par défaut
+  users:
+    columns:
+      id: 
+        type: "INTEGER"
+        primary_key: true
+        auto_increment: true
+      name: 
+        type: "TEXT"
+        not_null: true
+      email: 
+        type: "TEXT"
+        unique: true
+      age: 
+        type: "INTEGER"
+        default: 0
+      created_at: 
+        type: "TIMESTAMP"
+        default: "CURRENT_TIMESTAMP"
+        
+  products:
+    columns:
+      id: 
+        type: "INTEGER"
+        primary_key: true
+      name: 
+        type: "TEXT"
+        not_null: true
+      price: 
+        type: "REAL"
+        default: 0.0
+      category: 
+        type: "TEXT"
+      stock: 
+        type: "INTEGER"
+        default: 0
+
+functions:
+  # Fonctions intégrées
+  builtins:
+    - name: "UPPER"
+      params: ["text"]
+      returns: "TEXT"
+      type: "builtin"
+      
+    - name: "LOWER"
+      params: ["text"]
+      returns: "TEXT"
+      type: "builtin"
+      
+    - name: "LENGTH"
+      params: ["text"]
+      returns: "INTEGER"
+      type: "builtin"
+      
+    - name: "ABS"
+      params: ["number"]
+      returns: "REAL"
+      type: "builtin"
+
+nlp:
+  patterns:
+    french:
+      - pattern: "montre (?:les )?(tables?)"
+        sql: "SHOW TABLES"
+        
+      - pattern: "table (\w+)"
+        sql: "SELECT * FROM {table}"
+        
+      - pattern: "combien de (\w+)"
+        sql: "SELECT COUNT(*) FROM {table}"
+        
+      - pattern: "ajoute (?:dans )?(\w+) (.+)"
+        sql: "INSERT INTO {table} VALUES ({values})"
+        
+    english:
+      - pattern: "show tables?"
+        sql: "SHOW TABLES"
+        
+      - pattern: "(\w+) table"
+        sql: "SELECT * FROM {table}"
+        
+      - pattern: "count (\w+)"
+        sql: "SELECT COUNT(*) FROM {table}"
