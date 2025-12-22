@@ -116,6 +116,24 @@ class Database:
         """
         return self.function_manager.create_function(name, params, body, return_type)
     
+    def create_function_from_sql(self, sql: str) -> str:
+        """
+        Create a function from SQL CREATE FUNCTION statement
+        
+        Args:
+            sql (str): CREATE FUNCTION SQL statement
+            
+        Returns:
+            str: Success message
+        """
+        parsed = self.parser.parse_create_function(sql)
+        return self.create_function(
+            name=parsed['name'],
+            params=parsed['params'],
+            body=parsed['body'],
+            return_type=parsed['return_type']
+        )
+    
     def list_functions(self) -> List[Dict]:
         """
         List all available functions
@@ -227,7 +245,18 @@ class Database:
             # Insert data
             count = 0
             for row in reader:
-                values = [f"'{row[h].replace(\"'\", \"''\")}'" if row[h] is not None else 'NULL' for h in headers]
+                values = []
+                for h in headers:
+                    if row[h] is None:
+                        values.append('NULL')
+                    else:
+                        # Échapper les apostrophes simplement
+                        value = str(row[h])
+                        # Remplacer une apostrophe par deux apostrophes
+                        if "'" in value:
+                            value = value.replace("'", "''")
+                        values.append(f"'{value}'")
+                
                 insert_sql = f"INSERT INTO {table_name} VALUES ({', '.join(values)})"
                 self.execute(insert_sql)
                 count += 1
@@ -250,7 +279,7 @@ class Database:
         
         result = self.execute(f"SELECT * FROM {table_name}")
         
-        if not result or 'rows' not in result or not result['rows']:
+        if not result or not isinstance(result, dict) or 'rows' not in result or not result['rows']:
             raise SQLExecutionError(f"No data in table '{table_name}'")
         
         rows = result['rows']
@@ -263,10 +292,46 @@ class Database:
         
         return f"Exported {len(rows)} rows to '{csv_path}'"
     
+    def get_tables(self) -> List[str]:
+        """
+        Get list of all tables in the database
+        
+        Returns:
+            List[str]: Table names
+        """
+        try:
+            # This is a simplified version - you might need to adjust based on your storage
+            result = self.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            if isinstance(result, dict) and 'rows' in result:
+                return [row['name'] for row in result['rows']]
+            return []
+        except:
+            return []
+    
+    def get_table_schema(self, table_name: str) -> List[Dict]:
+        """
+        Get schema of a table
+        
+        Args:
+            table_name (str): Table name
+            
+        Returns:
+            List[Dict]: Column information
+        """
+        try:
+            # Simplified schema query
+            result = self.execute(f"PRAGMA table_info({table_name})")
+            if isinstance(result, dict) and 'rows' in result:
+                return result['rows']
+            return []
+        except:
+            return []
+    
     def close(self):
         """Close the database connection"""
         # Cleanup resources
-        self.executor.clear_cache()
+        if hasattr(self.executor, 'clear_cache'):
+            self.executor.clear_cache()
         logger.info(f"Database closed: {self.db_path}")
     
     def __enter__(self):
