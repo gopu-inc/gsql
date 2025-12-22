@@ -1,5 +1,35 @@
-msgpack
-pydantic
-rich
+# Core dependencies
+sqlite3
+
+# CLI and User Interface
 click
-pygments
+colorama
+prompt-toolkit
+rich
+
+# Data Processing and Analysis
+pandas
+numpy
+
+# Natural Language Processing
+nltk
+spacy
+
+# Optional AI/ML (comment out if not needed)
+# transformers
+# torch
+# scikit-learn
+
+# Performance and Monitoring
+psutil
+
+# Networking and APIs (for advanced features)
+# fastapi
+# uvicorn
+# requests
+
+# Development utilities
+typing-extensions
+
+# Security
+cryptography
