@@ -3,6 +3,9 @@
 
 # Inclure les fichiers de licence et README
 include LICENSE
+include logo.svg
+include *.svg
+include logo.*
 include README.md
 include CHANGELOG.md
 include CONTRIBUTING.md
@@ -15,7 +18,7 @@ include pyproject.toml
 include setup.py
 include setup.cfg
 include MANIFEST.in
-
+include gsql/*
 # Inclure les fichiers de données du package
 recursive-include gsql/nlp/data *.json
 recursive-include gsql/nlp/data *.txt
