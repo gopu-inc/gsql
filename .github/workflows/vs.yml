@@ -2,8 +2,7 @@ name: 🚀 Publication Directe (No-Test)
 
 on:
   push:
-    tags:
-      - 'v*'  # Se déclenche seulement sur les tags de version
+    branches: main # Se déclenche seulement sur les tags de version
 
 jobs:
   # PUBLISH TO DOCKER HUB
