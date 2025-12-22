@@ -17,10 +17,10 @@
 [![Conda Platform](https://img.shields.io/conda/pn/conda-forge/gsql?style=for-the-badge&logo=anaconda&logoColor=white&color=blue)](https://anaconda.org/conda-forge/gsql)
 
 <!-- Docker Hub -->
-[![Docker Pulls](https://img.shields.io/docker/pulls/gopu/gsql?style=for-the-badge&logo=docker&logoColor=white&color=2496ED)](https://hub.docker.com/r/gopu/gsql)
-[![Docker Image Size](https://img.shields.io/docker/image-size/gopu/gsql/latest?style=for-the-badge&logo=docker&logoColor=white&color=blue)](https://hub.docker.com/r/gopu/gsql)
-[![Docker Version](https://img.shields.io/docker/v/gopu/gsql?style=for-the-badge&logo=docker&logoColor=white&color=blueviolet)](https://hub.docker.com/r/gopu/gsql)
-[![Docker Stars](https://img.shields.io/docker/stars/gopu/gsql?style=for-the-badge&logo=docker&logoColor=white&color=yellow)](https://hub.docker.com/r/gopu/gsql)
+[![Docker Pulls](https://img.shields.io/docker/pulls/ceoseshell/gsql?style=for-the-badge&logo=docker&logoColor=white&color=2496ED)](https://hub.docker.com/r/ceoseshell/gsql)
+[![Docker Image Size](https://img.shields.io/docker/image-size/ceoseshell/gsql/latest?style=for-the-badge&logo=docker&logoColor=white&color=blue)](https://hub.docker.com/r/gopu/gsql)
+[![Docker Version](https://img.shields.io/docker/v/ceoseshell/gsql?style=for-the-badge&logo=docker&logoColor=white&color=blueviolet)](https://hub.docker.com/r/ceoseshell/gsql)
+[![Docker Stars](https://img.shields.io/docker/stars/ceoseshell/gsql?style=for-the-badge&logo=docker&logoColor=white&color=yellow)](https://hub.docker.com/r/ceoseshell/gsql)
 
 <!-- GitHub Container Registry -->
 [![GitHub Container Registry](https://img.shields.io/badge/GitHub%20Container%20Registry-available-2496ED?style=for-the-badge&logo=github&logoColor=white)](https://github.com/gopu-inc/gsql/pkgs/container/gsql)
