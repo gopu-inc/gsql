@@ -1,110 +1,171 @@
-# gsql/gsql/storage.py - SIMPLIFIÉ
-"""
-Storage for GSQL - Simplified
-"""
-
-import json
-from pathlib import Path
+import os
+import pickle
+import threading
+from collections import OrderedDict
 from datetime import datetime
-from typing import Dict, List, Any, Optional
+import logging
 
-class PersistentStorage:
-    """Persistent storage - Simplified"""
+logger = logging.getLogger(__name__)
+
+class BufferPool:
+    """Cache de pages en mémoire avec politique LRU"""
     
-    def __init__(self, db_path: str):
-        self.db_path = db_path
-        self.data_dir = Path(db_path).parent / f"{Path(db_path).stem}_data"
-        self.data_dir.mkdir(exist_ok=True)
+    def __init__(self, max_pages=100):
+        self.max_pages = max_pages
+        self.pool = OrderedDict()
+        self.lock = threading.RLock()
+        self.hits = 0
+        self.misses = 0
         
-        # Create subdirectories
-        (self.data_dir / 'tables').mkdir(exist_ok=True)
-        (self.data_dir / 'meta').mkdir(exist_ok=True)
-    
-    def create_table(self, name: str, columns: List[Dict]) -> None:
-        """Create table"""
-        table_file = self.data_dir / 'tables' / f'{name}.json'
-        with open(table_file, 'w') as f:
-            json.dump([], f)
-        
-        meta_file = self.data_dir / 'meta' / f'{name}.json'
-        with open(meta_file, 'w') as f:
-            json.dump({
-                'name': name,
-                'columns': columns,
-                'created_at': datetime.now().isoformat(),
-                'row_count': 0
-            }, f, indent=2)
-    
-    def insert(self, table: str, data: Dict) -> int:
-        """Insert data"""
-        table_file = self.data_dir / 'tables' / f'{table}.json'
-        
-        if table_file.exists():
-            with open(table_file, 'r') as f:
-                rows = json.load(f)
-        else:
-            rows = []
-        
-        rows.append(data)
-        
-        with open(table_file, 'w') as f:
-            json.dump(rows, f, indent=2)
-        
-        # Update metadata
-        meta_file = self.data_dir / 'meta' / f'{table}.json'
-        if meta_file.exists():
-            with open(meta_file, 'r') as f:
-                meta = json.load(f)
-            meta['row_count'] = len(rows)
-            meta['modified_at'] = datetime.now().isoformat()
-            with open(meta_file, 'w') as f:
-                json.dump(meta, f, indent=2)
-        
-        return len(rows)
-    
-    def select(self, table: str, where: Optional[Dict] = None,
-               columns: List[str] = None, limit: int = None) -> List[Dict]:
-        """Select data"""
-        table_file = self.data_dir / 'tables' / f'{table}.json'
-        if not table_file.exists():
-            return []
-        
-        with open(table_file, 'r') as f:
-            rows = json.load(f)
-        
-        results = []
-        for row in rows:
-            if where:
-                match = all(row.get(k) == v for k, v in where.items())
-                if not match:
-                    continue
-            
-            if columns and columns != ['*']:
-                filtered = {k: v for k, v in row.items() if k in columns}
-                results.append(filtered)
-            else:
-                results.append(row)
-            
-            if limit and len(results) >= limit:
-                break
-        
-        return results
-    
-    def list_tables(self):
-        """List all tables"""
-        tables_dir = self.data_dir / 'tables'
-        if not tables_dir.exists():
-            return []
-        return [f.stem for f in tables_dir.glob('*.json')]
-    
-    def get_table_info(self, table):
-        """Get table information"""
-        meta_file = self.data_dir / 'meta' / f'{table}.json'
-        if meta_file.exists():
-            with open(meta_file, 'r') as f:
-                return json.load(f)
+    def get(self, page_id):
+        """Récupère une page du cache"""
+        with self.lock:
+            if page_id in self.pool:
+                page = self.pool.pop(page_id)
+                self.pool[page_id] = page
+                self.hits += 1
+                return page.copy()
+            self.misses += 1
         return None
     
-    def close(self):
-        """Close storage"""
-        pass
+    def put(self, page_id, page_data):
+        """Ajoute une page au cache"""
+        with self.lock:
+            if page_id in self.pool:
+                self.pool.pop(page_id)
+            elif len(self.pool) >= self.max_pages:
+                self.pool.popitem(last=False)
+            self.pool[page_id] = page_data.copy()
+    
+    def stats(self):
+        """Retourne les statistiques du cache"""
+        return {
+            'size': len(self.pool),
+            'max_size': self.max_pages,
+            'hits': self.hits,
+            'misses': self.misses,
+            'hit_ratio': self.hits / (self.hits + self.misses) if (self.hits + self.misses) > 0 else 0
+        }
+
+class TransactionManager:
+    """Gestion des transactions ACID"""
+    
+    def __init__(self, storage):
+        self.storage = storage
+        self.active_transactions = {}
+        self.transaction_counter = 0
+        self.lock = threading.RLock()
+        
+    def begin(self):
+        """Démarre une nouvelle transaction"""
+        with self.lock:
+            tid = self.transaction_counter
+            self.transaction_counter += 1
+            self.active_transactions[tid] = {
+                'start_time': datetime.now(),
+                'changes': {},
+                'rollback_log': []
+            }
+            logger.info(f"Transaction {tid} started")
+            return tid
+    
+    def commit(self, tid):
+        """Valide une transaction"""
+        with self.lock:
+            if tid not in self.active_transactions:
+                raise TransactionError(f"Transaction {tid} not found")
+            
+            try:
+                # Applique tous les changements
+                for page_id, data in self.active_transactions[tid]['changes'].items():
+                    self.storage.write_page(page_id, data)
+                
+                # Nettoie les logs
+                del self.active_transactions[tid]
+                logger.info(f"Transaction {tid} committed")
+                
+            except Exception as e:
+                self.rollback(tid)
+                raise TransactionError(f"Commit failed: {str(e)}")
+    
+    def rollback(self, tid):
+        """Annule une transaction"""
+        with self.lock:
+            if tid not in self.active_transactions:
+                raise TransactionError(f"Transaction {tid} not found")
+            
+            # Restaure l'état précédent
+            for log_entry in reversed(self.active_transactions[tid]['rollback_log']):
+                self.storage.write_page(log_entry['page_id'], log_entry['old_data'])
+            
+            del self.active_transactions[tid]
+            logger.info(f"Transaction {tid} rolled back")
+
+class StorageEngine:
+    """Moteur de stockage avec buffer pool et transactions"""
+    
+    def __init__(self, db_path, page_size=4096, buffer_pool_size=100):
+        self.db_path = db_path
+        self.page_size = page_size
+        self.buffer_pool = BufferPool(max_pages=buffer_pool_size)
+        self.transaction_manager = TransactionManager(self)
+        self.lock = threading.RLock()
+        
+        # Créé le fichier s'il n'existe pas
+        if not os.path.exists(db_path):
+            self._initialize_db()
+    
+    def _initialize_db(self):
+        """Initialise une nouvelle base de données"""
+        with open(self.db_path, 'wb') as f:
+            # En-tête de la base de données
+            header = {
+                'page_size': self.page_size,
+                'created_at': datetime.now().isoformat(),
+                'version': '1.0'
+            }
+            pickle.dump(header, f)
+            f.write(b'\x00' * (self.page_size - f.tell()))
+    
+    def read_page(self, page_id):
+        """Lit une page depuis le disque ou le cache"""
+        # D'abord, vérifier le cache
+        cached = self.buffer_pool.get(page_id)
+        if cached:
+            return cached
+        
+        # Lecture depuis le disque
+        with self.lock:
+            with open(self.db_path, 'rb') as f:
+                f.seek(page_id * self.page_size)
+                data = f.read(self.page_size)
+                
+                # Mettre en cache
+                self.buffer_pool.put(page_id, data)
+                return data
+    
+    def write_page(self, page_id, data):
+        """Écrit une page (utiliser dans une transaction)"""
+        with self.lock:
+            # Log pour rollback
+            tid = self._get_current_transaction()
+            if tid is not None:
+                old_data = self.read_page(page_id)
+                self.transaction_manager.active_transactions[tid]['rollback_log'].append({
+                    'page_id': page_id,
+                    'old_data': old_data
+                })
+                
+                # Stocker le changement
+                self.transaction_manager.active_transactions[tid]['changes'][page_id] = data
+            
+            # Écriture immédiate (WAL serait mieux)
+            with open(self.db_path, 'r+b') as f:
+                f.seek(page_id * self.page_size)
+                f.write(data)
+    
+    def _get_current_transaction(self):
+        """Récupère l'ID de la transaction courante"""
+        for tid in self.transaction_manager.active_transactions:
+            return tid
+        return None
