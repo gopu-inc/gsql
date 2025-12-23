@@ -2,10 +2,10 @@
 FROM python:3.9
 
 # Définir la version comme argument de build - CORRECTION ICI
-ARG VERSION="3.0.2"
+ARG VERSION=3.0.3
 
 # Utiliser l'argument correctement - CORRECTION CRITIQUE ICI
-LABEL version="${VERSION}"
+LABEL version="3.0.3"
 LABEL maintainer="ceoseshell"
 LABEL description="GSQL - Graph Database Query Language"
 
