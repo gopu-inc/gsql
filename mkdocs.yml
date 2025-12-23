@@ -1,0 +1,37 @@
+site_name: GSQL Documentation
+site_description: Documentation for the GSQL database project.
+repo_url: https://github.com/gopu-inc/gsql  # Remplace par ton URL si différente
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - search.suggest
+    - search.highlight
+
+plugins:
+  - search
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          options:
+            docstring_style: google  # Style de tes docstrings
+            show_source: true
+
+nav:
+  - Accueil: index.md
+  - Guide: guide.md
+  - Référence API:
+    - database.py: api/database.md
+    - exceptions.py: api/exceptions.md
+    - parser.py: api/parser.md
+    - storage.py: api/storage.md
+    - btree.py: api/btree.md
+    - executor.py: api/executor.md
+    - index.py: api/index.md
+    - user_functions.py: api/user_functions.md
+    - yaml_storage.py: api/yaml_storage.md
+    - translator.py: api/translator.md
+  - Configuration: config.md
