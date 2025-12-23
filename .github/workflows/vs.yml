@@ -2,9 +2,9 @@ name: 🔄 Synchronisation Automatique des Versions
 
 on:
   push:
-     # Se déclenche uniquement sur les tags de version (v1.0.0, v2.3.4, etc.)
-    branches:
-      - main  # Optionnel: pour vérifier la cohérence
+     tag: 'v*.*.*'
+   # Se déclenche uniquement sur les tags de version (v1.0.0, v2.3.4, etc.)
+   
 
 env:
   VERSION_FILE: "gsql/__init__.py"
