@@ -2,8 +2,7 @@ name: 🚀 Publication Multi-Plateformes (Docker, PyPI, Anaconda)
 
 on:
   push:
-    tags:
-      - 'v*'  # Déclenché par les tags de version (ex: v3.0.2, v1.0.0)
+    branches: main # Déclenché par les tags de version (ex: v3.0.2, v1.0.0)
 
 env:
   VERSION_FILE: "gsql/__init__.py"
