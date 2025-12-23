@@ -1,0 +1,792 @@
+<!DOCTYPE html>
+<html lang="fr" data-bs-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GSQL Database - Documentation Complète</title>
+    
+    <!-- Logos & Favicons -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1024 1024'><rect width='1024' height='1024' fill='%234a6fa5'/><text x='512' y='540' font-family='Arial' font-size='400' text-anchor='middle' fill='white'>G</text></svg>">
+    
+    <!-- CDN Libraries -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+    
+    <style>
+        :root {
+            --primary-color: #4a6fa5;
+            --secondary-color: #166088;
+            --accent-color: #4fc3a1;
+            --dark-color: #2c3e50;
+            --light-color: #f8f9fa;
+            --code-bg: #1a1a1a;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--light-color);
+        }
+        
+        /* Navbar avec logo */
+        .navbar-brand img {
+            height: 40px;
+            width: auto;
+            border-radius: 8px;
+            margin-right: 10px;
+            transition: transform 0.3s;
+        }
+        
+        .navbar-brand img:hover {
+            transform: scale(1.1);
+        }
+        
+        .hero-section {
+            background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%);
+            color: white;
+            padding: 80px 0 100px;
+            margin-bottom: 50px;
+            border-radius: 0 0 40px 40px;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .hero-section::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: url('https://github.com/user-attachments/assets/9cf47e59-c2f3-49d9-a7c2-82771d5363bd');
+            background-size: cover;
+            background-position: center;
+            opacity: 0.1;
+            z-index: 0;
+        }
+        
+        .hero-content {
+            position: relative;
+            z-index: 1;
+        }
+        
+        .main-logo {
+            width: 120px;
+            height: 120px;
+            border-radius: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            border: 3px solid white;
+        }
+        
+        /* Section Badges */
+        .badges-section {
+            background: white;
+            padding: 40px 0;
+            border-radius: 20px;
+            margin: 30px auto;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        }
+        
+        .badge-container {
+            text-align: center;
+            padding: 15px;
+        }
+        
+        .badge-item {
+            display: inline-block;
+            margin: 10px;
+            padding: 15px 20px;
+            background: #f8f9fa;
+            border-radius: 10px;
+            border: 1px solid #dee2e6;
+            transition: all 0.3s;
+        }
+        
+        .badge-item:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 20px rgba(0,0,0,0.1);
+            background: white;
+        }
+        
+        .badge-img {
+            height: 28px;
+            margin: 0 5px;
+            vertical-align: middle;
+        }
+        
+        .badge-code {
+            background: #f8f9fa;
+            padding: 10px 15px;
+            border-radius: 8px;
+            font-family: monospace;
+            font-size: 14px;
+            margin-top: 10px;
+            display: block;
+            cursor: pointer;
+            position: relative;
+        }
+        
+        .badge-code:hover {
+            background: #e9ecef;
+        }
+        
+        .copy-badge {
+            position: absolute;
+            right: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: var(--accent-color);
+            color: white;
+            border: none;
+            padding: 3px 10px;
+            border-radius: 5px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        
+        .badge-url {
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+            word-break: break-all;
+        }
+        
+        /* Cards */
+        .feature-card {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            height: 100%;
+            transition: transform 0.3s, box-shadow 0.3s;
+            border: none;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.08);
+            margin-bottom: 20px;
+        }
+        
+        .feature-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 30px rgba(0,0,0,0.15);
+        }
+        
+        /* Documentation Cards */
+        .doc-card {
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            border-radius: 15px;
+            padding: 25px;
+            height: 100%;
+            transition: all 0.3s;
+            border-left: 5px solid var(--primary-color);
+        }
+        
+        .doc-card:hover {
+            background: linear-gradient(135deg, #e3e9f7 0%, #b0c1e8 100%);
+            transform: translateX(5px);
+        }
+        
+        .doc-icon {
+            font-size: 2.5rem;
+            color: var(--primary-color);
+            margin-bottom: 15px;
+        }
+        
+        /* API Documentation */
+        .api-section {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            margin: 30px 0;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.1);
+        }
+        
+        .api-endpoint {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 10px;
+            margin: 10px 0;
+            border-left: 4px solid var(--accent-color);
+        }
+        
+        .api-method {
+            display: inline-block;
+            padding: 5px 15px;
+            background: var(--primary-color);
+            color: white;
+            border-radius: 5px;
+            font-weight: bold;
+            margin-right: 10px;
+        }
+        
+        .api-get { background: #61affe; }
+        .api-post { background: #49cc90; }
+        .api-put { background: #fca130; }
+        .api-delete { background: #f93e3e; }
+        
+        /* Responsive */
+        @media (max-width: 768px) {
+            .hero-section {
+                padding: 60px 0 80px;
+                border-radius: 0 0 30px 30px;
+            }
+            
+            .main-logo {
+                width: 80px;
+                height: 80px;
+            }
+            
+            .badge-item {
+                margin: 5px;
+                padding: 10px;
+            }
+            
+            .badge-img {
+                height: 20px;
+            }
+        }
+        
+        /* Dark Mode */
+        .dark-mode {
+            background-color: #1a1a1a;
+            color: #ffffff;
+        }
+        
+        .dark-mode .feature-card,
+        .dark-mode .badges-section,
+        .dark-mode .api-section {
+            background: #2d2d2d;
+            color: #ffffff;
+        }
+        
+        .dark-mode .badge-item {
+            background: #3d3d3d;
+            border-color: #4d4d4d;
+        }
+        
+        .dark-mode .badge-code {
+            background: #3d3d3d;
+            color: #ffffff;
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark sticky-top">
+        <div class="container">
+            <a class="navbar-brand d-flex align-items-center" href="#">
+                <img src="https://github.com/user-attachments/assets/9cf47e59-c2f3-49d9-a7c2-82771d5363bd" 
+                     alt="GSQL Logo" 
+                     style="height: 40px; border-radius: 8px;">
+                <span class="ms-2 fw-bold">GSQL Database</span>
+            </a>
+            
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav ms-auto">
+                    <li class="nav-item">
+                        <a class="nav-link active" href="#home">Accueil</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="#badges">Badges</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="#features">Fonctionnalités</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="#api">API</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="#docs">Documentation</a>
+                    </li>
+                    <li class="nav-item">
+                        <button class="btn btn-outline-light ms-2" id="themeToggle">
+                            <i class="fas fa-moon"></i>
+                        </button>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="hero-section" id="home">
+        <div class="container">
+            <div class="row align-items-center hero-content">
+                <div class="col-lg-6 text-center text-lg-start">
+                    <img src="https://github.com/user-attachments/assets/9cf47e59-c2f3-49d9-a7c2-82771d5363bd" 
+                         alt="GSQL Logo" 
+                         class="main-logo">
+                    <h1 class="display-4 fw-bold mb-3">GSQL Database</h1>
+                    <p class="lead mb-4">Un système de base de données moderne avec support SQL, NLP intégré et stockage flexible.</p>
+                    <div class="d-flex flex-wrap gap-3 justify-content-center justify-content-lg-start">
+                        <a href="#docs" class="btn btn-light btn-lg">
+                            <i class="fas fa-book me-2"></i>Documentation
+                        </a>
+                        <a href="#api" class="btn btn-outline-light btn-lg">
+                            <i class="fas fa-code me-2"></i>API Reference
+                        </a>
+                        <a href="https://github.com/gopu-inc/gsql" target="_blank" class="btn btn-success btn-lg">
+                            <i class="fab fa-github me-2"></i>GitHub
+                        </a>
+                    </div>
+                </div>
+                <div class="col-lg-6 text-center">
+                    <div class="badges-section">
+                        <h3 class="mb-4">Utilisez nos badges</h3>
+                        <div class="row">
+                            <div class="col-md-4 badge-container">
+                                <div class="badge-item">
+                                    <img src="https://img.shields.io/badge/GSQL-Database-blue?style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTAyNCIgaGVpZ2h0PSIxMDI0IiB2aWV3Qm94PSIwIDAgMTAyNCAxMDI0IiBmaWxsPSJub25lIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxyZWN0IHdpZHRoPSIxMDI0IiBoZWlnaHQ9IjEwMjQiIGZpbGw9IiM0YTZmYTUiLz48dGV4dCB4PSI1MTIiIHk9IjU0MCIgZm9udC1mYW1pbHk9IkFyaWFsIiBmb250LXNpemU9IjQwMCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZmlsbD0id2hpdGUiPkc8L3RleHQ+PC9zdmc+&logoColor=white" 
+                                         alt="GSQL Database" class="badge-img">
+                                    <div class="badge-code" onclick="copyBadgeCode(this)">
+                                        <span>[![GSQL Database](https://img.shields.io/badge/GSQL-Database-blue?style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTAyNCIgaGVpZ2h0PSIxMDI0IiB2aWV3Qm94PSIwIDAgMTAyNCAxMDI0IiBmaWxsPSJub25lIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxyZWN0IHdpZHRoPSIxMDI0IiBoZWlnaHQ9IjEwMjQiIGZpbGw9IiM0YTZmYTUiLz48dGV4dCB4PSI1MTIiIHk9IjU0MCIgZm9udC1mYW1pbHk9IkFyaWFsIiBmb250LXNpemU9IjQwMCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZmlsbD0id2hpdGUiPkc8L3RleHQ+PC9zdmc+&logoColor=white)](https://github.com/gopu-inc/gsql)</span>
+                                        <button class="copy-badge">Copier</button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-4 badge-container">
+                                <div class="badge-item">
+                                    <img src="https://img.shields.io/badge/version-1.0.0-green?style=flat-square&logo=data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIGZpbGw9IiM0YTZmYTUiLz48cGF0aCBkPSJNMTIgMkM2LjQ4IDIgMiA2LjQ4IDIgMTJzNC40OCAxMCAxMCAxMCAxMC00LjQ4IDEwLTEwUzE3LjUyIDIgMTIgMnptMCAxOGMtNC40MSAwLTgtMy41OS04LThzMy41OS04IDgtOCA4IDMuNTkgOCA4LTMuNTkgOC04IDh6bS4zNS04LjQxbC0zLjA4IDMuMDhMOC41IDEzLjVsLTEuNDEtMS40MUwxMS4zNSA4IDE2IDExLjA5bC0xLjQxIDEuNDJ6IiBmaWxsPSJ3aGl0ZSIvPjwvc3ZnPg==" 
+                                         alt="Version" class="badge-img">
+                                    <div class="badge-code" onclick="copyBadgeCode(this)">
+                                        <span>[![Version](https://img.shields.io/badge/version-1.0.0-green?style=flat-square)](https://github.com/gopu-inc/gsql)</span>
+                                        <button class="copy-badge">Copier</button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-4 badge-container">
+                                <div class="badge-item">
+                                    <img src="https://img.shields.io/badge/python-3.8%2B-blue?style=flat-square&logo=python&logoColor=white" 
+                                         alt="Python" class="badge-img">
+                                    <div class="badge-code" onclick="copyBadgeCode(this)">
+                                        <span>[![Python](https://img.shields.io/badge/python-3.8%2B-blue?style=flat-square&logo=python&logoColor=white)](https://python.org)</span>
+                                        <button class="copy-badge">Copier</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Badges Section -->
+    <section class="container my-5" id="badges">
+        <div class="text-center mb-5">
+            <h2 class="fw-bold mb-3">Badges Disponibles</h2>
+            <p class="text-muted">Intégrez ces badges dans vos README, documentation ou sites web</p>
+        </div>
+        
+        <div class="row g-4">
+            <!-- Badge 1 -->
+            <div class="col-md-4">
+                <div class="feature-card text-center">
+                    <div class="badge-container">
+                        <img src="https://img.shields.io/badge/GSQL-NLP_Enabled-4FC3A1?style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIGZpbGw9IiM0YTZmYTUiLz48cGF0aCBkPSJNMTIgMkM2LjQ4IDIgMiA2LjQ4IDIgMTJzNC40OCAxMCAxMCAxMCAxMC00LjQ4IDEwLTEwUzE3LjUyIDIgMTIgMnptMiAxNWwtNS01IDEuNDEtMS40MUwxMiAxNC4xN2wzLjU5LTMuNTlMMTcgMTJsLTUgNXoiIGZpbGw9IndoaXRlIi8+PC9zdmc+&logoColor=white" 
+                             alt="NLP Enabled" class="badge-img mb-3">
+                        <h5>NLP Enabled</h5>
+                        <div class="badge-code mt-3" onclick="copyBadgeCode(this)">
+                            <span>[![NLP Enabled](https://img.shields.io/badge/GSQL-NLP_Enabled-4FC3A1?style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIGZpbGw9IiM0YTZmYTUiLz48cGF0aCBkPSJNMTIgMkM2LjQ4IDIgMiA2LjQ4IDIgMTJzNC40OCAxMCAxMCAxMCAxMC00LjQ4IDEwLTEwUzE3LjUyIDIgMTIgMnptMiAxNWwtNS01IDEuNDEtMS40MUwxMiAxNC4xN2wzLjU5LTMuNTlMMTcgMTJsLTUgNXoiIGZpbGw9IndoaXRlIi8+PC9zdmc+&logoColor=white)](https://github.com/gopu-inc/gsql)</span>
+                            <button class="copy-badge">Copier</button>
+                        </div>
+                        <div class="badge-url">
+                            URL: badges/gsql-nlp.svg
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Badge 2 -->
+            <div class="col-md-4">
+                <div class="feature-card text-center">
+                    <div class="badge-container">
+                        <img src="https://img.shields.io/badge/Storage-YAML-blueviolet?style=for-the-badge&logo=yaml&logoColor=white" 
+                             alt="YAML Storage" class="badge-img mb-3">
+                        <h5>YAML Storage</h5>
+                        <div class="badge-code mt-3" onclick="copyBadgeCode(this)">
+                            <span>[![YAML Storage](https://img.shields.io/badge/Storage-YAML-blueviolet?style=for-the-badge&logo=yaml&logoColor=white)](https://github.com/gopu-inc/gsql)</span>
+                            <button class="copy-badge">Copier</button>
+                        </div>
+                        <div class="badge-url">
+                            URL: badges/storage-yaml.svg
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Badge 3 -->
+            <div class="col-md-4">
+                <div class="feature-card text-center">
+                    <div class="badge-container">
+                        <img src="https://img.shields.io/badge/B--Tree_Indexing-FF6B35?style=for-the-badge&logo=tree&logoColor=white" 
+                             alt="B-Tree Indexing" class="badge-img mb-3">
+                        <h5>B-Tree Indexing</h5>
+                        <div class="badge-code mt-3" onclick="copyBadgeCode(this)">
+                            <span>[![B-Tree Indexing](https://img.shields.io/badge/B--Tree_Indexing-FF6B35?style=for-the-badge&logo=tree&logoColor=white)](https://github.com/gopu-inc/gsql)</span>
+                            <button class="copy-badge">Copier</button>
+                        </div>
+                        <div class="badge-url">
+                            URL: badges/indexing-btree.svg
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Badge Generator -->
+        <div class="feature-card mt-5">
+            <h4 class="mb-4">Générateur de Badge Personnalisé</h4>
+            <div class="row">
+                <div class="col-md-8">
+                    <div class="mb-3">
+                        <label class="form-label">Texte du badge</label>
+                        <input type="text" class="form-control" id="badgeText" value="GSQL Custom">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Couleur</label>
+                        <input type="color" class="form-control form-control-color" id="badgeColor" value="#4a6fa5">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Style</label>
+                        <select class="form-select" id="badgeStyle">
+                            <option value="flat">Flat</option>
+                            <option value="flat-square" selected>Flat Square</option>
+                            <option value="plastic">Plastic</option>
+                            <option value="for-the-badge">For the Badge</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="text-center">
+                        <img src="https://img.shields.io/badge/GSQL-Custom-4a6fa5?style=flat-square" 
+                             alt="Preview" id="badgePreview" class="badge-img mb-3" style="height: 40px;">
+                        <button class="btn btn-primary" onclick="generateBadge()">
+                            <i class="fas fa-code me-2"></i>Générer le code
+                        </button>
+                        <div id="generatedCode" class="badge-code mt-3" style="display: none;">
+                            <span id="codeContent"></span>
+                            <button class="copy-badge">Copier</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Features Section -->
+    <section class="container my-5" id="features">
+        <div class="text-center mb-5">
+            <h2 class="fw-bold mb-3">Fonctionnalités Principales</h2>
+            <p class="text-muted">Découvrez les capacités puissantes de GSQL</p>
+        </div>
+        
+        <div class="row g-4">
+            <div class="col-md-6 col-lg-3">
+                <div class="feature-card text-center">
+                    <div class="feature-icon">
+                        <i class="fas fa-database"></i>
+                    </div>
+                    <h5>Support SQL Complet</h5>
+                    <p class="text-muted">Syntaxe SQL standard avec extensions avancées</p>
+                </div>
+            </div>
+            <div class="col-md-6 col-lg-3">
+                <div class="feature-card text-center">
+                    <div class="feature-icon">
+                        <i class="fas fa-language"></i>
+                    </div>
+                    <h5>Intégration NLP</h5>
+                    <p class="text-muted">Requêtes en langage naturel traduites en SQL</p>
+                </div>
+            </div>
+            <div class="col-md-6 col-lg-3">
+                <div class="feature-card text-center">
+                    <div class="feature-icon">
+                        <i class="fas fa-file-code"></i>
+                    </div>
+                    <h5>Stockage YAML</h5>
+                    <p class="text-muted">Format lisible et flexible pour le stockage</p>
+                </div>
+            </div>
+            <div class="col-md-6 col-lg-3">
+                <div class="feature-card text-center">
+                    <div class="feature-icon">
+                        <i class="fas fa-sitemap"></i>
+                    </div>
+                    <h5>Indexation B-Tree</h5>
+                    <p class="text-muted">Recherche et tri haute performance</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- API Documentation -->
+    <section class="container my-5" id="api">
+        <div class="api-section">
+            <h2 class="fw-bold mb-4">Documentation API</h2>
+            
+            <div class="api-endpoint">
+                <span class="api-method api-post">POST</span>
+                <strong>/api/database/create</strong>
+                <p class="mb-2">Créer une nouvelle base de données</p>
+                <pre class="bg-dark text-light p-3 rounded"><code>{
+  "name": "string",
+  "storage_type": "yaml|json|binary",
+  "config": {...}
+}</code></pre>
+            </div>
+            
+            <div class="api-endpoint">
+                <span class="api-method api-get">GET</span>
+                <strong>/api/database/{name}/query</strong>
+                <p class="mb-2">Exécuter une requête SQL</p>
+                <pre class="bg-dark text-light p-3 rounded"><code>{
+  "query": "SELECT * FROM users",
+  "params": [...]
+}</code></pre>
+            </div>
+            
+            <div class="api-endpoint">
+                <span class="api-method api-post">POST</span>
+                <strong>/api/nlp/translate</strong>
+                <p class="mb-2">Traduire du langage naturel en SQL</p>
+                <pre class="bg-dark text-light p-3 rounded"><code>{
+  "text": "Affiche les utilisateurs de plus de 25 ans",
+  "language": "fr"
+}</code></pre>
+            </div>
+        </div>
+    </section>
+
+    <!-- Documentation Cards -->
+    <section class="container my-5" id="docs">
+        <div class="text-center mb-5">
+            <h2 class="fw-bold mb-3">Documentation Complète</h2>
+            <p class="text-muted">Accédez à toute la documentation technique</p>
+        </div>
+        
+        <div class="row g-4">
+            <div class="col-md-6 col-lg-4">
+                <a href="database.html" class="text-decoration-none">
+                    <div class="doc-card">
+                        <div class="doc-icon">
+                            <i class="fas fa-database"></i>
+                        </div>
+                        <h5>Module Database</h5>
+                        <p class="text-muted">Gestion des bases de données et connexions</p>
+                        <span class="badge bg-primary">database.py</span>
+                    </div>
+                </a>
+            </div>
+            
+            <div class="col-md-6 col-lg-4">
+                <a href="parser.html" class="text-decoration-none">
+                    <div class="doc-card">
+                        <div class="doc-icon">
+                            <i class="fas fa-code"></i>
+                        </div>
+                        <h5>Module Parser</h5>
+                        <p class="text-muted">Analyse syntaxique SQL et NLP</p>
+                        <span class="badge bg-success">parser.py</span>
+                    </div>
+                </a>
+            </div>
+            
+            <div class="col-md-6 col-lg-4">
+                <a href="storage.html" class="text-decoration-none">
+                    <div class="doc-card">
+                        <div class="doc-icon">
+                            <i class="fas fa-hdd"></i>
+                        </div>
+                        <h5>Module Storage</h5>
+                        <p class="text-muted">Système de stockage persistant</p>
+                        <span class="badge bg-warning">storage.py</span>
+                    </div>
+                </a>
+            </div>
+            
+            <div class="col-md-6 col-lg-4">
+                <a href="nlp.html" class="text-decoration-none">
+                    <div class="doc-card">
+                        <div class="doc-icon">
+                            <i class="fas fa-language"></i>
+                        </div>
+                        <h5>Module NLP</h5>
+                        <p class="text-muted">Traitement du langage naturel</p>
+                        <span class="badge bg-info">translator.py</span>
+                    </div>
+                </a>
+            </div>
+            
+            <div class="col-md-6 col-lg-4">
+                <a href="functions.html" class="text-decoration-none">
+                    <div class="doc-card">
+                        <div class="doc-icon">
+                            <i class="fas fa-cogs"></i>
+                        </div>
+                        <h5>Fonctions Utilisateur</h5>
+                        <p class="text-muted">Extension via fonctions personnalisées</p>
+                        <span class="badge bg-secondary">user_functions.py</span>
+                    </div>
+                </a>
+            </div>
+            
+            <div class="col-md-6 col-lg-4">
+                <a href="btree.html" class="text-decoration-none">
+                    <div class="doc-card">
+                        <div class="doc-icon">
+                            <i class="fas fa-sitemap"></i>
+                        </div>
+                        <h5>Indexation B-Tree</h5>
+                        <p class="text-muted">Arbres B pour l'indexation rapide</p>
+                        <span class="badge bg-dark">btree.py</span>
+                    </div>
+                </a>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="bg-dark text-light py-5 mt-5">
+        <div class="container">
+            <div class="row">
+                <div class="col-lg-4 mb-4">
+                    <img src="https://github.com/user-attachments/assets/9cf47e59-c2f3-49d9-a7c2-82771d5363bd" 
+                         alt="GSQL Logo" 
+                         style="height: 60px; border-radius: 10px; margin-bottom: 20px;">
+                    <p>Un système de base de données moderne avec des fonctionnalités avancées.</p>
+                    <div class="d-flex gap-3">
+                        <a href="https://github.com/gopu-inc/gsql" class="text-light">
+                            <i class="fab fa-github fa-2x"></i>
+                        </a>
+                        <a href="#" class="text-light">
+                            <i class="fab fa-python fa-2x"></i>
+                        </a>
+                    </div>
+                </div>
+                <div class="col-lg-4 mb-4">
+                    <h5>Ressources</h5>
+                    <ul class="list-unstyled">
+                        <li><a href="#docs" class="text-light text-decoration-none">Documentation</a></li>
+                        <li><a href="#api" class="text-light text-decoration-none">Référence API</a></li>
+                        <li><a href="#badges" class="text-light text-decoration-none">Badges</a></li>
+                        <li><a href="https://github.com/gopu-inc/gsql/issues" class="text-light text-decoration-none">Issues GitHub</a></li>
+                    </ul>
+                </div>
+                <div class="col-lg-4 mb-4">
+                    <h5>Badges Rapides</h5>
+                    <div class="d-flex flex-wrap gap-2">
+                        <img src="https://img.shields.io/badge/GSQL-Database-blue?style=flat-square&logo=data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTAyNCIgaGVpZ2h0PSIxMDI0IiB2aWV3Qm94PSIwIDAgMTAyNCAxMDI0IiBmaWxsPSJub25lIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxyZWN0IHdpZHRoPSIxMDI0IiBoZWlnaHQ9IjEwMjQiIGZpbGw9IiM0YTZmYTUiLz48dGV4dCB4PSI1MTIiIHk9IjU0MCIgZm9udC1mYW1pbHk9IkFyaWFsIiBmb250LXNpemU9IjQwMCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZmlsbD0id2hpdGUiPkc8L3RleHQ+PC9zdmc+&logoColor=white" 
+                             alt="GSQL" style="height: 20px;">
+                        <img src="https://img.shields.io/badge/python-3.8%2B-blue?style=flat-square" 
+                             alt="Python" style="height: 20px;">
+                        <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" 
+                             alt="License" style="height: 20px;">
+                    </div>
+                </div>
+            </div>
+            <hr class="bg-light">
+            <div class="text-center">
+                <p>&copy; 2024 GSQL Database. Tous droits réservés.</p>
+            </div>
+        </div>
+    </footer>
+
+    <!-- JavaScript Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+    
+    <script>
+        // Theme Toggle
+        const themeToggle = document.getElementById('themeToggle');
+        const themeIcon = themeToggle.querySelector('i');
+        
+        themeToggle.addEventListener('click', () => {
+            document.body.classList.toggle('dark-mode');
+            
+            if (document.body.classList.contains('dark-mode')) {
+                themeIcon.classList.remove('fa-moon');
+                themeIcon.classList.add('fa-sun');
+                themeToggle.classList.remove('btn-outline-light');
+                themeToggle.classList.add('btn-light');
+            } else {
+                themeIcon.classList.remove('fa-sun');
+                themeIcon.classList.add('fa-moon');
+                themeToggle.classList.remove('btn-light');
+                themeToggle.classList.add('btn-outline-light');
+            }
+        });
+        
+        // Copy Badge Code
+        function copyBadgeCode(element) {
+            const code = element.querySelector('span').textContent;
+            navigator.clipboard.writeText(code).then(() => {
+                const btn = element.querySelector('.copy-badge');
+                const original = btn.textContent;
+                btn.textContent = 'Copié!';
+                btn.style.background = '#49cc90';
+                
+                setTimeout(() => {
+                    btn.textContent = original;
+                    btn.style.background = '';
+                }, 2000);
+            });
+        }
+        
+        // Badge Generator
+        function generateBadge() {
+            const text = document.getElementById('badgeText').value;
+            const color = document.getElementById('badgeColor').value.replace('#', '');
+            const style = document.getElementById('badgeStyle').value;
+            
+            const badgeUrl = `https://img.shields.io/badge/${encodeURIComponent(text)}-${color}?style=${style}`;
+            const code = `[![${text}](${badgeUrl})](https://github.com/gopu-inc/gsql)`;
+            
+            document.getElementById('badgePreview').src = badgeUrl;
+            document.getElementById('codeContent').textContent = code;
+            document.getElementById('generatedCode').style.display = 'block';
+        }
+        
+        // Initialize Prism for code highlighting
+        document.addEventListener('DOMContentLoaded', function() {
+            Prism.highlightAll();
+            
+            // Smooth scrolling
+            document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+                anchor.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    const target = document.querySelector(this.getAttribute('href'));
+                    if (target) {
+                        target.scrollIntoView({
+                            behavior: 'smooth',
+                            block: 'start'
+                        });
+                    }
+                });
+            });
+        });
+        
+        // Create dynamic badges directory structure
+        function createBadgeStructure() {
+            const badges = {
+                'version': 'https://img.shields.io/badge/version-1.0.0-green?style=flat-square',
+                'python': 'https://img.shields.io/badge/python-3.8%2B-blue?style=flat-square&logo=python&logoColor=white',
+                'license': 'https://img.shields.io/badge/license-MIT-green?style=flat-square',
+                'stars': 'https://img.shields.io/github/stars/gopu-inc/gsql?style=social',
+                'issues': 'https://img.shields.io/github/issues/gopu-inc/gsql?style=flat-square',
+                'downloads': 'https://img.shields.io/pypi/dm/gsql?style=flat-square'
+            };
+            
+            // This function would be called from your server-side code
+            // to generate the actual badge files
+            console.log('Badge structure available at: /badges/');
+        }
+        
+        // Call badge structure creation
+        createBadgeStructure();
+    </script>
+</body>
+</html>
