@@ -16,7 +16,7 @@ from typing import Optional, Dict, Any, Union, List
 
 
 
-__version__ = "3.0.1"
+__version__ = "3.0.2"
 __author__ = "Gopu Inc."
 __license__ = "MIT"
 __copyright__ = "Copyright 2024 Gopu Inc."
