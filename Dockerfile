@@ -1,7 +1,7 @@
 FROM python:3.9
 
-ARG VERSION=3.0.1
-LABEL version="$VERSION"
+ARG VERSION=0.1.1
+LABEL version="0.1.1"
 
 WORKDIR /app
 

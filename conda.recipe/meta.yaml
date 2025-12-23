@@ -1,13 +1,13 @@
 # Exemple de meta.yaml
 package:
   name: gsql
-  version: "3.0.1"  # Assurez-vous que la version correspond à votre tag
+  version: "0.1.1"  # Assurez-vous que la version correspond à votre tag
 
 source:
   url: https://pypi.io/packages/source/g/gsql/gsql-{{ version }}.tar.gz  # Ou .whl
 
 build:
-  number: 0
+  number: 3
 
 requirements:
   host:

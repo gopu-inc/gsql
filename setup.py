@@ -157,7 +157,7 @@ class VersionManager:
                     return version
         
         # Version par défaut
-        default_version = "3.0.1"
+        default_version = "0.1.1"
         print(f"📦 Version par défaut: {default_version}")
         return default_version
     
