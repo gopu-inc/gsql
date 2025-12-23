@@ -1,0 +1,56 @@
+name: 📦 Publication Anaconda
+
+on:
+  push:
+    branches: main
+
+jobs:
+  conda:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+      
+      - name: 🏷️ Lire version du tag
+        id: version
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "📦 Version Anaconda: $VERSION"
+      
+      - name: 🐍 Setup Miniconda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          auto-activate-base: true
+          python-version: 3.10
+      
+      - name: 📦 Installer outils
+        run: conda install conda-build anaconda-client -y
+      
+      - name: 🔍 Vérifier meta.yaml
+        run: |
+          if [ -f "conda.recipe/meta.yaml" ]; then
+            echo "✅ meta.yaml trouvé"
+          else
+            echo "❌ meta.yaml manquant"
+            exit 1
+          fi
+      
+      - name: 🏗️ Build Package Conda
+        run: |
+          conda build conda.recipe/ --output-folder dist_conda
+          echo "📦 Packages générés:"
+          find dist_conda -name "*.tar.bz2" | xargs ls -la
+      
+      - name: 🚀 Upload Anaconda
+        run: |
+          PKG=$(find dist_conda -name "*.tar.bz2" -type f | head -1)
+          if [ -n "$PKG" ]; then
+            echo "📤 Upload: $PKG"
+            anaconda -t ${{ secrets.ANACONDA_TOKEN }} upload --user ceoseshell "$PKG"
+            echo "✅ Anaconda: gsql=${{ env.VERSION }} publié"
+          else
+            echo "❌ Aucun package trouvé"
+            exit 1
+          fi
