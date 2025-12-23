@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Database Module - GSQL Documentation</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+    <style>
+        /* Reuse styles from main page */
+        :root {
+            --primary-color: #4a6fa5;
+            --secondary-color: #166088;
+            --accent-color: #4fc3a1;
+        }
+        
+        .api-doc {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            margin: 20px 0;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.1);
+        }
+        
+        .method-signature {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 10px;
+            border-left: 5px solid var(--primary-color);
+            font-family: monospace;
+            margin: 15px 0;
+        }
+        
+        .param-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+        
+        .param-table th, .param-table td {
+            padding: 12px;
+            border: 1px solid #dee2e6;
+            text-align: left;
+        }
+        
+        .param-table th {
+            background: var(--primary-color);
+            color: white;
+        }
+        
+        .example-code {
+            position: relative;
+        }
+        
+        .example-tabs {
+            margin-bottom: 20px;
+        }
+        
+        .example-tabs .nav-link {
+            border: none;
+            color: var(--dark-color);
+            font-weight: 600;
+        }
+        
+        .example-tabs .nav-link.active {
+            background: var(--primary-color);
+            color: white;
+        }
+        
+        .back-to-home {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: var(--primary-color);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 50px;
+            text-decoration: none;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+            z-index: 1000;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+        <div class="container">
+            <a class="navbar-brand d-flex align-items-center" href="index.html">
+                <img src="https://github.com/user-attachments/assets/9cf47e59-c2f3-49d9-a7c2-82771d5363bd" 
+                     alt="GSQL Logo" 
+                     style="height: 40px; border-radius: 8px;">
+                <span class="ms-2 fw-bold">GSQL Database</span>
+            </a>
+        </div>
+    </nav>
+
+    <div class="container mt-5">
+        <div class="row">
+            <div class="col-lg-3">
+                <div class="sticky-top" style="top: 20px;">
+                    <div class="card">
+                        <div class="card-header bg-primary text-white">
+                            <h6 class="mb-0">Modules</h6>
+                        </div>
+                        <div class="list-group list-group-flush">
+                            <a href="database.html" class="list-group-item list-group-item-action active">
+                                <i class="fas fa-database me-2"></i>Database
+                            </a>
+                            <a href="parser.html" class="list-group-item list-group-item-action">
+                                <i class="fas fa-code me-2"></i>Parser
+                            </a>
+                            <a href="storage.html" class="list-group-item list-group-item-action">
+                                <i class="fas fa-hdd me-2"></i>Storage
+                            </a>
+                            <a href="nlp.html" class="list-group-item list-group-item-action">
+                                <i class="fas fa-language me-2"></i>NLP
+                            </a>
+                            <a href="btree.html" class="list-group-item list-group-item-action">
+                                <i class="fas fa-sitemap me-2"></i>B-Tree
+                            </a>
+                        </div>
+                    </div>
+                    
+                    <!-- Badge Sidebar -->
+                    <div class="card mt-3">
+                        <div class="card-header bg-success text-white">
+                            <h6 class="mb-0">Badges</h6>
+                        </div>
+                        <div class="card-body">
+                            <img src="https://img.shields.io/badge/Database-Core_Module-blue?style=flat-square&logo=postgresql&logoColor=white" 
+                                 alt="Database Module" class="img-fluid mb-2">
+                            <div class="input-group input-group-sm mt-2">
+                                <input type="text" class="form-control" value='[![Database](https://img.shields.io/badge/Database-Core_Module-blue?style=flat-square&logo=postgresql&logoColor=white)](https://github.com/gopu-inc/gsql)' readonly>
+                                <button class="btn btn-outline-primary" onclick="navigator.clipboard.writeText(this.previousElementSibling.value)">
+                                    <i class="fas fa-copy"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-lg-9">
+                <div class="api-doc">
+                    <h1 class="mb-4">
+                        <i class="fas fa-database text-primary me-3"></i>
+                        Module Database
+                    </h1>
+                    
+                    <div class="alert alert-info">
+                        <i class="fas fa-info-circle me-2"></i>
+                        Le module <code>database.py</code> est le cœur de GSQL, gérant les connexions, sessions et opérations principales.
+                    </div>
+                    
+                    <h3 class="mt-5 mb-3">Classe Database</h3>
+                    
+                    <div class="method-signature">
+                        <span class="text-primary">class</span> <strong>Database</strong>(name: str, config: dict = None, storage_type: str = 'yaml')
+                    </div>
+                    
+                    <h5>Paramètres</h5>
+                    <table class="param-table">
+                        <thead>
+                            <tr>
+                                <th>Paramètre</th>
+                                <th>Type</th>
+                                <th>Description</th>
+                                <th>Défaut</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><code>name</code></td>
+                                <td><span class="badge bg-info">str</span></td>
+                                <td>Nom de la base de données</td>
+                                <td><em>Requis</em></td>
+                            </tr>
+                            <tr>
+                                <td><code>config</code></td>
+                                <td><span class="badge bg-warning">dict</span></td>
+                                <td>Configuration personnalisée</td>
+                                <td><code>{}</code></td>
+                            </tr>
+                            <tr>
+                                <td><code>storage_type</code></td>
+                                <td><span class="badge bg-info">str</span></td>
+                                <td>Type de stockage (yaml/json/binary)</td>
+                                <td><code>'yaml'</code></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    
+                    <h5>Méthodes Principales</h5>
+                    
+                    <div class="card mb-3">
+                        <div class="card-header bg-light">
+                            <code>execute(query: str, params: list = None) -> ResultSet</code>
+                        </div>
+                        <div class="card-body">
+                            <p>Exécute une requête SQL sur la base de données.</p>
+                            
+                            <h6>Exemple :</h6>
+                            <pre><code class="language-python">from gsql.database import Database
+
+db = Database("myapp")
+result = db.execute("SELECT * FROM users WHERE age > ?", [18])
+
+for row in result:
+    print(row['name'], row['age'])</code></pre>
+                        </div>
+                    </div>
+                    
+                    <div class="card mb-3">
+                        <div class="card-header bg-light">
+                            <code>nlp_query(text: str, language: str = 'fr') -> ResultSet</code>
+                        </div>
+                        <div class="card-body">
+                            <p>Traduit une requête en langage naturel en SQL et l'exécute.</p>
+                            
+                            <h6>Exemple :</h6>
+                            <pre><code class="language-python"># Utilisation du NLP
+results = db.nlp_query("Affiche les utilisateurs de Paris ayant plus de 25 ans")
+
+# Equivalent SQL généré :
+# SELECT * FROM users WHERE city = 'Paris' AND age > 25</code></pre>
+                        </div>
+                    </div>
+                    
+                    <h3 class="mt-5">Exemples Complets</h3>
+                    
+                    <div class="example-tabs">
+                        <ul class="nav nav-tabs" id="exampleTab" role="tablist">
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link active" id="basic-tab" data-bs-toggle="tab" data-bs-target="#basic">
+                                    Création de base
+                                </button>
+                            </li>
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link" id="advanced-tab" data-bs-toggle="tab" data-bs-target="#advanced">
+                                    Transactions
+                                </button>
+                            </li>
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link" id="nlp-tab" data-bs-toggle="tab" data-bs-target="#nlp">
+                                    NLP Intégré
+                                </button>
+                            </li>
+                        </ul>
+                        
+                        <div class="tab-content p-3 border border-top-0 rounded-bottom">
+                            <div class="tab-pane fade show active" id="basic">
+                                <pre><code class="language-python"># Initialisation complète
+from gsql.database import Database
+from gsql.exceptions import DatabaseError
+
+try:
+    # Création avec configuration
+    db = Database(
+        name="ecommerce",
+        storage_type="yaml",
+        config={
+            "cache_size": 1000,
+            "auto_backup": True,
+            "backup_interval": 3600
+        }
+    )
+    
+    # Création de tables
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS products (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            price DECIMAL(10,2),
+            stock INTEGER
+        )
+    """)
+    
+    # Insertion de données
+    db.execute("""
+        INSERT INTO products VALUES
+        (1, 'Laptop', 999.99, 50),
+        (2, 'Phone', 699.99, 100),
+        (3, 'Tablet', 399.99, 75)
+    """)
+    
+except DatabaseError as e:
+    print(f"Erreur: {e}")</code></pre>
+                            </div>
+                            
+                            <div class="tab-pane fade" id="advanced">
+                                <pre><code class="language-python"># Gestion des transactions
+db = Database("banking")
+
+# Transaction manuelle
+db.begin_transaction()
+
+try:
+    db.execute("UPDATE accounts SET balance = balance - 100 WHERE id = 1")
+    db.execute("UPDATE accounts SET balance = balance + 100 WHERE id = 2")
+    db.commit()
+    print("Transaction réussie")
+    
+except Exception as e:
+    db.rollback()
+    print(f"Transaction annulée: {e}")
+
+# Utilisation du context manager
+with db.transaction() as tx:
+    tx.execute("INSERT INTO logs VALUES ('transfer', 100, NOW())")
+    # Commit automatique à la sortie du bloc</code></pre>
+                            </div>
+                            
+                            <div class="tab-pane fade" id="nlp">
+                                <pre><code class="language-python"># Requêtes NLP avancées
+db = Database("customer_db")
+
+# Configuration NLP
+db.configure_nlp({
+    "language": "fr",
+    "confidence_threshold": 0.8,
+    "auto_correct": True
+})
+
+# Exemples de requêtes naturelles
+queries = [
+    "Affiche les 10 derniers clients",
+    "Combien de commandes en attente ?",
+    "Clients de Lyon dépensant plus de 500€",
+    "Produits les plus vendus ce mois"
+]
+
+for query in queries:
+    result = db.nlp_query(query)
+    print(f"Requête: {query}")
+    print(f"Résultats: {len(result)} lignes")
+    print()</code></pre>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Badge Integration -->
+                    <div class="card mt-5">
+                        <div class="card-header bg-primary text-white">
+                            <h5 class="mb-0">
+                                <i class="fas fa-shield-alt me-2"></i>
+                                Badges pour ce module
+                            </h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="row">
+                                <div class="col-md-4 text-center">
+                                    <img src="https://img.shields.io/badge/Module-Database-blue?style=for-the-badge&logo=database&logoColor=white" 
+                                         alt="Database Module" class="img-fluid mb-2">
+                                    <button class="btn btn-sm btn-outline-primary" onclick="copyBadge('database-module')">
+                                        <i class="fas fa-copy me-1"></i>Copier
+                                    </button>
+                                </div>
+                                <div class="col-md-4 text-center">
+                                    <img src="https://img.shields.io/badge/Transactions-Supported-green?style=flat-square" 
+                                         alt="Transactions" class="img-fluid mb-2">
+                                    <button class="btn btn-sm btn-outline-success" onclick="copyBadge('transactions')">
+                                        <i class="fas fa-copy me-1"></i>Copier
+                                    </button>
+                                </div>
+                                <div class="col-md-4 text-center">
+                                    <img src="https://img.shields.io/badge/NLP-Integrated-orange?style=flat-square&logo=ai&logoColor=white" 
+                                         alt="NLP" class="img-fluid mb-2">
+                                    <button class="btn btn-sm btn-outline-warning" onclick="copyBadge('nlp-integrated')">
+                                        <i class="fas fa-copy me-1"></i>Copier
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <a href="index.html" class="back-to-home">
+        <i class="fas fa-arrow-left me-2"></i>Retour à l'accueil
+    </a>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+    
+    <script>
+        function copyBadge(type) {
+            const badges = {
+                'database-module': '[![Database Module](https://img.shields.io/badge/Module-Database-blue?style=for-the-badge&logo=database&logoColor=white)](https://github.com/gopu-inc/gsql)',
+                'transactions': '[![Transactions](https://img.shields.io/badge/Transactions-Supported-green?style=flat-square)](https://github.com/gopu-inc/gsql)',
+                'nlp-integrated': '[![NLP Integrated](https://img.shields.io/badge/NLP-Integrated-orange?style=flat-square&logo=ai&logoColor=white)](https://github.com/gopu-inc/gsql)'
+            };
+            
+            navigator.clipboard.writeText(badges[type]).then(() => {
+                alert('Badge copié dans le presse-papier !');
+            });
+        }
+        
+        // Initialize Prism
+        Prism.highlightAll();
+        
+        // Initialize Bootstrap tabs
+        const tabEl = document.querySelectorAll('button[data-bs-toggle="tab"]')
+        tabEl.forEach(tab => {
+            tab.addEventListener('shown.bs.tab', event => {
+                Prism.highlightAll();
+            })
+        })
+    </script>
+</body>
+</html>
