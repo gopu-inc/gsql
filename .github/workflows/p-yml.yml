@@ -2,7 +2,8 @@ name: 🐍 Publication PyPI
 
 on:
   push:
-    branches: main
+    tags:
+      - 'v*'
 
 jobs:
   pypi:
@@ -12,28 +13,77 @@ jobs:
       - name: 📥 Checkout
         uses: actions/checkout@v4
       
-      - name: 🏷️ Lire version du tag
+      - name: 🏷️ Extraire version du tag
         id: version
         run: |
           VERSION="${GITHUB_REF#refs/tags/v}"
           echo "VERSION=$VERSION" >> $GITHUB_ENV
           echo "📦 Version PyPI: $VERSION"
       
+      - name: 🔍 Vérifier la version dans gsql/__init__.py
+        run: |
+          echo "🔍 Vérification de la cohérence des versions..."
+          
+          # Lire la version depuis gsql/__init__.py
+          if [ -f "gsql/__init__.py" ]; then
+            CODE_VERSION=$(grep -E "__version__\s*=\s*[\"'][0-9]+\.[0-9]+\.[0-9]+[\"']" "gsql/__init__.py" | head -1 | sed -E "s/.*[\"']([0-9]+\.[0-9]+\.[0-9]+)[\"'].*/\1/")
+            
+            if [ -n "$CODE_VERSION" ]; then
+              echo "✅ Version dans le code: $CODE_VERSION"
+              echo "✅ Version du tag: $VERSION"
+              
+              if [ "$CODE_VERSION" != "$VERSION" ]; then
+                echo "⚠️ ATTENTION: Les versions ne correspondent pas!"
+                echo "   Code: $CODE_VERSION"
+                echo "   Tag: $VERSION"
+                echo "   Le build continuera avec la version du tag."
+              fi
+            else
+              echo "⚠️ Version non trouvée dans gsql/__init__.py"
+            fi
+          else
+            echo "❌ Fichier gsql/__init__.py introuvable!"
+            exit 1
+          fi
+      
       - name: 🐍 Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
       
-      - name: 📦 Installer build
-        run: pip install build
+      - name: 📦 Installer les outils de build
+        run: |
+          pip install --upgrade pip
+          pip install build twine
       
-      - name: 🏗️ Build Package
-        run: python -m build
+      - name: 🏗️ Construire les packages Python
+        run: |
+          echo "🏗️ Construction des distributions..."
+          python -m build
+          
+          echo "📦 Packages générés:"
+          ls -la dist/
       
-      - name: 📤 Upload PyPI
+      - name: 🔍 Vérifier les packages avec twine
+        run: |
+          echo "🔍 Vérification des packages..."
+          twine check dist/*
+      
+      - name: 📤 Upload vers PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           password: ${{ secrets.PYPI_TOKEN }}
       
       - name: ✅ Confirmation
-        run: echo "✅ PyPI: gsql==${{ env.VERSION }} publié"
+        run: |
+          echo "🎉 PUBLICATION PYPI RÉUSSIE !"
+          echo "============================="
+          echo "📦 Package: gsql"
+          echo "🏷️ Version: $VERSION"
+          echo ""
+          echo "🔧 Installation:"
+          echo "  pip install gsql==$VERSION"
+          echo ""
+          echo "🌐 Liens:"
+          echo "  - https://pypi.org/project/gsql/"
+          echo "  - https://pypi.org/project/gsql/$VERSION/"
