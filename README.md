@@ -752,7 +752,8 @@ Copyright © 2025 Gopu Inc. All rights reserved.
 
 ### 📞 Support & Contact
 
-*   **Documentation** : [https://gsql.readthedocs.io](https://gsql.readthedocs.io)
+*   **Documentation**
+*   [Docs pages](https://gopu-inc.github.io/gsql/)
 *   **Issues** : [GitHub Issues](https://github.com/gopu-inc/gsql/issues)
 *   **Email** : support@gopu-inc.com
 
