@@ -6,7 +6,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/gsql?style=flat-square&logo=pypi&color=006dad)](https://pypi.org/project/gsql/)
 [![Python](https://img.shields.io/pypi/pyversions/gsql?style=flat-square&logo=python&color=3776ab)](https://pypi.org/project/gsql/)
-[![Conda](https://img.shields.io/conda/v/conda-forge/gsql?style=flat-square&logo=anaconda&color=44a833)](https://anaconda.org/conda-forge/gopu-inc/gsql)
+[![Conda Version](https://img.shields.io/conda/v/gopu-inc/gsql?logo=anaconda&color=44a833&style=flat-square)](https://anaconda.org/gopu-inc/gsql)
 ![Dl](https://anaconda.org/gopu-inc/gsql/badges/downloads.svg)
 [![Docker](https://img.shields.io/docker/pulls/ceoseshell/gsql?style=flat-square&logo=docker&color=2496ed)](https://hub.docker.com/r/ceoseshell/gsql)
 [![GitHub](https://img.shields.io/github/stars/gopu-inc/gsql?style=flat-square&logo=github&color=f0db4f)](https://github.com/gopu-inc/gsql)
