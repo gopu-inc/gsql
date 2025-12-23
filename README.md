@@ -3,71 +3,13 @@
 > **GSQL - Système de Base de Données SQL Complet 🚀**
 > **powered by gopu.inc,**
 
-<!-- PyPI - Python Package Index -->
-[![PyPI](https://img.shields.io/pypi/v/gsql?style=for-the-badge&logo=pypi&logoColor=white&color=blue)](https://pypi.org/project/gsql/)
-[![PyPI - Downloads](https://img.shields.io/pypi/dm/gsql?style=for-the-badge&logo=pypi&logoColor=white&color=orange)](https://pypi.org/project/gsql/)
-[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/gsql?style=for-the-badge&logo=python&logoColor=white&color=green)](https://pypi.org/project/gsql/)
-[![PyPI - Wheel](https://img.shields.io/pypi/wheel/gsql?style=for-the-badge&logo=python&logoColor=white&color=blueviolet)](https://pypi.org/project/gsql/)
-[![PyPI - Format](https://img.shields.io/pypi/format/gsql?style=for-the-badge&logo=python&logoColor=white&color=9cf)](https://pypi.org/project/gsql/)
-[![PyPI - Status](https://img.shields.io/pypi/status/gsql?style=for-the-badge&logo=python&logoColor=white&color=success)](https://pypi.org/project/gsql/)
 
-<!-- Conda -->
-[![Conda](https://img.shields.io/conda/v/conda-forge/gsql?style=for-the-badge&logo=anaconda&logoColor=white&color=44A833)](https://anaconda.org/conda-forge/gsql)
-[![Conda Downloads](https://img.shields.io/conda/dn/conda-forge/gsql?style=for-the-badge&logo=anaconda&logoColor=white&color=orange)](https://anaconda.org/conda-forge/gsql)
-[![Conda Platform](https://img.shields.io/conda/pn/conda-forge/gsql?style=for-the-badge&logo=anaconda&logoColor=white&color=blue)](https://anaconda.org/conda-forge/gsql)
-
-<!-- Docker Hub -->
-[![Docker Pulls](https://img.shields.io/docker/pulls/ceoseshell/gsql?style=for-the-badge&logo=docker&logoColor=white&color=2496ED)](https://hub.docker.com/r/ceoseshell/gsql)
-[![Docker Image Size](https://img.shields.io/docker/image-size/ceoseshell/gsql/latest?style=for-the-badge&logo=docker&logoColor=white&color=blue)](https://hub.docker.com/r/gopu/gsql)
-[![Docker Version](https://img.shields.io/docker/v/ceoseshell/gsql?style=for-the-badge&logo=docker&logoColor=white&color=blueviolet)](https://hub.docker.com/r/ceoseshell/gsql)
-[![Docker Stars](https://img.shields.io/docker/stars/ceoseshell/gsql?style=for-the-badge&logo=docker&logoColor=white&color=yellow)](https://hub.docker.com/r/ceoseshell/gsql)
-
-<!-- GitHub Container Registry -->
-[![GitHub Container Registry](https://img.shields.io/badge/GitHub%20Container%20Registry-available-2496ED?style=for-the-badge&logo=github&logoColor=white)](https://github.com/gopu-inc/gsql/pkgs/container/gsql)
-<!-- GitHub Stars & Forks -->
-[![GitHub Stars](https://img.shields.io/github/stars/gopu-inc/gsql?style=for-the-badge&logo=github&logoColor=white&color=yellow)](https://github.com/gopu-inc/gsql/stargazers)
-[![GitHub Forks](https://img.shields.io/github/forks/gopu-inc/gsql?style=for-the-badge&logo=github&logoColor=white&color=blue)](https://github.com/gopu-inc/gsql/network/members)
-[![GitHub Watchers](https://img.shields.io/github/watchers/gopu-inc/gsql?style=for-the-badge&logo=github&logoColor=white&color=purple)](https://github.com/gopu-inc/gsql/watchers)
-
-<!-- GitHub Issues & PRs -->
-[![GitHub Issues](https://img.shields.io/github/issues/gopu-inc/gsql?style=for-the-badge&logo=github&logoColor=white&color=red)](https://github.com/gopu-inc/gsql/issues)
-[![GitHub Issues Closed](https://img.shields.io/github/issues-closed/gopu-inc/gsql?style=for-the-badge&logo=github&logoColor=white&color=green)](https://github.com/gopu-inc/gsql/issues?q=is%3Aissue+is%3Aclosed)
-[![GitHub Pull Requests](https://img.shields.io/github/issues-pr/gopu-inc/gsql?style=for-the-badge&logo=github&logoColor=white&color=orange)](https://github.com/gopu-inc/gsql/pulls)
-[![GitHub Pull Requests Closed](https://img.shields.io/github/issues-pr-closed/gopu-inc/gsql?style=for-the-badge&logo=github&logoColor=white&color=green)](https://github.com/gopu-inc/gsql/pulls?q=is%3Apr+is%3Aclosed)
-
-<!-- GitHub Activity -->
-[![GitHub Last Commit](https://img.shields.io/github/last-commit/gopu-inc/gsql?style=for-the-badge&logo=github&logoColor=white&color=blue)](https://github.com/gopu-inc/gsql/commits/main)
-[![GitHub Commit Activity](https://img.shields.io/github/commit-activity/m/gopu-inc/gsql?style=for-the-badge&logo=github&logoColor=white&color=green)](https://github.com/gopu-inc/gsql/graphs/commit-activity)
-[![GitHub Contributors](https://img.shields.io/github/contributors/gopu-inc/gsql?style=for-the-badge&logo=github&logoColor=white&color=purple)](https://github.com/gopu-inc/gsql/graphs/contributors)
-
-<!-- GitHub Size & Language -->
-[![GitHub Repo Size](https://img.shields.io/github/repo-size/gopu-inc/gsql?style=for-the-badge&logo=github&logoColor=white&color=blue)](https://github.com/gopu-inc/gsql)
-[![GitHub Code Size](https://img.shields.io/github/languages/code-size/gopu-inc/gsql?style=for-the-badge&logo=github&logoColor=white&color=blueviolet)](https://github.com/gopu-inc/gsql)
-[![GitHub Language Count](https://img.shields.io/github/languages/count/gopu-inc/gsql?style=for-the-badge&logo=github&logoColor=white&color=orange)](https://github.com/gopu-inc/gsql)
-[![GitHub Top Language](https://img.shields.io/github/languages/top/gopu-inc/gsql?style=for-the-badge&logo=python&logoColor=white&color=green)](https://github.com/gopu-inc/gsql)
-<!-- Licences -->
-[![License](https://img.shields.io/github/license/gopu-inc/gsql?style=for-the-badge&logo=opensourceinitiative&logoColor=white&color=yellow)](LICENSE)
-[![FOSSA Status](https://img.shields.io/fossa/api/projects/git%2Bhttps%3A%2F%2Fgithub.com%2Fgopu-inc%2Fgsql.svg?style=for-the-badge&logo=fossa&logoColor=white&color=blue)](https://app.fossa.com/projects/git%2Bhttps%3A%2F%2Fgithub.com%2Fgopu-inc%2Fgsql)
-[![License - OSI Approved](https://img.shields.io/badge/OSI%20Approved-MIT-yellow?style=for-the-badge&logo=opensourceinitiative&logoColor=white)](https://opensource.org/licenses/MIT)
-
-<!-- Open Source Metrics -->
-[![Open Source](https://img.shields.io/badge/Open%20Source-Yes-brightgreen?style=for-the-badge&logo=opensourceinitiative&logoColor=white)](https://opensource.org)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen?style=for-the-badge&logo=git&logoColor=white)](https://github.com/gopu-inc/gsql/pulls)
-[![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa?style=for-the-badge&logo=contributor-covenant&logoColor=white)](CODE_OF_CONDUCT.md)
-<!-- Téléchargements Totaux -->
-[![Total Downloads](https://img.shields.io/github/downloads/gopu-inc/gsql/total?style=for-the-badge&logo=github&logoColor=white&color=blue)](https://github.com/gopu-inc/gsql/releases)
-[![Downloads](https://img.shields.io/github/downloads/gopu-inc/gsql/latest/total?style=for-the-badge&logo=github&logoColor=white&color=orange)](https://github.com/gopu-inc/gsql/releases/latest)
-[![Release Downloads](https://img.shields.io/github/downloads/gopu-inc/gsql/v3.0.0/total?style=for-the-badge&logo=github&logoColor=white&color=green)](https://github.com/gopu-inc/gsql/releases/tag/v3.0.0)
-
-<!-- PyPI Downloads Détail -->
-[![PyPI - Downloads (Daily)](https://img.shields.io/pypi/dd/gsql?style=for-the-badge&logo=pypi&logoColor=white&color=lightblue)](https://pypistats.org/packages/gsql)
-[![PyPI - Downloads (Weekly)](https://img.shields.io/pypi/dw/gsql?style=for-the-badge&logo=pypi&logoColor=white&color=orange)](https://pypistats.org/packages/gsql)
-[![PyPI - Downloads (Monthly)](https://img.shields.io/pypi/dm/gsql?style=for-the-badge&logo=pypi&logoColor=white&color=red)](https://pypistats.org/packages/gsql)
-
-<!-- Conda Downloads -->
-[![Conda Downloads (Monthly)](https://img.shields.io/conda/dn/conda-forge/gsql?style=for-the-badge&logo=anaconda&logoColor=white&color=orange)](https://anaconda.org/conda-forge/gsql)
-[![Conda Downloads (Total)](https://img.shields.io/conda/d/conda-forge/gsql?style=for-the-badge&logo=anaconda&logoColor=white&color=green)](https://anaconda.org/conda-forge/gsql)
-
+[![PyPI](https://img.shields.io/pypi/v/gsql?style=flat-square&logo=pypi&color=006dad)](https://pypi.org/project/gsql/)
+[![Python](https://img.shields.io/pypi/pyversions/gsql?style=flat-square&logo=python&color=3776ab)](https://pypi.org/project/gsql/)
+[![Conda](https://img.shields.io/conda/v/conda-forge/gsql?style=flat-square&logo=anaconda&color=44a833)](https://anaconda.org/conda-forge/gsql)
+[![Docker](https://img.shields.io/docker/pulls/ceoseshell/gsql?style=flat-square&logo=docker&color=2496ed)](https://hub.docker.com/r/ceoseshell/gsql)
+[![GitHub](https://img.shields.io/github/stars/gopu-inc/gsql?style=flat-square&logo=github&color=f0db4f)](https://github.com/gopu-inc/gsql)
+[![License](https://img.shields.io/github/license/gopu-inc/gsql?style=flat-square&logo=opensourceinitiative&color=6cc24a)](LICENSE)
 ---
 
 ## 📋 Table des Matières
