@@ -4,7 +4,7 @@ package:
   version: "3.0.9"  # Assurez-vous que la version correspond à votre tag
 
 source:
-  url: https://pypi.io/packages/source/g/gsql/gsql-v3.0.1.tar.gz
+  url: https://pypi.io/packages/source/g/gsql/gsql-v3.0.9.tar.gz
 
 build:
   number: 3
