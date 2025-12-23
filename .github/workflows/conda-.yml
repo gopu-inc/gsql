@@ -11,6 +11,13 @@ jobs:
       - name: 📥 Checkout
         uses: actions/checkout@v4
       
+      - name: 🏷️ Extraire version du tag
+        id: version
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "📦 Version: $VERSION"
+      
       - name: 🐍 Setup Miniconda
         uses: conda-incubator/setup-miniconda@v3
         with:
@@ -18,50 +25,66 @@ jobs:
           miniconda-version: "latest"
       
       - name: 📦 Installer conda-build et anaconda-client
-        # CORRECTION: Utiliser la syntaxe correcte pour shell
         shell: bash
         run: |
-          source $CONDA/etc/profile.d/conda.sh
-          conda activate base
-          conda install -y conda-build anaconda-client
-          conda --version
-          conda-build --version
+          $CONDA/bin/conda install -y conda-build anaconda-client
+          $CONDA/bin/conda --version
+          $CONDA/bin/conda-build --version
       
-      - name: 🔍 Vérifier le meta.yaml existant
+      - name: 🔍 Vérifier et mettre à jour meta.yaml (CORRIGÉ)
         shell: bash
         run: |
-          source $CONDA/etc/profile.d/conda.sh
-          conda activate base
           echo "🔍 Vérification du meta.yaml..."
+          
           if [ -f "conda.recipe/meta.yaml" ]; then
-            VERSION="${GITHUB_REF#refs/tags/v}"
-            sed -i "s/version:\s*[\"'][0-9]\+\.[0-9]\+\.[0-9]\+[\"']/version: \"$VERSION\"/g" conda.recipe/meta.yaml
-            echo "✅ Version mise à jour: $VERSION"
+            echo "✅ meta.yaml trouvé"
+            
+            # CORRECTION : Utiliser un délimiteur différent pour sed (# au lieu de /)
+            # Cela évite les problèmes quand la version contient des /
+            sed -i "s#version:\s*[\"'][0-9]\+\.[0-9]\+\.[0-9]\+[\"']#version: \"$VERSION\"#g" conda.recipe/meta.yaml
+            
+            # Afficher la version mise à jour
+            echo "📄 Version mise à jour dans meta.yaml:"
+            grep "version:" conda.recipe/meta.yaml
+            
+            # Vérifier aussi la ligne source si elle existe
+            if grep -q "source:" conda.recipe/meta.yaml; then
+              sed -i "s#url:.*gsql-{{ version }}.tar.gz#url: https://pypi.io/packages/source/g/gsql/gsql-$VERSION.tar.gz#g" conda.recipe/meta.yaml 2>/dev/null || true
+            fi
+            
           else
-            echo "❌ Fichier meta.yaml introuvable"
+            echo "❌ ERREUR: conda.recipe/meta.yaml introuvable!"
+            ls -la conda.recipe/ 2>/dev/null || echo "Dossier conda.recipe/ n'existe pas"
             exit 1
           fi
       
       - name: 🏗️ Construire le package Conda
         shell: bash
         run: |
-          source $CONDA/etc/profile.d/conda.sh
-          conda activate base
           echo "🏗️ Construction du package..."
           rm -rf conda_pkg 2>/dev/null || true
-          conda build conda.recipe/ --output-folder conda_pkg
+          
+          # Utiliser le chemin complet de conda-build
+          $CONDA/bin/conda-build conda.recipe/ --output-folder conda_pkg
+          
           echo "📦 Packages générés:"
-          find conda_pkg -name "*.tar.bz2" 2>/dev/null | xargs ls -la || echo "Aucun package trouvé"
+          find conda_pkg -name "*.tar.bz2" 2>/dev/null | while read file; do
+            echo "  - $(basename "$file") ($(ls -lh "$file" | awk '{print $5}'))"
+          done || echo "Aucun package trouvé"
       
-      - name: 🔍 Vérifier la structure du package
+      - name: 🔍 Vérifier le package
         shell: bash
         run: |
-          source $CONDA/etc/profile.d/conda.sh
-          conda activate base
           echo "🔍 Vérification du package..."
           PKG_FILE=$(find conda_pkg -name "*.tar.bz2" -type f 2>/dev/null | head -1)
+          
           if [ -n "$PKG_FILE" ] && [ -f "$PKG_FILE" ]; then
             echo "✅ Package trouvé: $(basename "$PKG_FILE")"
+            
+            # Vérifier le contenu
+            echo "📋 Contenu du package:"
+            tar -tjf "$PKG_FILE" | grep -E "(info/|gsql/)" | head -5
+            
           else
             echo "❌ Aucun package trouvé!"
             exit 1
@@ -70,21 +93,30 @@ jobs:
       - name: 🚀 Upload vers Anaconda.org
         shell: bash
         run: |
-          source $CONDA/etc/profile.d/conda.sh
-          conda activate base
           PKG_FILE=$(find conda_pkg -name "*.tar.bz2" -type f | head -1)
+          
           if [ -n "$PKG_FILE" ] && [ -f "$PKG_FILE" ]; then
-            echo "📤 Upload du package..."
-            anaconda -t ${{ secrets.ANACONDA_TOKEN }} upload --user ceoseshell "$PKG_FILE"
+            echo "📤 Upload du package vers Anaconda.org..."
+            
+            # Utiliser le chemin complet pour anaconda
+            $CONDA/bin/anaconda -t ${{ secrets.ANACONDA_TOKEN }} upload --user ceoseshell "$PKG_FILE" --force
+            
             echo "✅ Package uploadé avec succès!"
+            echo "🌐 Disponible sur: https://anaconda.org/ceoseshell/gsql"
           else
             echo "❌ Aucun package trouvé pour l'upload"
             exit 1
           fi
       
-      - name: ✅ Confirmation
+      - name: ✅ Confirmation finale
         run: |
-          VERSION="${GITHUB_REF#refs/tags/v}"
           echo "🎉 PUBLICATION ANACONDA RÉUSSIE !"
-          echo "📦 Version: $VERSION"
-          echo "🔗 https://anaconda.org/ceoseshell/gsql"
+          echo "================================"
+          echo "📦 Package: gsql"
+          echo "🏷️ Version: $VERSION"
+          echo "👤 Channel: ceoseshell"
+          echo ""
+          echo "🔧 Installation:"
+          echo "  conda install -c ceoseshell gsql=$VERSION"
+          echo ""
+          echo "🔗 Lien: https://anaconda.org/ceoseshell/gsql"
