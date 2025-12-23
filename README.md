@@ -741,16 +741,13 @@ Nous accueillons avec plaisir les contributions !
 
 ---
 
-## 📄 Licence
 
-```text
-MIT License
+## 📄 License
 
-Copyright (c) 2024 Gopu Inc.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files...
-```
+Copyright © 2025 Gopu Inc. All rights reserved.
+
 
 ### 📞 Support & Contact
 
