@@ -1,0 +1,39 @@
+name: 🐍 Publication PyPI
+
+on:
+  push:
+    branches: main
+
+jobs:
+  pypi:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+      
+      - name: 🏷️ Lire version du tag
+        id: version
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "📦 Version PyPI: $VERSION"
+      
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      
+      - name: 📦 Installer build
+        run: pip install build
+      
+      - name: 🏗️ Build Package
+        run: python -m build
+      
+      - name: 📤 Upload PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_TOKEN }}
+      
+      - name: ✅ Confirmation
+        run: echo "✅ PyPI: gsql==${{ env.VERSION }} publié"
