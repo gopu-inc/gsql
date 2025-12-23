@@ -2,14 +2,12 @@ name: 📦 Publication Anaconda
 
 on:
   push:
-    branches: main
+    tags:
+      - 'v*'
 
 jobs:
   conda:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: bash -el {0}
     
     steps:
       - name: 📥 Checkout
@@ -22,12 +20,11 @@ jobs:
           echo "VERSION=$VERSION" >> $GITHUB_ENV
           echo "📦 Version à publier: $VERSION"
       
-      - name: 🐍 Setup Miniconda (Corrigé)
+      - name: 🐍 Setup Miniconda (Version corrigée)
         uses: conda-incubator/setup-miniconda@v3
         with:
           auto-activate-base: true
-          activate-environment: ""
-          miniconda-version: "24.1.2-0"
+          miniconda-version: "latest"
           python-version: "3.10"
           auto-update-conda: true
       
@@ -43,72 +40,47 @@ jobs:
           
           if [ -f "conda.recipe/meta.yaml" ]; then
             echo "✅ meta.yaml trouvé dans conda.recipe/"
-            echo "📄 Contenu actuel :"
-            cat conda.recipe/meta.yaml
+            echo "📄 Premières lignes :"
+            head -20 conda.recipe/meta.yaml
             
             # Vérifier que la version est mise à jour
-            CURRENT_VERSION=$(grep -E "version:\s*[\"'][0-9]+\.[0-9]+\.[0-9]+[\"']" conda.recipe/meta.yaml | sed -E "s/.*[\"']([0-9]+\.[0-9]+\.[0-9]+)[\"'].*/\1/" || echo "")
-            
-            if [ -n "$CURRENT_VERSION" ]; then
-              echo "📌 Version actuelle dans meta.yaml: $CURRENT_VERSION"
-              echo "📌 Version du tag: $VERSION"
-              
-              if [ "$CURRENT_VERSION" != "$VERSION" ]; then
-                echo "⚠️ ATTENTION: La version dans meta.yaml ($CURRENT_VERSION) ne correspond pas au tag ($VERSION)"
-                echo "   Le build utilisera la version du tag comme priorité."
-              fi
+            if grep -q "version:" conda.recipe/meta.yaml; then
+              sed -i "s/version:\s*[\"'][0-9]\+\.[0-9]\+\.[0-9]\+[\"']/version: \"$VERSION\"/g" conda.recipe/meta.yaml
+              echo "✅ Version mise à jour: $VERSION"
+            else
+              echo "⚠️ Section 'version:' non trouvée dans meta.yaml"
             fi
           else
             echo "❌ ERREUR: Fichier conda.recipe/meta.yaml introuvable !"
-            echo "   Structure attendue:"
-            echo "   └── conda.recipe/"
-            echo "       └── meta.yaml"
+            ls -la conda.recipe/ 2>/dev/null || echo "Le dossier conda.recipe/ n'existe pas"
             exit 1
           fi
       
-      - name: 🔄 Mettre à jour la version dans meta.yaml (optionnel)
-        run: |
-          echo "🔄 Mise à jour automatique de la version dans meta.yaml..."
-          
-          # Mettre à jour la ligne "version:"
-          sed -i "s/version:\s*[\"'][0-9]\+\.[0-9]\+\.[0-9]\+[\"']/version: \"$VERSION\"/g" conda.recipe/meta.yaml
-          
-          # Incrémenter le build number
-          if grep -q "number:" conda.recipe/meta.yaml; then
-            CURRENT_NUMBER=$(grep "number:" conda.recipe/meta.yaml | sed -E 's/.*number:\s*([0-9]+).*/\1/')
-            NEW_NUMBER=$((CURRENT_NUMBER + 1))
-            sed -i "s/number:\s*[0-9]\+/number: $NEW_NUMBER/g" conda.recipe/meta.yaml
-            echo "✅ Build number incrémenté: $CURRENT_NUMBER → $NEW_NUMBER"
-          fi
-          
-          echo "📄 meta.yaml mis à jour:"
-          grep -E "(version:|number:)" conda.recipe/meta.yaml
-      
       - name: 🏗️ Construire le package Conda
         run: |
-          echo "🏗️ Construction du package Conda avec VOTRE meta.yaml..."
+          echo "🏗️ Construction du package Conda..."
           
           # Nettoyer les anciennes builds
-          rm -rf conda_pkg output
+          rm -rf conda_pkg 2>/dev/null || true
           
           # Construire le package avec le meta.yaml existant
-          conda build conda.recipe/ --output-folder conda_pkg
+          conda mambabuild conda.recipe/ --output-folder conda_pkg
           
           echo "📦 Packages générés:"
-          find conda_pkg -name "*.tar.bz2" | xargs ls -la
+          find conda_pkg -name "*.tar.bz2" 2>/dev/null | xargs ls -la || echo "Aucun package trouvé"
       
       - name: 🔍 Vérifier la structure du package
         run: |
           echo "🔍 Vérification du package généré..."
-          PKG_FILE=$(find conda_pkg -name "*.tar.bz2" -type f | head -1)
+          PKG_FILE=$(find conda_pkg -name "*.tar.bz2" -type f 2>/dev/null | head -1)
           
           if [ -n "$PKG_FILE" ] && [ -f "$PKG_FILE" ]; then
-            echo "✅ Package trouvé: $PKG_FILE"
+            echo "✅ Package trouvé: $(basename "$PKG_FILE")"
             echo "📏 Taille: $(ls -lh "$PKG_FILE" | awk '{print $5}')"
-            echo "📋 Contenu du package:"
-            tar -tjf "$PKG_FILE" | head -20
           else
             echo "❌ Aucun package trouvé!"
+            echo "📋 Contenu du dossier:"
+            ls -la conda_pkg/ 2>/dev/null || echo "Dossier conda_pkg/ non trouvé"
             exit 1
           fi
       
@@ -118,15 +90,14 @@ jobs:
           
           if [ -n "$PKG_FILE" ] && [ -f "$PKG_FILE" ]; then
             echo "📤 Upload du package vers Anaconda.org..."
-            echo "📦 Fichier: $(basename "$PKG_FILE")"
             
-            # Afficher des infos de debug
-            echo "🔍 Informations du package:"
-            tar -Oxf "$PKG_FILE" info/index.json | python -m json.tool | grep -E "(name|version|build)"
+            # Tester la connexion
+            echo "🔑 Test du token Anaconda..."
+            anaconda whoami || echo "⚠️ Impossible de vérifier l'utilisateur"
             
             # Uploader le package
             echo "🚀 Upload en cours..."
-            anaconda -t ${{ secrets.ANACONDA_TOKEN }} upload --user ceoseshell "$PKG_FILE" --force
+            anaconda -t ${{ secrets.ANACONDA_TOKEN }} upload --user ceoseshell "$PKG_FILE"
             
             echo "✅ Package uploadé avec succès!"
             echo "🌐 Disponible sur: https://anaconda.org/ceoseshell/gsql"
@@ -145,9 +116,3 @@ jobs:
           echo ""
           echo "🔧 Installation:"
           echo "  conda install -c ceoseshell gsql=$VERSION"
-          echo ""
-          echo "🔗 Liens:"
-          echo "  📍 https://anaconda.org/ceoseshell/gsql"
-          echo "  📁 https://anaconda.org/ceoseshell/gsql/files"
-          echo ""
-          echo "✅ Utilisation de VOTRE fichier meta.yaml personnalisé"
