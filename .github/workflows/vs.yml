@@ -1,143 +1,237 @@
-name: 🚀 Publication Multi-Plateformes
+name: 🔄 Mise à jour Automatique des Versions
 
 on:
   push:
-    branches: main
-    # Se déclenche seulement sur les tags de version (ex: v3.0.1)
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  VERSION_FILE: "gsql/__init__.py"
+  REPO: gopu-inc/gsql
 
 jobs:
-  # 1. PUBLICATION DOCKER
-  docker:
+  # 1. LECTURE ET CALCUL DE VERSION
+  version-manager:
     runs-on: ubuntu-latest
+    outputs:
+      current_version: ${{ steps.read-version.outputs.current_version }}
+      new_version: ${{ steps.calculate.outputs.new_version }}
+      version_type: ${{ steps.calculate.outputs.version_type }}
+    steps:
+      - name: 📥 Checkout avec historique
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: 🔍 Lire la version actuelle
+        id: read-version
+        run: |
+          if [ -f "$VERSION_FILE" ]; then
+            CURRENT_VERSION=$(grep -E "__version__\s*=\s*[\"'][0-9]+\.[0-9]+\.[0-9]+[\"']" "$VERSION_FILE" | head -1 | sed -E "s/.*[\"']([0-9]+\.[0-9]+\.[0-9]+)[\"'].*/\1/")
+          fi
+          
+          if [ -z "$CURRENT_VERSION" ]; then
+            CURRENT_VERSION="0.1.0"
+          fi
+          
+          echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "📌 Version actuelle: $CURRENT_VERSION"
+      
+      - name: 🧮 Calculer la nouvelle version
+        id: calculate
+        run: |
+          CURRENT_VERSION="${{ steps.read-version.outputs.current_version }}"
+          COMMIT_MSG=$(git log -1 --pretty=%B)
+          
+          if echo "$COMMIT_MSG" | grep -q -E "BREAKING CHANGE|feat!|major:"; then
+            VERSION_TYPE="major"
+          elif echo "$COMMIT_MSG" | grep -q -E "feat:|feature:|enhancement:"; then
+            VERSION_TYPE="minor"
+          else
+            VERSION_TYPE="patch"
+          fi
+          
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+          
+          case "$VERSION_TYPE" in
+            "major")
+              MAJOR=$((MAJOR + 1))
+              MINOR=0
+              PATCH=0
+              ;;
+            "minor")
+              MINOR=$((MINOR + 1))
+              PATCH=0
+              ;;
+            "patch")
+              PATCH=$((PATCH + 1))
+              ;;
+          esac
+          
+          NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+          
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "version_type=$VERSION_TYPE" >> $GITHUB_OUTPUT
+          echo "📈 Nouvelle version: $NEW_VERSION"
+
+  # 2. MISE À JOUR DES FICHIERS (SANS PUSH AUTOMATIQUE)
+  update-versions:
+    runs-on: ubuntu-latest
+    needs: version-manager
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    outputs:
+      version_updated: ${{ steps.update.outputs.version_updated }}
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: 🔄 Mettre à jour les fichiers de version
+        id: update
+        run: |
+          OLD_VERSION="${{ needs.version-manager.outputs.current_version }}"
+          NEW_VERSION="${{ needs.version-manager.outputs.new_version }}"
+          
+          # Vérifier si la version a changé
+          if [ "$OLD_VERSION" = "$NEW_VERSION" ]; then
+            echo "ℹ️ Version inchangée, pas de mise à jour nécessaire"
+            echo "version_updated=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          echo "🔄 Mise à jour de $OLD_VERSION → $NEW_VERSION"
+          
+          # 1. Source de vérité: gsql/__init__.py
+          sed -i "s/__version__ = [\"']$OLD_VERSION[\"']/__version__ = \"$NEW_VERSION\"/g" "$VERSION_FILE"
+          
+          # 2. pyproject.toml (PyPI)
+          if [ -f "pyproject.toml" ]; then
+            sed -i "s/version = [\"'][^\"']*[\"']/version = \"$NEW_VERSION\"/g" pyproject.toml
+          fi
+          
+          # 3. setup.py
+          if [ -f "setup.py" ]; then
+            sed -i "s/version=['\"][^'\"]*['\"]/version='$NEW_VERSION'/g" setup.py
+          fi
+          
+          # 4. Dockerfile
+          if [ -f "Dockerfile" ]; then
+            sed -i "s/LABEL version=[\"'][^\"']*[\"']/LABEL version=\"$NEW_VERSION\"/g" Dockerfile 2>/dev/null || true
+            sed -i "s/ARG VERSION=.*/ARG VERSION=$NEW_VERSION/g" Dockerfile 2>/dev/null || true
+          fi
+          
+          # 5. Anaconda meta.yaml
+          if [ -f "conda.recipe/meta.yaml" ]; then
+            sed -i "s/version: [\"'][^\"']*[\"']/version: \"$NEW_VERSION\"/g" conda.recipe/meta.yaml
+            sed -i "s/number: [0-9]*/number: ${{ github.run_number }}/g" conda.recipe/meta.yaml
+          fi
+          
+          # 6. README.md
+          if [ -f "README.md" ]; then
+            sed -i "s/gsql==[0-9]\+\.[0-9]\+\.[0-9]\+/gsql==$NEW_VERSION/g" README.md 2>/dev/null || true
+            sed -i "s/gsql:[0-9]\+\.[0-9]\+\.[0-9]\+/gsql:$NEW_VERSION/g" README.md 2>/dev/null || true
+          fi
+          
+          echo "version_updated=true" >> $GITHUB_OUTPUT
+          echo "✅ Fichiers mis à jour"
+      
+      - name: 💾 Créer une Pull Request pour les changements
+        if: steps.update.outputs.version_updated == 'true'
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore: bump version to ${{ needs.version-manager.outputs.new_version }}"
+          title: "Version ${{ needs.version-manager.outputs.new_version }}"
+          body: |
+            ## Mise à jour automatique de version
+            
+            Version: **${{ needs.version-manager.outputs.current_version }} → ${{ needs.version-manager.outputs.new_version }}**
+            
+            Fichiers modifiés:
+            - `gsql/__init__.py`
+            - `pyproject.toml` ou `setup.py`
+            - `Dockerfile`
+            - `conda.recipe/meta.yaml`
+            - `README.md`
+            
+            *Cette PR a été générée automatiquement par GitHub Actions.*
+          branch: bump-version-${{ needs.version-manager.outputs.new_version }}
+          delete-branch: true
+          labels: "automated-pr,version-bump"
+
+  # 3. PUBLICATION (seulement après merge manuel)
+  publish-all:
+    runs-on: ubuntu-latest
+    needs: version-manager
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    env:
+      VERSION: ${{ github.ref_name }}
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@v4
       
-      - name: 🐳 Login to Docker Hub
+      - name: 🐳 Publication Docker
         uses: docker/login-action@v3
         with:
           username: ceoseshell
           password: ${{ secrets.DOCKER_PASSWORD }}
       
-      - name: 🔧 Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            gcc \
-            g++ \
-            build-essential \
-            python3-dev
-      
-      - name: 📝 Update README with Docker version
-        run: |
-          # Mettre à jour la version Docker dans le README
-          sed -i 's/gsql:latest/gsql:3.0.1/g' README.md 2>/dev/null || true
-          sed -i 's/docker version: .*/docker version: 3.0.1/g' README.md 2>/dev/null || true
-          
-          # Ajouter section documentation Docker
-          if ! grep -q "## Docker" README.md; then
-            echo -e "\n## Docker\n\n```bash\ndocker pull ceoseshell/gsql:3.0.1\ndocker run -it ceoseshell/gsql:3.0.1\n```" >> README.md
-          fi
-      
-      - name: 🐳 Build & Push Docker Image
+      - name: 🐳 Build & Push Docker
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
           tags: |
             ceoseshell/gsql:latest
-            ceoseshell/gsql:${{ github.ref_name }}
-            ceoseshell/gsql:3.0.1
-          labels: |
-            version=3.0.1
-            org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
-            org.opencontainers.image.source=${{ github.event.repository.html_url }}
-
-  # 2. PUBLICATION PYPI
-  pypi:
-    runs-on: ubuntu-latest
-    needs: [docker]  # Dépend du job docker
-    steps:
-      - name: 📥 Checkout
-        uses: actions/checkout@v4
+            ceoseshell/gsql:${VERSION#v}
       
-      - name: 🔧 Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
+      - name: 🐍 Publication PyPI
+        run: |
+          pip install build twine
+          python -m build
+          twine upload --username __token__ --password ${{ secrets.PYPI_TOKEN }} dist/*
       
-      - name: 📦 Install build tools
-        run: pip install build twine
-      
-      - name: 🏗️ Build Package
-        run: python -m build
-      
-      - name: 🧪 Verify Package
-        run: twine check dist/*
-      
-      - name: 📤 Upload to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          password: ${{ secrets.PYPI_TOKEN }}
-
-  # 3. PUBLICATION ANACONDA (VRAI PACKAGE CONDA)
-  anaconda:
-    runs-on: ubuntu-latest
-    needs: [pypi]  # Dépend du job PyPI
-    strategy:
-      matrix:
-        platform: [linux-64, osx-64, win-64, noarch, pycharm]  # Multi-plateformes
-    steps:
-      - name: 📥 Checkout
-        uses: actions/checkout@v4
-      
-      - name: 🐍 Setup Miniconda
+      - name: 📦 Publication Anaconda
         uses: conda-incubator/setup-miniconda@v3
         with:
           auto-activate-base: true
-          miniconda-version: "latest"
-          python-version: 3.10
       
-      - name: 📦 Install conda-build et anaconda-client
-        run: conda install conda-build anaconda-client -y
-      
-      - name: 🏗️ Build Conda Package
+      - name: 🏗️ Build Anaconda Package
         run: |
-          # Construire le package Conda
+          conda install conda-build anaconda-client -y
           conda build conda.recipe/ --output-folder conda_pkg
-          
-          # Lister les fichiers générés
-          find conda_pkg -type f -name "*.tar.bz2" | xargs ls -la
+          anaconda -t ${{ secrets.ANACONDA_TOKEN }} upload --user ceoseshell conda_pkg/linux-64/*.tar.bz2
       
-      - name: 🚀 Upload vers Anaconda
-        run: |
-          # Upload pour la plateforme spécifique
-          if [ "${{ matrix.platform }}" = "noarch" ]; then
-            # Chercher les packages noarch
-            PKG_FILE=$(find conda_pkg -name "*.tar.bz2" -type f | head -1)
-          else
-            # Chercher les packages pour la plateforme spécifique
-            PKG_FILE=$(find conda_pkg/${{ matrix.platform }} -name "*.tar.bz2" -type f 2>/dev/null || echo "")
-          fi
-          
-          if [ -n "$PKG_FILE" ] && [ -f "$PKG_FILE" ]; then
-            echo "📤 Upload du package: $PKG_FILE"
-            anaconda -t ${{ secrets.ANACONDA_TOKEN }} upload --user ceoseshell "$PKG_FILE"
-          else
-            echo "⚠️ Aucun package trouvé pour ${{ matrix.platform }}"
-          fi
-        env:
-          ANACONDA_TOKEN: ${{ secrets.ANACONDA_TOKEN }}
+      - name: 🏷️ GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref }}
+          name: Release ${{ github.ref_name }}
+          generate_release_notes: true
 
-  # 4. NOTIFICATION (Optionnel)
-  notification:
+  # 4. WORKFLOW ALTERNATIF: Publication immédiate (si vous préférez)
+  quick-publish:
     runs-on: ubuntu-latest
-    needs: [docker, pypi, anaconda]
-    if: always()
+    needs: [version-manager, update-versions]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.update-versions.outputs.version_updated == 'true'
+    # DÉCOMMENTER pour activer la publication immédiate:
+    # if: false  # Désactivé par défaut
     steps:
-      - name: 📊 Status Report
+      - name: 📥 Checkout avec permissions étendues
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}  # À créer
+          fetch-depth: 0
+      
+      - name: 🔧 Configuration Git
         run: |
-          echo "📦 Publication terminée !"
-          echo "Docker: ceoseshell/gsql:3.0.1"
-          echo "PyPI: https://pypi.org/project/gsql/3.0.1/"
-          echo "Anaconda: https://anaconda.org/ceoseshell/gsql"
+          git config --global user.email "votre-email@example.com"
+          git config --global user.name "Votre Nom"
+      
+      - name: 🔄 Appliquer les changements de version
+        run: |
+          git add -A
+          git commit -m "chore: bump version to ${{ needs.version-manager.outputs.new_version }}"
+          git push origin main
