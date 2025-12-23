@@ -1,22 +1,45 @@
 name: 📦 Publication Anaconda
 on:
+  # SEULEMENT sur les tags, PAS sur les branches
   push:
-    branches: main
+    tags:
+      - 'v*'
 
 jobs:
   conda:
     runs-on: ubuntu-latest
+    # Optionnel : si vous avez d'autres jobs de publication
+    # needs: [docker-publish, pypi-publish]
     
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Important pour avoir les tags
       
-      - name: 🏷️ Extraire version du tag
+      - name: 🏷️ Extraire version du tag (CORRIGÉ)
         id: version
         run: |
+          # Vérifier que c'est bien un tag qui a déclenché le workflow
+          if [[ "${{ github.ref }}" != refs/tags/* ]]; then
+            echo "❌ ERREUR : Ce workflow doit être déclenché par un tag, pas une branche!"
+            echo "   Trigger: ${{ github.ref }}"
+            exit 1
+          fi
+          
+          # Extraire proprement la version du tag
           VERSION="${GITHUB_REF#refs/tags/v}"
+          
+          # Vérifier le format de version (doit être X.Y.Z)
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "❌ ERREUR : Format de version invalide: $VERSION"
+            echo "   Le tag doit suivre le format vX.Y.Z (ex: v3.0.1)"
+            exit 1
+          fi
+          
           echo "VERSION=$VERSION" >> $GITHUB_ENV
-          echo "📦 Version: $VERSION"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "✅ Version extraite: $VERSION"
       
       - name: 🐍 Setup Miniconda
         uses: conda-incubator/setup-miniconda@v3
@@ -31,64 +54,37 @@ jobs:
           $CONDA/bin/conda --version
           $CONDA/bin/conda-build --version
       
-      - name: 🔍 Vérifier et mettre à jour meta.yaml (CORRIGÉ)
+      - name: 🔍 Vérifier et mettre à jour meta.yaml
         shell: bash
         run: |
-          echo "🔍 Vérification du meta.yaml..."
+          echo "🔍 Mise à jour de conda.recipe/meta.yaml avec version: $VERSION"
           
           if [ -f "conda.recipe/meta.yaml" ]; then
-            echo "✅ meta.yaml trouvé"
+            # CORRECTION : Mise à jour robuste de la version
+            sed -i "s#version:[[:space:]]*[\"'][0-9]\+\.[0-9]\+\.[0-9]\+[\"']#version: \"$VERSION\"#g" conda.recipe/meta.yaml
             
-            # CORRECTION : Utiliser un délimiteur différent pour sed (# au lieu de /)
-            # Cela évite les problèmes quand la version contient des /
-            sed -i "s#version:\s*[\"'][0-9]\+\.[0-9]\+\.[0-9]\+[\"']#version: \"$VERSION\"#g" conda.recipe/meta.yaml
-            
-            # Afficher la version mise à jour
-            echo "📄 Version mise à jour dans meta.yaml:"
-            grep "version:" conda.recipe/meta.yaml
-            
-            # Vérifier aussi la ligne source si elle existe
-            if grep -q "source:" conda.recipe/meta.yaml; then
-              sed -i "s#url:.*gsql-{{ version }}.tar.gz#url: https://pypi.io/packages/source/g/gsql/gsql-$VERSION.tar.gz#g" conda.recipe/meta.yaml 2>/dev/null || true
-            fi
+            # Vérification
+            echo "✅ Version mise à jour:"
+            grep -E "version:[[:space:]]*\"" conda.recipe/meta.yaml
             
           else
             echo "❌ ERREUR: conda.recipe/meta.yaml introuvable!"
-            ls -la conda.recipe/ 2>/dev/null || echo "Dossier conda.recipe/ n'existe pas"
             exit 1
           fi
       
       - name: 🏗️ Construire le package Conda
         shell: bash
         run: |
-          echo "🏗️ Construction du package..."
+          echo "🏗️ Construction du package Conda v$VERSION..."
+          
+          # Nettoyer les builds précédentes
           rm -rf conda_pkg 2>/dev/null || true
           
-          # Utiliser le chemin complet de conda-build
+          # Construire le package
           $CONDA/bin/conda-build conda.recipe/ --output-folder conda_pkg
           
-          echo "📦 Packages générés:"
-          find conda_pkg -name "*.tar.bz2" 2>/dev/null | while read file; do
-            echo "  - $(basename "$file") ($(ls -lh "$file" | awk '{print $5}'))"
-          done || echo "Aucun package trouvé"
-      
-      - name: 🔍 Vérifier le package
-        shell: bash
-        run: |
-          echo "🔍 Vérification du package..."
-          PKG_FILE=$(find conda_pkg -name "*.tar.bz2" -type f 2>/dev/null | head -1)
-          
-          if [ -n "$PKG_FILE" ] && [ -f "$PKG_FILE" ]; then
-            echo "✅ Package trouvé: $(basename "$PKG_FILE")"
-            
-            # Vérifier le contenu
-            echo "📋 Contenu du package:"
-            tar -tjf "$PKG_FILE" | grep -E "(info/|gsql/)" | head -5
-            
-          else
-            echo "❌ Aucun package trouvé!"
-            exit 1
-          fi
+          echo "📦 Package généré:"
+          find conda_pkg -name "*.tar.bz2" -type f | xargs ls -la
       
       - name: 🚀 Upload vers Anaconda.org
         shell: bash
@@ -96,27 +92,21 @@ jobs:
           PKG_FILE=$(find conda_pkg -name "*.tar.bz2" -type f | head -1)
           
           if [ -n "$PKG_FILE" ] && [ -f "$PKG_FILE" ]; then
-            echo "📤 Upload du package vers Anaconda.org..."
-            
-            # Utiliser le chemin complet pour anaconda
+            echo "📤 Upload de gsql-$VERSION vers Anaconda.org..."
             $CONDA/bin/anaconda -t ${{ secrets.ANACONDA_TOKEN }} upload --user ceoseshell "$PKG_FILE" --force
-            
-            echo "✅ Package uploadé avec succès!"
-            echo "🌐 Disponible sur: https://anaconda.org/ceoseshell/gsql"
+            echo "✅ Package uploadé: https://anaconda.org/ceoseshell/gsql"
           else
-            echo "❌ Aucun package trouvé pour l'upload"
+            echo "❌ Aucun package trouvé!"
             exit 1
           fi
       
-      - name: ✅ Confirmation finale
+      - name: ✅ Confirmation
         run: |
-          echo "🎉 PUBLICATION ANACONDA RÉUSSIE !"
-          echo "================================"
-          echo "📦 Package: gsql"
-          echo "🏷️ Version: $VERSION"
-          echo "👤 Channel: ceoseshell"
+          echo "🎉 PUBLICATION ANACONDA TERMINÉE !"
+          echo "================================="
+          echo "📦 gsql v$VERSION publié sur Anaconda.org"
           echo ""
-          echo "🔧 Installation:"
+          echo "🔗 https://anaconda.org/ceoseshell/gsql"
+          echo ""
+          echo "📥 Installation:"
           echo "  conda install -c ceoseshell gsql=$VERSION"
-          echo ""
-          echo "🔗 Lien: https://anaconda.org/ceoseshell/gsql"
