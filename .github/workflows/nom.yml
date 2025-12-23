@@ -1,0 +1,192 @@
+name: 🚀 Publication Multi-Plateformes (Docker, PyPI, Anaconda)
+
+on:
+  push:
+    tags:
+      - 'v*'  # Déclenché par les tags de version (ex: v3.0.2, v1.0.0)
+
+env:
+  VERSION_FILE: "gsql/__init__.py"
+  REPO: gopu-inc/gsql
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write  # Nécessaire pour PyPI Trusted Publishing[citation:1]
+
+jobs:
+  # 1. VALIDATION ET EXTRACTION DE VERSION
+  validate-and-extract:
+    runs-on: ubuntu-latest
+    outputs:
+      package_version: ${{ steps.extract-version.outputs.package_version }}
+    steps:
+      - name: 📥 Checkout du code (avec tag)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GB_TOKEN }}
+
+      - name: 🧾 Extraire la version du tag et du package
+        id: extract-version
+        run: |
+          # Extraire la version du tag (ex: v3.0.2 -> 3.0.2)
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "🏷️  Version du tag Git : $TAG_VERSION"
+
+          # Extraire la version depuis gsql/__init__.py
+          if [ -f "$VERSION_FILE" ]; then
+            PY_VERSION=$(grep -E "__version__\s*=\s*[\"'][0-9]+\.[0-9]+\.[0-9]+[\"']" "$VERSION_FILE" | head -1 | sed -E "s/.*[\"']([0-9]+\.[0-9]+\.[0-9]+)[\"'].*/\1/")
+          fi
+          if [ -z "$PY_VERSION" ]; then
+            echo "❌ ERREUR : Version introuvable dans $VERSION_FILE"
+            exit 1
+          fi
+          echo "🐍 Version dans __init__.py : $PY_VERSION"
+
+          # Vérifier la cohérence
+          if [ "$TAG_VERSION" != "$PY_VERSION" ]; then
+            echo "❌ ERREUR CRITIQUE : Les versions ne correspondent pas !"
+            echo "   Tag Git : $TAG_VERSION"
+            echo "   Code Python : $PY_VERSION"
+            echo "-> Mettez à jour __version__ dans '$VERSION_FILE' pour qu'il corresponde au tag, puis recommencez."
+            exit 1
+          fi
+
+          echo "✅ Versions synchronisées : $TAG_VERSION"
+          echo "package_version=$TAG_VERSION" >> $GITHUB_OUTPUT
+
+  # 2. PUBLICATION DOCKER HUB
+  publish-docker:
+    needs: validate-and-extract
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout du code
+        uses: actions/checkout@v4
+
+      - name: 🐳 Connexion à Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ceoseshell
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: 🐳 Construction et Push de l'Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ceoseshell/gsql:latest
+            ceoseshell/gsql:${{ needs.validate-and-extract.outputs.package_version }}
+          labels: |
+            version=${{ needs.validate-and-extract.outputs.package_version }}
+            org.opencontainers.image.source=https://github.com/${{ env.REPO }}
+
+  # 3. PUBLICATION PYPI
+  publish-pypi:
+    needs: validate-and-extract
+    runs-on: ubuntu-latest
+    environment: 
+      name: pypi
+      url: https://pypi.org/p/gsql
+    permissions:
+      id-token: write  # Permissions OIDC pour PyPI sans token[citation:1]
+    steps:
+      - name: 📥 Checkout du code
+        uses: actions/checkout@v4
+
+      - name: 🐍 Configuration de Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: 📦 Installation des outils de build
+        run: pip install build
+
+      - name: 🏗️ Construction du package Python
+        run: python -m build
+
+      - name: 📤 Upload vers PyPI (Trusted Publishing)
+        uses: pypa/gh-action-pypi-publish@release/v1[citation:1]
+        # Aucun username/password requis grâce à 'id-token: write'
+
+  # 4. PUBLICATION ANACONDA
+  publish-anaconda:
+    needs: validate-and-extract
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout du code
+        uses: actions/checkout@v4
+
+      - name: 🐍 Configuration de Miniconda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          auto-activate-base: true
+          python-version: 3.10
+
+      - name: 📦 Installation de conda-build et anaconda-client
+        run: conda install conda-build anaconda-client -y
+
+      - name: 🏗️ Construction du package Conda
+        run: |
+          # Construire le package. Le meta.yaml doit déjà contenir la bonne version.
+          conda build conda.recipe/ --output-folder conda_pkg
+
+      - name: 🚀 Upload vers Anaconda.org
+        run: |
+          PKG_FILE=$(find conda_pkg -name "*.tar.bz2" -type f | head -1)
+          if [ -n "$PKG_FILE" ] && [ -f "$PKG_FILE" ]; then
+            echo "📤 Upload du package : $PKG_FILE"
+            anaconda -t ${{ secrets.ANACONDA_TOKEN }} upload --user ceoseshell "$PKG_FILE"
+          else
+            echo "❌ Aucun package Conda trouvé."
+            exit 1
+          fi
+
+  # 5. CRÉATION DE LA RELEASE GITHUB
+  github-release:
+    needs: [publish-docker, publish-pypi, publish-anaconda]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: 📥 Checkout du code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GB_TOKEN }}
+
+      - name: 🏷️ Création de la Release GitHub
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref }}
+          name: Release v${{ needs.validate-and-extract.outputs.package_version }}
+          body: |
+            ## 🚀 Version ${{ needs.validate-and-extract.outputs.package_version }}
+
+            Publication automatique sur toutes les plateformes.
+
+            ### 📦 Liens d'installation
+
+            **Docker :**
+            ```bash
+            docker pull ceoseshell/gsql:${{ needs.validate-and-extract.outputs.package_version }}
+            ```
+
+            **PyPI :**
+            ```bash
+            pip install gsql==${{ needs.validate-and-extract.outputs.package_version }}
+            ```
+
+            **Anaconda :**
+            ```bash
+            conda install -c ceoseshell gsql=${{ needs.validate-and-extract.outputs.package_version }}
+            ```
+
+            ### 📎 Liens utiles
+            * [Documentation](https://github.com/${{ env.REPO }}/wiki)
+            * [Code source pour ce tag](https://github.com/${{ env.REPO }}/tree/${{ github.ref }})
+
+            *Release générée automatiquement le ${{ github.event.head_commit.timestamp }}.*
+          draft: false
+          prerelease: false
+          generate_release_notes: true
