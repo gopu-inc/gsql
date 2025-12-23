@@ -2,8 +2,7 @@ name: 📦 Publication Anaconda
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches: main
 
 jobs:
   conda:
