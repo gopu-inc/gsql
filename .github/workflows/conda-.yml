@@ -2,24 +2,15 @@ name: 📦 Publication Anaconda
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [main]
 
 jobs:
-  conda:
+  publish-conda:
     runs-on: ubuntu-latest
-    # Si vous avez un workflow PyPI, ajoutez: needs: pypi
     
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@v4
-      
-      - name: 🏷️ Extraire version du tag
-        id: version
-        run: |
-          VERSION="${GITHUB_REF#refs/tags/v}"
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
-          echo "📦 Version: $VERSION"
       
       - name: 🐍 Setup Miniconda
         uses: conda-incubator/setup-miniconda@v3
@@ -27,114 +18,15 @@ jobs:
           auto-activate-base: true
           miniconda-version: "latest"
       
-      - name: 📦 Installer conda-build et anaconda-client
-        shell: bash
+      - name: 📦 Installer outils
         run: |
-          $CONDA/bin/conda install -y conda-build anaconda-client
-          $CONDA/bin/conda --version
-          $CONDA/bin/conda-build --version
+          conda install -y conda-build anaconda-client
       
-      - name: 🔍 Préparer meta.yaml
-        shell: bash
+      - name: 🏗️ Construire
         run: |
-          echo "🔍 Préparation de conda.recipe/meta.yaml..."
-          
-          if [ -f "conda.recipe/meta.yaml" ]; then
-            # Mettre à jour la version
-            sed -i "s#version:[[:space:]]*[\"'][0-9]\+\.[0-9]\+\.[0-9]\+[\"']#version: \"$VERSION\"#g" conda.recipe/meta.yaml
-            
-            # S'assurer que setuptools est présent
-            if ! grep -q "setuptools" conda.recipe/meta.yaml; then
-              sed -i "/requirements:/a \  host:\n    - python >=3.8\n    - pip\n    - setuptools" conda.recipe/meta.yaml
-            fi
-            
-            echo "✅ meta.yaml préparé"
-          else
-            echo "❌ ERREUR: conda.recipe/meta.yaml introuvable!"
-            exit 1
-          fi
+          conda build conda.recipe/ --output-folder ./output
       
-      - name: 🏗️ Construire le package Conda
-        shell: bash
+      - name: 🚀 Publier
         run: |
-          echo "🏗️ Construction du package..."
-          
-          # Nettoyer les anciennes builds
-          rm -rf conda_pkg 2>/dev/null || true
-          
-          # Construire le package
-          $CONDA/bin/conda build conda.recipe/ --output-folder ./conda_pkg
-          
-          echo "📦 Packages générés dans ./conda_pkg/:"
-          find ./conda_pkg -type f -name "*.conda" -o -name "*.tar.bz2" | xargs ls -la 2>/dev/null || echo "Aucun package trouvé"
-      
-      - name: 🔍 Vérifier le package généré
-        shell: bash
-        run: |
-          echo "🔍 Vérification du package..."
-          
-          # CORRECTION CRITIQUE : Chercher .conda puis .tar.bz2
-          PKG_FILE=$(find ./conda_pkg -name "*.conda" -type f | head -1)
-          
-          if [ -z "$PKG_FILE" ]; then
-            # Fallback sur l'ancien format
-            PKG_FILE=$(find ./conda_pkg -name "*.tar.bz2" -type f | head -1)
-          fi
-          
-          if [ -n "$PKG_FILE" ] && [ -f "$PKG_FILE" ]; then
-            echo "✅ Package trouvé: $(basename "$PKG_FILE")"
-            echo "📏 Taille: $(ls -lh "$PKG_FILE" | awk '{print $5}')"
-            
-            # Afficher des infos sur le package
-            echo "📋 Informations:"
-            if [[ "$PKG_FILE" == *.conda ]]; then
-              $CONDA/bin/conda inspect metadata "$PKG_FILE" | grep -E "(name|version|build)" || true
-            fi
-          else
-            echo "❌ Aucun package trouvé dans ./conda_pkg/"
-            echo "Contenu du dossier:"
-            ls -la ./conda_pkg/ 2>/dev/null || echo "Le dossier ./conda_pkg/ n'existe pas"
-            exit 1
-          fi
-      
-      - name: 🚀 Upload vers Anaconda.org (CORRIGÉ)
-        shell: bash
-        run: |
-          echo "🚀 Début de l'upload..."
-          
-          # CORRECTION : Recherche correcte du package
-          PKG_FILE=$(find ./conda_pkg -name "*.conda" -type f | head -1)
-          
-          if [ -z "$PKG_FILE" ]; then
-            PKG_FILE=$(find ./conda_pkg -name "*.tar.bz2" -type f | head -1)
-          fi
-          
-          if [ -n "$PKG_FILE" ] && [ -f "$PKG_FILE" ]; then
-            echo "📤 Upload du package: $(basename "$PKG_FILE")"
-            
-            # Upload avec token Anaconda
-            $CONDA/bin/anaconda -t ${{ secrets.ANACONDA_TOKEN }} upload --user ceoseshell "$PKG_FILE"
-            
-            echo "✅ Upload terminé avec succès !"
-            echo "🌐 Disponible sur: https://anaconda.org/ceoseshell/gsql"
-          else
-            echo "❌ ERREUR CRITIQUE: Impossible de trouver le package pour l'upload"
-            exit 1
-          fi
-      
-      - name: ✅ Confirmation finale
-        run: |
-          echo ""
-          echo "🎉🎉🎉 PUBLICATION ANACONDA RÉUSSIE ! 🎉🎉🎉"
-          echo "=========================================="
-          echo "📦 Package: gsql"
-          echo "🏷️ Version: $VERSION"
-          echo "👤 Channel: ceoseshell"
-          echo ""
-          echo "🔧 Installation:"
-          echo "  conda install -c ceoseshell gsql=$VERSION"
-          echo ""
-          echo "🔗 Lien direct:"
-          echo "  https://anaconda.org/ceoseshell/gsql"
-          echo ""
-          echo "✅ Toute la chaîne de publication est maintenant opérationnelle !"
+          PKG=$(find ./output -name "*.conda" -o -name "*.tar.bz2" | head -1)
+          anaconda -t ${{ secrets.ANACONDA_TOKEN }} upload --user ceoseshell "$PKG"
