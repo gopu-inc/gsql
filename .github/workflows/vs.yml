@@ -1,211 +1,263 @@
-name: 🔄 Mise à jour Automatique des Versions
+name: 🔄 Synchronisation Automatique des Versions
 
 on:
   push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+    tags:
+      - 'v*'  # Se déclenche uniquement sur les tags de version (v1.0.0, v2.3.4, etc.)
+    branches:
+      - main  # Optionnel: pour vérifier la cohérence
 
 env:
   VERSION_FILE: "gsql/__init__.py"
-  REPO: gopu-inc/gsql
+  DOCKER_FILE: "Dockerfile"
+  CONDA_FILE: "conda.recipe/meta.yaml"
 
 permissions:
   contents: write
   pull-requests: write
 
 jobs:
-  # 1. LECTURE ET CALCUL DE VERSION
-  version-manager:
+  # 1. VALIDATION ET SYNCHRONISATION DES VERSIONS
+  sync-versions:
     runs-on: ubuntu-latest
-    outputs:
-      current_version: ${{ steps.read-version.outputs.current_version }}
-      new_version: ${{ steps.calculate.outputs.new_version }}
-      version_type: ${{ steps.calculate.outputs.version_type }}
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    
     steps:
-      - name: 📥 Checkout avec historique
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GB_TOKEN }}  # VOTRE TOKEN
-      
-      - name: 🔍 Lire la version actuelle
-        id: read-version
-        run: |
-          if [ -f "$VERSION_FILE" ]; then
-            CURRENT_VERSION=$(grep -E "__version__\s*=\s*[\"'][0-9]+\.[0-9]+\.[0-9]+[\"']" "$VERSION_FILE" | head -1 | sed -E "s/.*[\"']([0-9]+\.[0-9]+\.[0-9]+)[\"'].*/\1/")
-          fi
-          
-          if [ -z "$CURRENT_VERSION" ]; then
-            CURRENT_VERSION="0.1.0"
-          fi
-          
-          echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
-          echo "📌 Version actuelle: $CURRENT_VERSION"
-      
-      - name: 🧮 Calculer la nouvelle version
-        id: calculate
-        run: |
-          CURRENT_VERSION="${{ steps.read-version.outputs.current_version }}"
-          COMMIT_MSG=$(git log -1 --pretty=%B)
-          
-          if echo "$COMMIT_MSG" | grep -q -E "BREAKING CHANGE|feat!|major:"; then
-            VERSION_TYPE="major"
-          elif echo "$COMMIT_MSG" | grep -q -E "feat:|feature:|enhancement:"; then
-            VERSION_TYPE="minor"
-          else
-            VERSION_TYPE="patch"
-          fi
-          
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
-          
-          case "$VERSION_TYPE" in
-            "major")
-              MAJOR=$((MAJOR + 1))
-              MINOR=0
-              PATCH=0
-              ;;
-            "minor")
-              MINOR=$((MINOR + 1))
-              PATCH=0
-              ;;
-            "patch")
-              PATCH=$((PATCH + 1))
-              ;;
-          esac
-          
-          NEW_VERSION="$MAJOR.$MINOR.$PATCH"
-          
-          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
-          echo "version_type=$VERSION_TYPE" >> $GITHUB_OUTPUT
-          echo "📈 Nouvelle version: $NEW_VERSION"
-
-  # 2. MISE À JOUR DES FICHIERS ET CRÉATION DE PR (avec votre token)
-  update-versions:
-    runs-on: ubuntu-latest
-    needs: version-manager
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    outputs:
-      version_updated: ${{ steps.update.outputs.version_updated }}
-      pr_created: ${{ steps.create-pr.outputs.pr_created }}
-    steps:
-      - name: 📥 Checkout avec votre token GB_TOKEN
+      - name: 📥 Checkout avec le tag
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GB_TOKEN }}
           fetch-depth: 0
+          ref: ${{ github.ref }}
       
-      - name: 🔄 Mettre à jour les fichiers de version
-        id: update
+      - name: 🏷️ Extraire la version du tag
+        id: extract-tag
         run: |
-          OLD_VERSION="${{ needs.version-manager.outputs.current_version }}"
-          NEW_VERSION="${{ needs.version-manager.outputs.new_version }}"
+          # Extraire la version du tag (ex: v3.0.2 -> 3.0.2)
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "📌 Version du tag: $TAG_VERSION"
+          echo "tag_version=$TAG_VERSION" >> $GITHUB_OUTPUT
+      
+      - name: 🔍 Vérifier les versions actuelles
+        id: check-versions
+        run: |
+          TAG_VERSION="${{ steps.extract-tag.outputs.tag_version }}"
           
-          # Vérifier si la version a changé
-          if [ "$OLD_VERSION" = "$NEW_VERSION" ]; then
-            echo "ℹ️ Version inchangée, pas de mise à jour nécessaire"
-            echo "version_updated=false" >> $GITHUB_OUTPUT
+          echo "🔍 Vérification des versions dans les fichiers..."
+          
+          # 1. Vérifier gsql/__init__.py
+          if [ -f "$VERSION_FILE" ]; then
+            PY_VERSION=$(grep -E "__version__\s*=\s*[\"'][0-9]+\.[0-9]+\.[0-9]+[\"']" "$VERSION_FILE" | head -1 | sed -E "s/.*[\"']([0-9]+\.[0-9]+\.[0-9]+)[\"'].*/\1/")
+            echo "🐍 gsql/__init__.py: $PY_VERSION"
+            
+            if [ "$PY_VERSION" != "$TAG_VERSION" ]; then
+              echo "🔄 À synchroniser: Python ($PY_VERSION → $TAG_VERSION)"
+              echo "update_python=true" >> $GITHUB_OUTPUT
+            else
+              echo "✅ Python déjà synchronisé"
+              echo "update_python=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "❌ Fichier $VERSION_FILE non trouvé"
+            exit 1
+          fi
+          
+          # 2. Vérifier Dockerfile
+          if [ -f "$DOCKER_FILE" ]; then
+            # Chercher ARG VERSION ou LABEL version
+            DOCKER_VERSION=$(grep -E "ARG VERSION=|LABEL version=" "$DOCKER_FILE" | head -1 | sed -E "s/.*[\"']?([0-9]+\.[0-9]+\.[0-9]+)[\"']?.*/\1/" | sed -E "s/VERSION=//")
+            
+            if [ -n "$DOCKER_VERSION" ]; then
+              echo "🐳 Dockerfile: $DOCKER_VERSION"
+              
+              if [ "$DOCKER_VERSION" != "$TAG_VERSION" ]; then
+                echo "🔄 À synchroniser: Docker ($DOCKER_VERSION → $TAG_VERSION)"
+                echo "update_docker=true" >> $GITHUB_OUTPUT
+              else
+                echo "✅ Docker déjà synchronisé"
+                echo "update_docker=false" >> $GITHUB_OUTPUT
+              fi
+            else
+              echo "⚠️ Version non trouvée dans Dockerfile"
+              echo "update_docker=true" >> $GITHUB_OUTPUT
+            fi
+          fi
+          
+          # 3. Vérifier conda meta.yaml
+          if [ -f "$CONDA_FILE" ]; then
+            CONDA_VERSION=$(grep -E "version:\s*[\"'][0-9]+\.[0-9]+\.[0-9]+[\"']" "$CONDA_FILE" | head -1 | sed -E "s/.*[\"']([0-9]+\.[0-9]+\.[0-9]+)[\"'].*/\1/")
+            
+            if [ -n "$CONDA_VERSION" ]; then
+              echo "📦 conda.recipe/meta.yaml: $CONDA_VERSION"
+              
+              if [ "$CONDA_VERSION" != "$TAG_VERSION" ]; then
+                echo "🔄 À synchroniser: Conda ($CONDA_VERSION → $TAG_VERSION)"
+                echo "update_conda=true" >> $GITHUB_OUTPUT
+              else
+                echo "✅ Conda déjà synchronisé"
+                echo "update_conda=false" >> $GITHUB_OUTPUT
+              fi
+            else
+              echo "⚠️ Version non trouvée dans meta.yaml"
+              echo "update_conda=true" >> $GITHUB_OUTPUT
+            fi
+          fi
+      
+      - name: 🔄 Synchroniser les versions si nécessaire
+        id: sync
+        # S'exécute seulement si au moins un fichier doit être mis à jour
+        if: steps.check-versions.outputs.update_python == 'true' || steps.check-versions.outputs.update_docker == 'true' || steps.check-versions.outputs.update_conda == 'true'
+        run: |
+          TAG_VERSION="${{ steps.extract-tag.outputs.tag_version }}"
+          
+          echo "🔄 Synchronisation avec la version: $TAG_VERSION"
+          
+          # 1. Synchroniser gsql/__init__.py
+          if [ "${{ steps.check-versions.outputs.update_python }}" = "true" ]; then
+            echo "📝 Mise à jour de $VERSION_FILE"
+            # Trouver et remplacer la ligne __version__
+            sed -i "s/__version__\s*=\s*[\"'][0-9]\+\.[0-9]\+\.[0-9]\+[\"']/__version__ = \"$TAG_VERSION\"/g" "$VERSION_FILE"
+            echo "✅ $VERSION_FILE mis à jour vers $TAG_VERSION"
+          fi
+          
+          # 2. Synchroniser Dockerfile
+          if [ "${{ steps.check-versions.outputs.update_docker }}" = "true" ]; then
+            echo "📝 Mise à jour de $DOCKER_FILE"
+            
+            # Mettre à jour ARG VERSION
+            sed -i "s/ARG VERSION=.*/ARG VERSION=\"$TAG_VERSION\"/g" "$DOCKER_FILE" 2>/dev/null || true
+            
+            # Mettre à jour LABEL version
+            sed -i "s/LABEL version=.*/LABEL version=\"$TAG_VERSION\"/g" "$DOCKER_FILE" 2>/dev/null || true
+            
+            # Si aucune des deux lignes n'existe, les ajouter
+            if ! grep -q "ARG VERSION=" "$DOCKER_FILE" 2>/dev/null; then
+              # Trouver la ligne FROM et ajouter ARG après
+              sed -i "/^FROM /a ARG VERSION=\"$TAG_VERSION\"" "$DOCKER_FILE"
+            fi
+            
+            if ! grep -q "LABEL version=" "$DOCKER_FILE" 2>/dev/null; then
+              # Ajouter LABEL après ARG
+              sed -i "/ARG VERSION=.*/a LABEL version=\"$TAG_VERSION\"" "$DOCKER_FILE"
+            fi
+            
+            echo "✅ $DOCKER_FILE mis à jour vers $TAG_VERSION"
+          fi
+          
+          # 3. Synchroniser conda meta.yaml
+          if [ "${{ steps.check-versions.outputs.update_conda }}" = "true" ]; then
+            echo "📝 Mise à jour de $CONDA_FILE"
+            
+            # Mettre à jour la version
+            sed -i "s/version:\s*[\"'][0-9]\+\.[0-9]\+\.[0-9]\+[\"']/version: \"$TAG_VERSION\"/g" "$CONDA_FILE" 2>/dev/null || true
+            
+            # Si la ligne version n'existe pas, l'ajouter
+            if ! grep -q "version:" "$CONDA_FILE" 2>/dev/null; then
+              # Trouver la section package et ajouter version après
+              sed -i "/^package:/a \  version: \"$TAG_VERSION\"" "$CONDA_FILE"
+            fi
+            
+            # Incrémenter le build number
+            if grep -q "number:" "$CONDA_FILE" 2>/dev/null; then
+              # Récupérer le numéro actuel et l'incrémenter
+              CURRENT_NUMBER=$(grep "number:" "$CONDA_FILE" | sed -E 's/.*number:\s*([0-9]+).*/\1/')
+              NEW_NUMBER=$((CURRENT_NUMBER + 1))
+              sed -i "s/number:\s*[0-9]\+/number: $NEW_NUMBER/g" "$CONDA_FILE"
+            else
+              # Ajouter le build number
+              sed -i "/version:/a \  number: 0" "$CONDA_FILE"
+            fi
+            
+            echo "✅ $CONDA_FILE mis à jour vers $TAG_VERSION"
+          fi
+          
+          # Afficher les changements
+          echo "📋 Différences après synchronisation:"
+          git diff --name-only
+      
+      - name: 💾 Commit et push des changements
+        if: steps.check-versions.outputs.update_python == 'true' || steps.check-versions.outputs.update_docker == 'true' || steps.check-versions.outputs.update_conda == 'true'
+        run: |
+          TAG_VERSION="${{ steps.extract-tag.outputs.tag_version }}"
+          
+          # Configurer Git
+          git config --global user.email "github-actions@github.com"
+          git config --global user.name "GitHub Actions"
+          
+          # Vérifier s'il y a des changements
+          if git diff --quiet; then
+            echo "ℹ️ Aucun changement à commiter"
             exit 0
           fi
           
-          echo "🔄 Mise à jour de $OLD_VERSION → $NEW_VERSION"
+          # Commiter les changements
+          git add -A
+          git commit -m "chore: sync versions to $TAG_VERSION [skip ci]"
           
-          # 1. Source de vérité: gsql/__init__.py
-          sed -i "s/__version__ = [\"']$OLD_VERSION[\"']/__version__ = \"$NEW_VERSION\"/g" "$VERSION_FILE"
+          # Pousser vers la branche principale
+          echo "🚀 Pushing synchronized versions to main..."
+          git push origin HEAD:main
           
-          # 2. pyproject.toml (PyPI)
-          if [ -f "pyproject.toml" ]; then
-            sed -i "s/version = [\"'][^\"']*[\"']/version = \"$NEW_VERSION\"/g" pyproject.toml
-          fi
+          echo "✅ Versions synchronisées sur main"
           
-          # 3. setup.py
-          if [ -f "setup.py" ]; then
-            sed -i "s/version=['\"][^'\"]*['\"]/version='$NEW_VERSION'/g" setup.py
-          fi
+          # Mettre à jour le tag avec les nouveaux fichiers
+          echo "🏷️ Mise à jour du tag avec les fichiers synchronisés..."
+          git tag -f "v$TAG_VERSION"
+          git push --force origin "v$TAG_VERSION"
           
-          # 4. Dockerfile
-          if [ -f "Dockerfile" ]; then
-            sed -i "s/LABEL version=[\"'][^\"']*[\"']/LABEL version=\"$NEW_VERSION\"/g" Dockerfile 2>/dev/null || true
-            sed -i "s/ARG VERSION=.*/ARG VERSION=$NEW_VERSION/g" Dockerfile 2>/dev/null || true
-          fi
-          
-          # 5. Anaconda meta.yaml
-          if [ -f "conda.recipe/meta.yaml" ]; then
-            sed -i "s/version: [\"'][^\"']*[\"']/version: \"$NEW_VERSION\"/g" conda.recipe/meta.yaml
-            sed -i "s/number: [0-9]*/number: ${{ github.run_number }}/g" conda.recipe/meta.yaml
-          fi
-          
-          # 6. README.md
-          if [ -f "README.md" ]; then
-            sed -i "s/gsql==[0-9]\+\.[0-9]\+\.[0-9]\+/gsql==$NEW_VERSION/g" README.md 2>/dev/null || true
-            sed -i "s/gsql:[0-9]\+\.[0-9]\+\.[0-9]\+/gsql:$NEW_VERSION/g" README.md 2>/dev/null || true
-          fi
-          
-          echo "version_updated=true" >> $GITHUB_OUTPUT
-          echo "✅ Fichiers mis à jour"
-      
-      - name: 💾 Créer une Pull Request avec votre token
-        id: create-pr
-        if: steps.update.outputs.version_updated == 'true'
-        uses: peter-evans/create-pull-request@v5
-        with:
-          token: ${{ secrets.GB_TOKEN }}  # VOTRE TOKEN ICI
-          commit-message: "chore: bump version to ${{ needs.version-manager.outputs.new_version }}"
-          title: "Version ${{ needs.version-manager.outputs.new_version }}"
-          body: |
-            ## 🔄 Mise à jour automatique de version
-            
-            **Ancienne version:** ${{ needs.version-manager.outputs.current_version }}
-            **Nouvelle version:** ${{ needs.version-manager.outputs.new_version }}
-            **Type:** ${{ needs.version-manager.outputs.version_type }}
-            
-            ### 📄 Fichiers modifiés:
-            - `gsql/__init__.py` - Source de vérité
-            - `pyproject.toml` / `setup.py` - PyPI
-            - `Dockerfile` - Docker Hub
-            - `conda.recipe/meta.yaml` - Anaconda
-            - `README.md` - Documentation
-            
-            ### 🚀 Après merge:
-            1. Créez un tag: `git tag v${{ needs.version-manager.outputs.new_version }}`
-            2. Push le tag: `git push origin v${{ needs.version-manager.outputs.new_version }}`
-            3. Le CI publiera automatiquement sur toutes les plateformes
-            
-            *Cette PR a été générée automatiquement par GitHub Actions.*
-          branch: bump-version-${{ needs.version-manager.outputs.new_version }}
-          delete-branch: true
-          labels: "automated-pr,version-bump"
-          draft: false
-      
-      - name: 📝 Afficher le lien vers la PR
-        if: steps.create-pr.outputs.pr_created == 'true'
-        run: |
-          echo "✅ Pull Request créée: ${{ steps.create-pr.outputs.pull-request-url }}"
-          echo "🔗 Lien: ${{ steps.create-pr.outputs.pull-request-url }}"
-          echo ""
-          echo "Pour publier après merge:"
-          echo "git tag v${{ needs.version-manager.outputs.new_version }}"
-          echo "git push origin v${{ needs.version-manager.outputs.new_version }}"
+          echo "🎉 Synchronisation terminée! Tag mis à jour avec les versions correctes."
 
-  # 3. PUBLICATION AUTOMATIQUE APRÈS TAG (avec votre token pour la release)
+  # 2. PUBLICATION MULTI-PLATEFORMES (déclenché après synchronisation)
   publish-all:
     runs-on: ubuntu-latest
-    needs: version-manager
+    needs: sync-versions
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    
     env:
       VERSION: ${{ github.ref_name }}
-      CLEAN_VERSION: ${{ github.ref_name }}
+    
     steps:
-      - name: 📥 Checkout avec votre token
+      - name: 📥 Checkout avec le tag synchronisé
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GB_TOKEN }}
+          fetch-depth: 0
       
-      - name: 🔧 Extraire la version du tag
+      - name: ✅ Vérifier que toutes les versions sont synchronisées
         run: |
-          CLEAN_VERSION=${VERSION#v}
-          echo "CLEAN_VERSION=$CLEAN_VERSION" >> $GITHUB_ENV
-          echo "📦 Version à publier: $CLEAN_VERSION"
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "🔍 Vérification finale des versions pour $TAG_VERSION"
+          
+          # Vérifier Python
+          if [ -f "$VERSION_FILE" ]; then
+            PY_VERSION=$(grep -E "__version__\s*=\s*[\"'][0-9]+\.[0-9]+\.[0-9]+[\"']" "$VERSION_FILE" | head -1 | sed -E "s/.*[\"']([0-9]+\.[0-9]+\.[0-9]+)[\"'].*/\1/")
+            if [ "$PY_VERSION" != "$TAG_VERSION" ]; then
+              echo "❌ ERREUR: Version Python ($PY_VERSION) ≠ Tag ($TAG_VERSION)"
+              exit 1
+            fi
+            echo "✅ Python: $PY_VERSION"
+          fi
+          
+          # Vérifier Docker
+          if [ -f "$DOCKER_FILE" ]; then
+            DOCKER_VERSION=$(grep -E "ARG VERSION=|LABEL version=" "$DOCKER_FILE" | head -1 | sed -E "s/.*[\"']?([0-9]+\.[0-9]+\.[0-9]+)[\"']?.*/\1/")
+            if [ -n "$DOCKER_VERSION" ] && [ "$DOCKER_VERSION" != "$TAG_VERSION" ]; then
+              echo "❌ ERREUR: Version Docker ($DOCKER_VERSION) ≠ Tag ($TAG_VERSION)"
+              exit 1
+            fi
+            echo "✅ Docker: $DOCKER_VERSION"
+          fi
+          
+          # Vérifier Conda
+          if [ -f "$CONDA_FILE" ]; then
+            CONDA_VERSION=$(grep -E "version:\s*[\"'][0-9]+\.[0-9]+\.[0-9]+[\"']" "$CONDA_FILE" | head -1 | sed -E "s/.*[\"']([0-9]+\.[0-9]+\.[0-9]+)[\"'].*/\1/")
+            if [ -n "$CONDA_VERSION" ] && [ "$CONDA_VERSION" != "$TAG_VERSION" ]; then
+              echo "❌ ERREUR: Version Conda ($CONDA_VERSION) ≠ Tag ($TAG_VERSION)"
+              exit 1
+            fi
+            echo "✅ Conda: $CONDA_VERSION"
+          fi
+          
+          echo "🎉 Toutes les versions sont synchronisées avec $TAG_VERSION"
       
       - name: 🐳 Publication Docker Hub
         uses: docker/login-action@v3
@@ -213,22 +265,23 @@ jobs:
           username: ceoseshell
           password: ${{ secrets.DOCKER_PASSWORD }}
       
-      - name: 🐳 Build & Push Docker Image
+      - name: 🐳 Build & Push Docker
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
           tags: |
             ceoseshell/gsql:latest
-            ceoseshell/gsql:${{ env.CLEAN_VERSION }}
+            ceoseshell/gsql:${{ env.VERSION }}
+          build-args: |
+            VERSION=${{ env.VERSION }}
           labels: |
-            version=${{ env.CLEAN_VERSION }}
-            org.opencontainers.image.source=https://github.com/$REPO
-            org.opencontainers.image.revision=${{ github.sha }}
+            version=${{ env.VERSION }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
       
       - name: 🐍 Publication PyPI
         run: |
-          pip install build twine
+          pip install build
           python -m build
           twine upload --username __token__ --password ${{ secrets.PYPI_TOKEN }} dist/*
       
@@ -236,85 +289,54 @@ jobs:
         uses: conda-incubator/setup-miniconda@v3
         with:
           auto-activate-base: true
-          python-version: 3.10
       
-      - name: 🏗️ Build Anaconda Package
+      - name: 🏗️ Build Conda Package
         run: |
           conda install conda-build anaconda-client -y
           conda build conda.recipe/ --output-folder conda_pkg
       
-      - name: 🚀 Upload vers Anaconda
+      - name: 🚀 Upload Anaconda
         run: |
           PKG_FILE=$(find conda_pkg -name "*.tar.bz2" -type f | head -1)
-          if [ -n "$PKG_FILE" ] && [ -f "$PKG_FILE" ]; then
+          if [ -n "$PKG_FILE" ]; then
             anaconda -t ${{ secrets.ANACONDA_TOKEN }} upload --user ceoseshell "$PKG_FILE"
           fi
       
-      - name: 🏷️ GitHub Release (avec votre token)
+      - name: 🏷️ GitHub Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.ref }}
-          name: Release ${{ env.CLEAN_VERSION }}
+          name: Release ${{ env.VERSION }}
           body: |
-            ## 🚀 Version ${{ env.CLEAN_VERSION }}
+            ## 🚀 Version ${{ env.VERSION }}
             
-            Publication automatique via GitHub Actions.
+            Publication automatique avec versions synchronisées.
             
             ### 📦 Installation
             
             **Docker:**
             ```bash
-            docker pull ceoseshell/gsql:${{ env.CLEAN_VERSION }}
+            docker pull ceoseshell/gsql:${{ env.VERSION }}
             ```
             
             **PyPI:**
             ```bash
-            pip install gsql==${{ env.CLEAN_VERSION }}
+            pip install gsql==${{ env.VERSION }}
             ```
             
             **Anaconda:**
             ```bash
-            conda install -c ceoseshell gsql=${{ env.CLEAN_VERSION }}
+            conda install -c ceoseshell gsql=${{ env.VERSION }}
             ```
             
-            ### 🔗 Liens
-            - [Documentation](https://github.com/$REPO/wiki)
-            - [Code source](https://github.com/$REPO/tree/${{ github.ref }})
+            ### 🔄 Synchronisation
+            - ✅ gsql/__init__.py: ${{ env.VERSION }}
+            - ✅ Dockerfile: ${{ env.VERSION }}
+            - ✅ conda.recipe/meta.yaml: ${{ env.VERSION }}
             
             *Auto-généré le ${{ github.event.head_commit.timestamp }}*
           draft: false
           prerelease: false
           generate_release_notes: true
         env:
-          GITHUB_TOKEN: ${{ secrets.GB_TOKEN }}  # VOTRE TOKEN POUR LES RELEASES
-
-  # 4. OPTION: PUBLICATION IMMÉDIATE (désactivée par défaut)
-  quick-publish:
-    runs-on: ubuntu-latest
-    needs: [version-manager, update-versions]
-    # DÉSACTIVÉ - Utilisez plutôt l'approche PR + Tag
-    if: false
-    steps:
-      - name: 📥 Checkout avec votre token
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GB_TOKEN }}
-          fetch-depth: 0
-      
-      - name: 🔧 Configuration Git
-        run: |
-          git config --global user.email "actions@github.com"
-          git config --global user.name "GitHub Actions"
-          git remote set-url origin https://x-access-token:${{ secrets.GB_TOKEN }}@github.com/$REPO.git
-      
-      - name: 🔄 Appliquer les changements et push direct
-        run: |
-          NEW_VERSION="${{ needs.version-manager.outputs.new_version }}"
-          
-          git add -A
-          git commit -m "chore: bump version to $NEW_VERSION"
-          git push origin main
-          
-          # Créer et pousser le tag
-          git tag "v$NEW_VERSION"
-          git push origin "v$NEW_VERSION"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
