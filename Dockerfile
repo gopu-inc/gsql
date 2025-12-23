@@ -1,5 +1,8 @@
 FROM python:3.9
 
+ARG VERSION=3.0.1
+LABEL version="$VERSION"
+
 WORKDIR /app
 
 # Installer les outils système
