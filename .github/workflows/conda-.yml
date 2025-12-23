@@ -17,16 +17,36 @@ jobs:
         with:
           auto-activate-base: true
           miniconda-version: "latest"
+          activate-environment: base
       
       - name: 📦 Installer outils
+        shell: bash  # FORCER l'utilisation d'un shell login
         run: |
           conda install -y conda-build anaconda-client
+          echo "✅ Outils installés"
       
       - name: 🏗️ Construire
+        shell: bash  # FORCER l'utilisation d'un shell login
         run: |
+          echo "🏗️ Construction du package..."
           conda build conda.recipe/ --output-folder ./output
+          echo "📦 Construction terminée"
       
-      - name: 🚀 Publier
+      - name: 🔍 Trouver le package
+        shell: bash  # FORCER l'utilisation d'un shell login
         run: |
           PKG=$(find ./output -name "*.conda" -o -name "*.tar.bz2" | head -1)
-          anaconda -t ${{ secrets.ANACONDA_TOKEN }} upload --user ceoseshell "$PKG"
+          if [ -n "$PKG" ]; then
+            echo "✅ Package trouvé: $PKG"
+            echo "package_path=$PKG" >> $GITHUB_ENV
+          else
+            echo "❌ Aucun package trouvé!"
+            exit 1
+          fi
+      
+      - name: 🚀 Publier sur Anaconda
+        shell: bash  # FORCER l'utilisation d'un shell login
+        run: |
+          echo "🚀 Publication sur Anaconda.org..."
+          anaconda -t ${{ secrets.ANACONDA_TOKEN }} upload --user ceoseshell "${{ env.package_path }}"
+          echo "✅ Publication terminée!"
