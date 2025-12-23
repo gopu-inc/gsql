@@ -2,7 +2,7 @@ name: 📦 Publication Anaconda Automatique
 
 on:
   push:
-    branches: [main]  # Se déclenche sur chaque nouveau commit dans main
+    branches: [main]
 
 jobs:
   conda:
@@ -15,10 +15,9 @@ jobs:
       - name: 🏷️ Déterminer la version
         id: version
         run: |
-          # Version basée sur la date et le SHA du commit
           VERSION="$(date +%Y.%m.%d).${GITHUB_SHA:0:7}"
           echo "VERSION=$VERSION" >> $GITHUB_ENV
-          echo "📦 Version automatique: $VERSION"
+          echo "📦 Version: $VERSION"
       
       - name: 🐍 Setup Miniconda
         uses: conda-incubator/setup-miniconda@v3
@@ -26,68 +25,25 @@ jobs:
           auto-activate-base: true
           miniconda-version: "latest"
       
-      - name: 📦 Créer meta.yaml dynamique
-        run: |
-          mkdir -p conda.recipe
-          cat > conda.recipe/meta.yaml << EOF
-package:
-  name: gsql
-  version: $VERSION
-
-build:
-  number: 0
-  noarch: python
-  script: python -m pip install . --no-deps -vv
-
-requirements:
-  host:
-    - python >=3.8
-    - pip
-  run:
-    - python >=3.8
-    - click >=8.0.0
-    - colorama >=0.4.4
-    - pandas >=1.3.0
-    - numpy >=1.21.0
-    - nltk >=3.6.0
-
-test:
-  imports:
-    - gsql
-
-about:
-  home: https://github.com/${{ github.repository }}
-  license: MIT
-  summary: Complete SQL Database System in Python with AI Integration
-EOF
-          echo "✅ meta.yaml généré avec version $VERSION"
       
-      - name: 🏗️ Construire et publier directement
+      - name: 🏗️ Construire et publier
         run: |
-          # Activer conda
           source $CONDA/etc/profile.d/conda.sh
           conda activate base
-          
-          # Installer conda-build si nécessaire
           conda install -y conda-build anaconda-client
           
-          # Construire directement depuis le code source
-          conda build conda.recipe/ --output-folder . --no-anaconda-upload
+          conda build conda.recipe/ --output-folder ./conda_pkg
           
-          # Uploader vers Anaconda
-          PKG_FILE=$(find . -name "gsql-$VERSION-*.tar.bz2" -type f | head -1)
+          PKG_FILE=$(find ./conda_pkg -name "gsql-$VERSION-*.tar.bz2" -type f | head -1)
           if [ -n "$PKG_FILE" ]; then
-            echo "📤 Publication sur Anaconda..."
             anaconda -t ${{ secrets.ANACONDA_TOKEN }} upload --user ceoseshell "$PKG_FILE"
-            echo "✅ Publié: https://anaconda.org/ceoseshell/gsql"
+            echo "✅ Publié sur Anaconda"
           else
-            echo "❌ Aucun package trouvé!"
+            echo "❌ Aucun package trouvé"
             exit 1
           fi
       
       - name: ✅ Confirmation
         run: |
-          echo "🎉 PUBLICATION ANACONDA AUTOMATIQUE RÉUSSIE!"
+          echo "🎉 Publication automatique réussie!"
           echo "📦 Version: $VERSION"
-          echo "📅 Date: $(date)"
-          echo "🔗 https://anaconda.org/ceoseshell/gsql"
