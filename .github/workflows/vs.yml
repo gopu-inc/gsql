@@ -10,6 +10,10 @@ env:
   VERSION_FILE: "gsql/__init__.py"
   REPO: gopu-inc/gsql
 
+permissions:
+  contents: write
+  pull-requests: write
+
 jobs:
   # 1. LECTURE ET CALCUL DE VERSION
   version-manager:
@@ -23,6 +27,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.GB_TOKEN }}  # VOTRE TOKEN
       
       - name: 🔍 Lire la version actuelle
         id: read-version
@@ -75,18 +80,20 @@ jobs:
           echo "version_type=$VERSION_TYPE" >> $GITHUB_OUTPUT
           echo "📈 Nouvelle version: $NEW_VERSION"
 
-  # 2. MISE À JOUR DES FICHIERS (SANS PUSH AUTOMATIQUE)
+  # 2. MISE À JOUR DES FICHIERS ET CRÉATION DE PR (avec votre token)
   update-versions:
     runs-on: ubuntu-latest
     needs: version-manager
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     outputs:
       version_updated: ${{ steps.update.outputs.version_updated }}
+      pr_created: ${{ steps.create-pr.outputs.pr_created }}
     steps:
-      - name: 📥 Checkout
+      - name: 📥 Checkout avec votre token GB_TOKEN
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GB_TOKEN }}
+          fetch-depth: 0
       
       - name: 🔄 Mettre à jour les fichiers de version
         id: update
@@ -137,55 +144,87 @@ jobs:
           echo "version_updated=true" >> $GITHUB_OUTPUT
           echo "✅ Fichiers mis à jour"
       
-      - name: 💾 Créer une Pull Request pour les changements
+      - name: 💾 Créer une Pull Request avec votre token
+        id: create-pr
         if: steps.update.outputs.version_updated == 'true'
         uses: peter-evans/create-pull-request@v5
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GB_TOKEN }}  # VOTRE TOKEN ICI
           commit-message: "chore: bump version to ${{ needs.version-manager.outputs.new_version }}"
           title: "Version ${{ needs.version-manager.outputs.new_version }}"
           body: |
-            ## Mise à jour automatique de version
+            ## 🔄 Mise à jour automatique de version
             
-            Version: **${{ needs.version-manager.outputs.current_version }} → ${{ needs.version-manager.outputs.new_version }}**
+            **Ancienne version:** ${{ needs.version-manager.outputs.current_version }}
+            **Nouvelle version:** ${{ needs.version-manager.outputs.new_version }}
+            **Type:** ${{ needs.version-manager.outputs.version_type }}
             
-            Fichiers modifiés:
-            - `gsql/__init__.py`
-            - `pyproject.toml` ou `setup.py`
-            - `Dockerfile`
-            - `conda.recipe/meta.yaml`
-            - `README.md`
+            ### 📄 Fichiers modifiés:
+            - `gsql/__init__.py` - Source de vérité
+            - `pyproject.toml` / `setup.py` - PyPI
+            - `Dockerfile` - Docker Hub
+            - `conda.recipe/meta.yaml` - Anaconda
+            - `README.md` - Documentation
+            
+            ### 🚀 Après merge:
+            1. Créez un tag: `git tag v${{ needs.version-manager.outputs.new_version }}`
+            2. Push le tag: `git push origin v${{ needs.version-manager.outputs.new_version }}`
+            3. Le CI publiera automatiquement sur toutes les plateformes
             
             *Cette PR a été générée automatiquement par GitHub Actions.*
           branch: bump-version-${{ needs.version-manager.outputs.new_version }}
           delete-branch: true
           labels: "automated-pr,version-bump"
+          draft: false
+      
+      - name: 📝 Afficher le lien vers la PR
+        if: steps.create-pr.outputs.pr_created == 'true'
+        run: |
+          echo "✅ Pull Request créée: ${{ steps.create-pr.outputs.pull-request-url }}"
+          echo "🔗 Lien: ${{ steps.create-pr.outputs.pull-request-url }}"
+          echo ""
+          echo "Pour publier après merge:"
+          echo "git tag v${{ needs.version-manager.outputs.new_version }}"
+          echo "git push origin v${{ needs.version-manager.outputs.new_version }}"
 
-  # 3. PUBLICATION (seulement après merge manuel)
+  # 3. PUBLICATION AUTOMATIQUE APRÈS TAG (avec votre token pour la release)
   publish-all:
     runs-on: ubuntu-latest
     needs: version-manager
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     env:
       VERSION: ${{ github.ref_name }}
+      CLEAN_VERSION: ${{ github.ref_name }}
     steps:
-      - name: 📥 Checkout
+      - name: 📥 Checkout avec votre token
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GB_TOKEN }}
       
-      - name: 🐳 Publication Docker
+      - name: 🔧 Extraire la version du tag
+        run: |
+          CLEAN_VERSION=${VERSION#v}
+          echo "CLEAN_VERSION=$CLEAN_VERSION" >> $GITHUB_ENV
+          echo "📦 Version à publier: $CLEAN_VERSION"
+      
+      - name: 🐳 Publication Docker Hub
         uses: docker/login-action@v3
         with:
           username: ceoseshell
           password: ${{ secrets.DOCKER_PASSWORD }}
       
-      - name: 🐳 Build & Push Docker
+      - name: 🐳 Build & Push Docker Image
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
           tags: |
             ceoseshell/gsql:latest
-            ceoseshell/gsql:${VERSION#v}
+            ceoseshell/gsql:${{ env.CLEAN_VERSION }}
+          labels: |
+            version=${{ env.CLEAN_VERSION }}
+            org.opencontainers.image.source=https://github.com/$REPO
+            org.opencontainers.image.revision=${{ github.sha }}
       
       - name: 🐍 Publication PyPI
         run: |
@@ -197,41 +236,85 @@ jobs:
         uses: conda-incubator/setup-miniconda@v3
         with:
           auto-activate-base: true
+          python-version: 3.10
       
       - name: 🏗️ Build Anaconda Package
         run: |
           conda install conda-build anaconda-client -y
           conda build conda.recipe/ --output-folder conda_pkg
-          anaconda -t ${{ secrets.ANACONDA_TOKEN }} upload --user ceoseshell conda_pkg/linux-64/*.tar.bz2
       
-      - name: 🏷️ GitHub Release
+      - name: 🚀 Upload vers Anaconda
+        run: |
+          PKG_FILE=$(find conda_pkg -name "*.tar.bz2" -type f | head -1)
+          if [ -n "$PKG_FILE" ] && [ -f "$PKG_FILE" ]; then
+            anaconda -t ${{ secrets.ANACONDA_TOKEN }} upload --user ceoseshell "$PKG_FILE"
+          fi
+      
+      - name: 🏷️ GitHub Release (avec votre token)
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.ref }}
-          name: Release ${{ github.ref_name }}
+          name: Release ${{ env.CLEAN_VERSION }}
+          body: |
+            ## 🚀 Version ${{ env.CLEAN_VERSION }}
+            
+            Publication automatique via GitHub Actions.
+            
+            ### 📦 Installation
+            
+            **Docker:**
+            ```bash
+            docker pull ceoseshell/gsql:${{ env.CLEAN_VERSION }}
+            ```
+            
+            **PyPI:**
+            ```bash
+            pip install gsql==${{ env.CLEAN_VERSION }}
+            ```
+            
+            **Anaconda:**
+            ```bash
+            conda install -c ceoseshell gsql=${{ env.CLEAN_VERSION }}
+            ```
+            
+            ### 🔗 Liens
+            - [Documentation](https://github.com/$REPO/wiki)
+            - [Code source](https://github.com/$REPO/tree/${{ github.ref }})
+            
+            *Auto-généré le ${{ github.event.head_commit.timestamp }}*
+          draft: false
+          prerelease: false
           generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GB_TOKEN }}  # VOTRE TOKEN POUR LES RELEASES
 
-  # 4. WORKFLOW ALTERNATIF: Publication immédiate (si vous préférez)
+  # 4. OPTION: PUBLICATION IMMÉDIATE (désactivée par défaut)
   quick-publish:
     runs-on: ubuntu-latest
     needs: [version-manager, update-versions]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.update-versions.outputs.version_updated == 'true'
-    # DÉCOMMENTER pour activer la publication immédiate:
-    # if: false  # Désactivé par défaut
+    # DÉSACTIVÉ - Utilisez plutôt l'approche PR + Tag
+    if: false
     steps:
-      - name: 📥 Checkout avec permissions étendues
+      - name: 📥 Checkout avec votre token
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}  # À créer
+          token: ${{ secrets.GB_TOKEN }}
           fetch-depth: 0
       
       - name: 🔧 Configuration Git
         run: |
-          git config --global user.email "votre-email@example.com"
-          git config --global user.name "Votre Nom"
+          git config --global user.email "actions@github.com"
+          git config --global user.name "GitHub Actions"
+          git remote set-url origin https://x-access-token:${{ secrets.GB_TOKEN }}@github.com/$REPO.git
       
-      - name: 🔄 Appliquer les changements de version
+      - name: 🔄 Appliquer les changements et push direct
         run: |
+          NEW_VERSION="${{ needs.version-manager.outputs.new_version }}"
+          
           git add -A
-          git commit -m "chore: bump version to ${{ needs.version-manager.outputs.new_version }}"
+          git commit -m "chore: bump version to $NEW_VERSION"
           git push origin main
+          
+          # Créer et pousser le tag
+          git tag "v$NEW_VERSION"
+          git push origin "v$NEW_VERSION"
