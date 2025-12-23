@@ -1,0 +1,56 @@
+name: 🏷️ GitHub Release
+
+on:
+  push:
+    branches: main
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+      
+      - name: 🏷️ Lire version du tag
+        id: version
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "🏷️ Version Release: $VERSION"
+      
+      - name: 🏷️ Créer GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref }}
+          name: Release v${{ env.VERSION }}
+          body: |
+            ## 🚀 GSQL v${{ env.VERSION }}
+            
+            ### 📦 Installation
+            
+            **🐳 Docker:**
+            ```bash
+            docker pull ceoseshell/gsql:${{ env.VERSION }}
+            ```
+            
+            **🐍 PyPI:**
+            ```bash
+            pip install gsql==${{ env.VERSION }}
+            ```
+            
+            **📦 Anaconda:**
+            ```bash
+            conda install -c ceoseshell gsql=${{ env.VERSION }}
+            ```
+            
+            ### 🔗 Liens
+            - [Documentation](https://github.com/${{ github.repository }}/wiki)
+            - [Code source](https://github.com/${{ github.repository }}/tree/${{ github.ref }})
+            
+            *Publication automatisée*
+          draft: false
+          prerelease: false
+          generate_release_notes: true
