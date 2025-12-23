@@ -1,46 +1,91 @@
 name: 📦 Publication Anaconda
 on:
   push:
-    branches: main
+    tags:
+      - 'v*'
 
 jobs:
   conda:
     runs-on: ubuntu-latest
-    # Retirez la section 'defaults' pour éviter tout conflit de shell
-
+    
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@v4
-
-      - name: 🐍 Setup Miniconda (Version stable)
+      
+      - name: 🐍 Setup Miniconda
         uses: conda-incubator/setup-miniconda@v3
         with:
-          # Configuration minimale et stable
           auto-activate-base: true
-          # NE PAS utiliser 'activate-environment' pour éviter les conflits
           miniconda-version: "latest"
-
+      
       - name: 📦 Installer conda-build et anaconda-client
-        # Assurez-vous que conda est bien dans le PATH
+        # CORRECTION: Utiliser la syntaxe correcte pour shell
+        shell: bash
         run: |
-          conda install -y -c conda-forge conda-build anaconda-client
+          source $CONDA/etc/profile.d/conda.sh
+          conda activate base
+          conda install -y conda-build anaconda-client
           conda --version
           conda-build --version
-
+      
       - name: 🔍 Vérifier le meta.yaml existant
+        shell: bash
         run: |
+          source $CONDA/etc/profile.d/conda.sh
+          conda activate base
           echo "🔍 Vérification du meta.yaml..."
-          # ... (le reste de votre code pour vérifier/mettre à jour meta.yaml) ...
-
-      - name: 🏗️ Construire le package Conda
-        run: |
-          echo "🏗️ Construction du package..."
-          conda build conda.recipe/ --output-folder conda_pkg
-          # ... (suite du build) ...
-
-      - name: 🚀 Upload vers Anaconda.org
-        run: |
-          PKG_FILE=$(find conda_pkg -name "*.tar.bz2" -type f | head -1)
-          if [ -n "$PKG_FILE" ]; then
-            anaconda -t ${{ secrets.ANACONDA_TOKEN }} upload --user ceoseshell "$PKG_FILE"
+          if [ -f "conda.recipe/meta.yaml" ]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+            sed -i "s/version:\s*[\"'][0-9]\+\.[0-9]\+\.[0-9]\+[\"']/version: \"$VERSION\"/g" conda.recipe/meta.yaml
+            echo "✅ Version mise à jour: $VERSION"
+          else
+            echo "❌ Fichier meta.yaml introuvable"
+            exit 1
           fi
+      
+      - name: 🏗️ Construire le package Conda
+        shell: bash
+        run: |
+          source $CONDA/etc/profile.d/conda.sh
+          conda activate base
+          echo "🏗️ Construction du package..."
+          rm -rf conda_pkg 2>/dev/null || true
+          conda build conda.recipe/ --output-folder conda_pkg
+          echo "📦 Packages générés:"
+          find conda_pkg -name "*.tar.bz2" 2>/dev/null | xargs ls -la || echo "Aucun package trouvé"
+      
+      - name: 🔍 Vérifier la structure du package
+        shell: bash
+        run: |
+          source $CONDA/etc/profile.d/conda.sh
+          conda activate base
+          echo "🔍 Vérification du package..."
+          PKG_FILE=$(find conda_pkg -name "*.tar.bz2" -type f 2>/dev/null | head -1)
+          if [ -n "$PKG_FILE" ] && [ -f "$PKG_FILE" ]; then
+            echo "✅ Package trouvé: $(basename "$PKG_FILE")"
+          else
+            echo "❌ Aucun package trouvé!"
+            exit 1
+          fi
+      
+      - name: 🚀 Upload vers Anaconda.org
+        shell: bash
+        run: |
+          source $CONDA/etc/profile.d/conda.sh
+          conda activate base
+          PKG_FILE=$(find conda_pkg -name "*.tar.bz2" -type f | head -1)
+          if [ -n "$PKG_FILE" ] && [ -f "$PKG_FILE" ]; then
+            echo "📤 Upload du package..."
+            anaconda -t ${{ secrets.ANACONDA_TOKEN }} upload --user ceoseshell "$PKG_FILE"
+            echo "✅ Package uploadé avec succès!"
+          else
+            echo "❌ Aucun package trouvé pour l'upload"
+            exit 1
+          fi
+      
+      - name: ✅ Confirmation
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "🎉 PUBLICATION ANACONDA RÉUSSIE !"
+          echo "📦 Version: $VERSION"
+          echo "🔗 https://anaconda.org/ceoseshell/gsql"
