@@ -1,0 +1,357 @@
+name: 🔄 Mise à jour Automatique des Versions
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+env:
+  VERSION_FILE: "gsql/__init__.py"
+
+jobs:
+  # 1. LECTURE ET CALCUL DE VERSION
+  version-manager:
+    runs-on: ubuntu-latest
+    outputs:
+      current_version: ${{ steps.read-version.outputs.current_version }}
+      new_version: ${{ steps.calculate.outputs.new_version }}
+      version_type: ${{ steps.calculate.outputs.version_type }}
+    steps:
+      - name: 📥 Checkout avec historique
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: 🔍 Lire la version actuelle depuis __init__.py
+        id: read-version
+        run: |
+          # Extraire la version depuis gsql/__init__.py
+          if [ -f "$VERSION_FILE" ]; then
+            CURRENT_VERSION=$(grep -E "__version__\s*=\s*[\"'][0-9]+\.[0-9]+\.[0-9]+[\"']" "$VERSION_FILE" | head -1 | sed -E "s/.*[\"']([0-9]+\.[0-9]+\.[0-9]+)[\"'].*/\1/")
+          fi
+          
+          # Fallback si non trouvé
+          if [ -z "$CURRENT_VERSION" ]; then
+            CURRENT_VERSION="0.1.0"
+            echo "⚠️ Version non trouvée, utilisation de: $CURRENT_VERSION"
+          fi
+          
+          echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "📌 Version actuelle: $CURRENT_VERSION"
+      
+      - name: 🧮 Calculer la nouvelle version basée sur les commits
+        id: calculate
+        run: |
+          CURRENT_VERSION="${{ steps.read-version.outputs.current_version }}"
+          
+          # Analyser le dernier commit pour déterminer le type de version
+          COMMIT_MSG=$(git log -1 --pretty=%B)
+          echo "📝 Message du commit: $COMMIT_MSG"
+          
+          # Déterminer le type de mise à jour
+          if echo "$COMMIT_MSG" | grep -q -E "BREAKING CHANGE|feat!|major:"; then
+            VERSION_TYPE="major"
+            echo "🎯 MAJOR version bump"
+          elif echo "$COMMIT_MSG" | grep -q -E "feat:|feature:|enhancement:"; then
+            VERSION_TYPE="minor"
+            echo "🎯 MINOR version bump"
+          else
+            VERSION_TYPE="patch"
+            echo "🎯 PATCH version bump"
+          fi
+          
+          # Calculer la nouvelle version
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+          
+          case "$VERSION_TYPE" in
+            "major")
+              MAJOR=$((MAJOR + 1))
+              MINOR=0
+              PATCH=0
+              ;;
+            "minor")
+              MINOR=$((MINOR + 1))
+              PATCH=0
+              ;;
+            "patch")
+              PATCH=$((PATCH + 1))
+              ;;
+          esac
+          
+          NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+          
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "version_type=$VERSION_TYPE" >> $GITHUB_OUTPUT
+          echo "📈 Nouvelle version calculée: $NEW_VERSION"
+
+  # 2. MISE À JOUR DE TOUS LES FICHIERS AVEC LA NOUVELLE VERSION
+  update-versions:
+    runs-on: ubuntu-latest
+    needs: version-manager
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    steps:
+      - name: 📥 Checkout avec token d'écriture
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+      
+      - name: 🔄 Mettre à jour gsql/__init__.py (source de vérité)
+        run: |
+          OLD_VERSION="${{ needs.version-manager.outputs.current_version }}"
+          NEW_VERSION="${{ needs.version-manager.outputs.new_version }}"
+          
+          echo "🔄 Mise à jour de $VERSION_FILE: $OLD_VERSION → $NEW_VERSION"
+          
+          # Mettre à jour __init__.py
+          sed -i "s/__version__ = [\"']$OLD_VERSION[\"']/__version__ = \"$NEW_VERSION\"/g" "$VERSION_FILE"
+          
+          # Vérifier la mise à jour
+          echo "✅ Version mise à jour dans $VERSION_FILE:"
+          grep "__version__" "$VERSION_FILE"
+      
+      - name: 📝 Propager la version à tous les autres fichiers
+        run: |
+          NEW_VERSION="${{ needs.version-manager.outputs.new_version }}"
+          
+          echo "🌐 Propagation de la version $NEW_VERSION à tous les fichiers..."
+          
+          # 1. Dockerfile
+          if [ -f "Dockerfile" ]; then
+            sed -i "s/LABEL version=[\"'][^\"']*[\"']/LABEL version=\"$NEW_VERSION\"/g" Dockerfile || true
+            sed -i "s/ARG VERSION=.*/ARG VERSION=$NEW_VERSION/g" Dockerfile || true
+            echo "✅ Dockerfile mis à jour"
+          fi
+          
+          # 2. pyproject.toml (pour PyPI)
+          if [ -f "pyproject.toml" ]; then
+            sed -i "s/version = [\"'][^\"']*[\"']/version = \"$NEW_VERSION\"/g" pyproject.toml
+            echo "✅ pyproject.toml mis à jour"
+          fi
+          
+          # 3. setup.py (alternative pour PyPI)
+          if [ -f "setup.py" ]; then
+            sed -i "s/version=['\"][^'\"]*['\"]/version='$NEW_VERSION'/g" setup.py
+            echo "✅ setup.py mis à jour"
+          fi
+          
+          # 4. Anaconda meta.yaml
+          if [ -f "conda.recipe/meta.yaml" ]; then
+            sed -i "s/version: [\"'][^\"']*[\"']/version: \"$NEW_VERSION\"/g" conda.recipe/meta.yaml
+            # Incrémenter le build number
+            sed -i "s/number: [0-9]*/number: ${{ github.run_number }}/g" conda.recipe/meta.yaml
+            echo "✅ meta.yaml mis à jour"
+          fi
+          
+          # 5. README.md
+          if [ -f "README.md" ]; then
+            sed -i "s/version: [0-9]\+\.[0-9]\+\.[0-9]\+/version: $NEW_VERSION/g" README.md || true
+            sed -i "s/gsql==[0-9]\+\.[0-9]\+\.[0-9]\+/gsql==$NEW_VERSION/g" README.md || true
+            sed -i "s/gsql:[0-9]\+\.[0-9]\+\.[0-9]\+/gsql:$NEW_VERSION/g" README.md || true
+            echo "✅ README.md mis à jour"
+          fi
+          
+          # 6. requirements.txt si présent
+          if [ -f "requirements.txt" ]; then
+            sed -i "s/gsql==[0-9]\+\.[0-9]\+\.[0-9]\+/gsql==$NEW_VERSION/g" requirements.txt
+            echo "✅ requirements.txt mis à jour"
+          fi
+          
+          # Afficher tous les changements
+          echo "📋 Résumé des changements:"
+          git diff --name-only
+      
+      - name: 💾 Commit et push des changements de version
+        run: |
+          NEW_VERSION="${{ needs.version-manager.outputs.new_version }}"
+          
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          git add -A
+          git commit -m "chore: bump version to $NEW_VERSION [skip ci]"
+          git push origin HEAD:${{ github.ref }}
+
+  # 3. PUBLICATION DOCKER
+  docker-publish:
+    runs-on: ubuntu-latest
+    needs: [version-manager, update-versions]
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+      
+      - name: 🐳 Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ceoseshell
+          password: ${{ secrets.DOCKER_PASSWORD }}
+      
+      - name: 🐳 Build & Push Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ceoseshell/gsql:latest
+            ceoseshell/gsql:${{ needs.version-manager.outputs.new_version }}
+          labels: |
+            version=${{ needs.version-manager.outputs.new_version }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
+
+  # 4. PUBLICATION PYPI
+  pypi-publish:
+    runs-on: ubuntu-latest
+    needs: [version-manager, update-versions]
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+      
+      - name: 🔧 Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      
+      - name: 📦 Lire la version depuis __init__.py pour validation
+        run: |
+          echo "🔍 Vérification de la version pour PyPI..."
+          python -c "
+          import re
+          with open('$VERSION_FILE', 'r') as f:
+              content = f.read()
+              match = re.search(r'__version__\s*=\s*[\"]([^\"]+)[\"]', content)
+              if match:
+                  print(f'✅ Version détectée: {match.group(1)}')
+                  if match.group(1) != '${{ needs.version-manager.outputs.new_version }}':
+                      print('⚠️ Attention: version différente de celle calculée!')
+              else:
+                  print('❌ Version non trouvée dans $VERSION_FILE')
+                  exit(1)
+          "
+      
+      - name: 🏗️ Build Package
+        run: |
+          pip install build
+          python -m build
+      
+      - name: 📤 Upload to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_TOKEN }}
+
+  # 5. PUBLICATION ANACONDA
+  anaconda-publish:
+    runs-on: ubuntu-latest
+    needs: [version-manager, update-versions, pypi-publish]
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+      
+      - name: 🐍 Setup Miniconda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          auto-activate-base: true
+          python-version: 3.10
+      
+      - name: 📦 Install conda-build
+        run: conda install conda-build anaconda-client -y
+      
+      - name: 🔍 Vérifier la version dans meta.yaml
+        run: |
+          echo "🔍 Vérification de la version pour Anaconda..."
+          EXPECTED_VERSION="${{ needs.version-manager.outputs.new_version }}"
+          ACTUAL_VERSION=$(grep -E "version:\s*[\"'][0-9]+\.[0-9]+\.[0-9]+[\"']" conda.recipe/meta.yaml | sed -E "s/.*[\"']([0-9]+\.[0-9]+\.[0-9]+)[\"'].*/\1/")
+          
+          if [ "$ACTUAL_VERSION" = "$EXPECTED_VERSION" ]; then
+            echo "✅ Version correcte dans meta.yaml: $ACTUAL_VERSION"
+          else
+            echo "❌ Version incorrecte: attendu $EXPECTED_VERSION, trouvé $ACTUAL_VERSION"
+            exit 1
+          fi
+      
+      - name: 🏗️ Build Conda Package
+        run: |
+          conda build conda.recipe/ --output-folder conda_pkg
+          echo "📦 Packages générés:"
+          find conda_pkg -name "*.tar.bz2" -type f | xargs -I {} ls -la {}
+      
+      - name: 🚀 Upload vers Anaconda
+        run: |
+          PKG_FILE=$(find conda_pkg -name "*.tar.bz2" -type f | head -1)
+          if [ -n "$PKG_FILE" ] && [ -f "$PKG_FILE" ]; then
+            echo "📤 Upload du package: $PKG_FILE"
+            anaconda -t ${{ secrets.ANACONDA_TOKEN }} upload --user ceoseshell "$PKG_FILE"
+          else
+            echo "❌ Aucun package trouvé pour l'upload"
+            exit 1
+          fi
+        env:
+          ANACONDA_TOKEN: ${{ secrets.ANACONDA_TOKEN }}
+
+  # 6. CRÉATION DE RELEASE GITHUB
+  github-release:
+    runs-on: ubuntu-latest
+    needs: [docker-publish, pypi-publish, anaconda-publish]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+      
+      - name: 🏷️ Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ needs.version-manager.outputs.new_version }}
+          name: v${{ needs.version-manager.outputs.new_version }}
+          body: |
+            ## 🚀 Version ${{ needs.version-manager.outputs.new_version }}
+            
+            Publication automatique via GitHub Actions.
+            
+            ### 📦 Installation
+            
+            **Docker:**
+            ```bash
+            docker pull ceoseshell/gsql:${{ needs.version-manager.outputs.new_version }}
+            ```
+            
+            **PyPI:**
+            ```bash
+            pip install gsql==${{ needs.version-manager.outputs.new_version }}
+            ```
+            
+            **Anaconda:**
+            ```bash
+            conda install -c ceoseshell gsql=${{ needs.version-manager.outputs.new_version }}
+            ```
+            
+            ### 🔗 Liens
+            - [Documentation](https://github.com/ceoseshell/gsql/wiki)
+            - [Code source](https://github.com/ceoseshell/gsql/tree/v${{ needs.version-manager.outputs.new_version }})
+            
+            *Auto-généré le ${{ github.event.head_commit.timestamp }}*
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # 7. NOTIFICATION FINALE
+  notification:
+    runs-on: ubuntu-latest
+    needs: [github-release]
+    if: always()
+    steps:
+      - name: 📊 Rapport de publication
+        run: |
+          echo "🎉 PUBLICATION TERMINÉE !"
+          echo "========================"
+          echo "Version: ${{ needs.version-manager.outputs.new_version }}"
+          echo ""
+          echo "📦 Disponible sur:"
+          echo "  - Docker Hub: ceoseshell/gsql:${{ needs.version-manager.outputs.new_version }}"
+          echo "  - PyPI: https://pypi.org/project/gsql/${{ needs.version-manager.outputs.new_version }}/"
+          echo "  - Anaconda: https://anaconda.org/ceoseshell/gsql"
+          echo "  - GitHub: https://github.com/ceoseshell/gsql/releases/tag/v${{ needs.version-manager.outputs.new_version }}"
+          echo ""
+          echo "✅ Toutes les versions sont synchronisées!"
