@@ -69,7 +69,7 @@ def test_table_management():
             tables = [row[0] for row in result.get('rows', [])]
             print(f"📋 Tables existantes: {len(tables)}")
             for table in tables:
-                print(f"  • {table}")
+                print("=" * 60)
         
         # 3. Nettoyer avant de créer
         cleanup_default_tables(db)
