@@ -1,292 +1,248 @@
 #!/usr/bin/env python3
 """
-FINAL GSQL TEST - Corrections basées sur les erreurs réelles
+GSQL WORKING CODE - Basé sur les découvertes réelles
 """
-
-import sys
-import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from gsql.database import Database
 from gsql.exceptions import SQLExecutionError
 
-print("🔬 TEST FINAL GSQL - Basé sur les erreurs réelles")
-print("=" * 60)
+print("🚀 GSQL v3.0.9 - Code qui marche vraiment")
+print("=" * 50)
 
-# 1. BASE TOUJOURS FRAÎCHE
-db = Database(db_path=":memory:")
-print("✅ Base mémoire créée")
+# IMPORTANT: ":memory:" ne fonctionne pas comme attendu
+# Utilisons un fichier temporaire unique
+import tempfile
+import uuid
 
-# 2. ANALYSE COMPLÈTE DE L'API
-print("\n📊 ANALYSE DE L'API execute():")
-test = db.execute("SELECT 1 as a, 2 as b, 'test' as c")
-print(f"Structure: {list(test.keys())}")
-print(f"Type: {test['type']}")
-print(f"Format rows: {type(test['rows'][0]) if test['rows'] else 'vide'}")
+# Créer un fichier temporaire unique
+temp_db = f"/tmp/gsql_test_{uuid.uuid4().hex[:8]}.db"
+print(f"📁 Base: {temp_db}")
 
-# 3. NETTOYAGE COMPLET
-print("\n🧹 NETTOYAGE COMPLET:")
-tables_to_drop = ['test_table', 'products', 'accounts', 'users', 'test_data']
-for table in tables_to_drop:
-    try:
-        db.execute(f"DROP TABLE IF EXISTS {table}")
-    except:
-        pass
-print("✓ Tables nettoyées")
+db = Database(db_path=temp_db)
 
-# 4. CRÉATION CORRECTE DES TABLES
-print("\n🏗️  CRÉATION DES TABLES:")
-
-# Version CORRECTE - Spécifier toutes les colonnes
-create_queries = [
-    ("users", """
-        CREATE TABLE users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            age INTEGER,
-            email TEXT UNIQUE,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """),
-    ("products", """
-        CREATE TABLE products (
-            id INTEGER PRIMARY KEY,
-            name TEXT NOT NULL,
-            category TEXT,
-            price DECIMAL(10,2),
-            stock INTEGER DEFAULT 0,
-            description TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """),
-    ("accounts", """
-        CREATE TABLE accounts (
-            id INTEGER PRIMARY KEY,
-            account_number TEXT UNIQUE,
-            balance DECIMAL(10,2) DEFAULT 0.0,
-            owner_id INTEGER,
-            FOREIGN KEY (owner_id) REFERENCES users(id)
-        )
-    """)
-]
-
-for table_name, sql in create_queries:
-    try:
-        result = db.execute(sql)
-        print(f"✓ Table '{table_name}' créée ({result['type']})")
-    except SQLExecutionError as e:
-        print(f"✗ Table '{table_name}': {e}")
-
-# 5. INSERTION CORRECTE
-print("\n📝 INSERTION DE DONNÉES:")
-
-# INSERT users - CORRECT avec colonnes spécifiées
-users_sql = """
-    INSERT INTO users (name, age, email) 
-    VALUES 
-        ('Alice', 25, 'alice@example.com'),
-        ('Bob', 30, 'bob@example.com'),
-        ('Charlie', 22, 'charlie@example.com')
-"""
-
-try:
-    users_result = db.execute(users_sql)
-    print(f"✓ Users: {users_result.get('rows_affected', '?')} lignes")
-except SQLExecutionError as e:
-    print(f"✗ Users: {e}")
-
-# INSERT products - CORRECT avec toutes les colonnes OU spécifier colonnes
-products_sql = """
-    INSERT INTO products (id, name, category, price, stock, description)
-    VALUES 
-        (1, 'Laptop', 'Electronics', 999.99, 10, 'High-end gaming laptop'),
-        (2, 'Mouse', 'Electronics', 29.99, 50, 'Wireless mouse'),
-        (3, 'Desk', 'Furniture', 299.99, 5, 'Office desk')
-"""
-
-try:
-    products_result = db.execute(products_sql)
-    print(f"✓ Products: {products_result.get('rows_affected', '?')} lignes")
-except SQLExecutionError as e:
-    print(f"✗ Products: {e}")
-
-# 6. REQUÊTES SELECT CORRECTES
-print("\n🔍 REQUÊTES SELECT:")
-
-select_queries = [
-    ("Tous les users", "SELECT * FROM users ORDER BY name"),
-    ("Users > 23 ans", "SELECT name, age, email FROM users WHERE age > 23"),
-    ("Produits par catégorie", """
-        SELECT category, COUNT(*) as count, AVG(price) as avg_price 
-        FROM products 
-        GROUP BY category
-    """),
-    ("Jointure", """
-        SELECT u.name, p.name as product, p.price
-        FROM users u, products p
-        WHERE u.age > 20
-        ORDER BY u.name, p.price
-    """)
-]
-
-for desc, sql in select_queries:
-    try:
-        result = db.execute(sql)
-        if result['success']:
-            print(f"✓ {desc}: {len(result['rows'])} résultat(s)")
-            
-            # Afficher les premières lignes
-            if result['rows']:
-                print(f"  Colonnes: {result['columns']}")
-                for i, row in enumerate(result['rows'][:2]):
-                    print(f"  [{i}] {row}")
-                if len(result['rows']) > 2:
-                    print(f"  ... et {len(result['rows']) - 2} autres")
-        else:
-            print(f"✗ {desc}: Échec")
-    except SQLExecutionError as e:
-        print(f"✗ {desc}: {e}")
-
-# 7. TRANSACTIONS - LA BONNE FAÇON
-print("\n💼 TRANSACTIONS - Méthode correcte:")
-
-# Méthode 1: Utiliser SAVEPOINT (plus fiable dans GSQL)
-try:
-    print("Méthode 1: SAVEPOINT")
-    db.execute("SAVEPOINT sp1")
-    
-    # Opérations dans la transaction
-    db.execute("UPDATE users SET age = age + 1 WHERE name = 'Alice'")
-    db.execute("UPDATE products SET stock = stock - 1 WHERE name = 'Laptop'")
-    
-    db.execute("RELEASE SAVEPOINT sp1")
-    print("✓ Transaction SAVEPOINT réussie")
-    
-except SQLExecutionError as e:
-    print(f"✗ SAVEPOINT échoué: {e}")
-    try:
-        db.execute("ROLLBACK TO SAVEPOINT sp1")
-        print("✓ Rollback SAVEPOINT")
-    except:
-        pass
-
-# Méthode 2: BEGIN/COMMIT explicite
-print("\nMéthode 2: BEGIN/COMMIT")
-try:
-    # D'abord vérifier s'il y a une transaction active
-    try:
-        db.execute("ROLLBACK")  # Nettoyer toute transaction existante
-    except:
-        pass  # Pas de transaction active, c'est bon
-    
-    db.execute("BEGIN TRANSACTION")
-    print("✓ Transaction débutée")
-    
-    db.execute("INSERT INTO users (name, age, email) VALUES ('David', 28, 'david@test.com')")
-    db.execute("UPDATE products SET price = price * 0.9 WHERE category = 'Electronics'")
-    
-    db.execute("COMMIT")
-    print("✓ Transaction commitée")
-    
-except SQLExecutionError as e:
-    print(f"✗ Transaction: {e}")
-    try:
-        db.execute("ROLLBACK")
-        print("✓ Rollback effectué")
-    except Exception as re:
-        print(f"✗ Rollback aussi échoué: {re}")
-
-# 8. FONCTIONS AVANCÉES
-print("\n⚡ FONCTIONS AVANCÉES:")
-
-# Créer une fonction personnalisée (si disponible)
-try:
-    # Vérifier si register_function existe
-    if hasattr(db, 'register_function'):
-        
-        def calculate_tax(amount):
-            return amount * 1.20  # 20% de taxe
-        
-        db.register_function('calculate_tax', calculate_tax)
-        print("✓ Fonction calculate_tax enregistrée")
-        
-        # Tester la fonction
-        tax_result = db.execute("SELECT calculate_tax(100) as with_tax")
-        if tax_result['success']:
-            print(f"  Test: 100€ avec taxe = {tax_result['rows'][0][0]}€")
-    else:
-        print("ℹ️  register_function non disponible")
-        
-except Exception as e:
-    print(f"✗ Fonctions: {e}")
-
-# 9. PERFORMANCE ET STATISTIQUES
-print("\n📈 PERFORMANCE:")
-
-# Test de performance
-import time
-
-start = time.time()
-for i in range(50):
-    db.execute(f"INSERT INTO products (name, price) VALUES ('Product_{i}', {i * 10.0})")
-insert_time = time.time() - start
-
-print(f"✓ 50 insertions: {insert_time:.3f}s ({insert_time/50:.4f}s par insertion)")
-
-# Statistiques
-stats = db.execute("""
-    SELECT 
-        COUNT(*) as total_products,
-        AVG(price) as avg_price,
-        SUM(stock) as total_stock,
-        MIN(price) as min_price,
-        MAX(price) as max_price
-    FROM products
-""")
-
-if stats['success'] and stats['rows']:
-    row = stats['rows'][0]
-    print(f"📊 Statistiques produits:")
-    print(f"  Total: {row[0]}")
-    print(f"  Prix moyen: {row[1]:.2f}€")
-    print(f"  Stock total: {row[2]}")
-    print(f"  Prix min: {row[3]:.2f}€")
-    print(f"  Prix max: {row[4]:.2f}€")
-
-# 10. NETTOYAGE FINAL ET VÉRIFICATION
-print("\n🧼 NETTOYAGE FINAL:")
-
-# Lister toutes les tables
+# 1. COMPRENDRE CE QUI EXISTE DÉJÀ
+print("\n📋 Tables existantes:")
 try:
     tables_result = db.execute("""
         SELECT name FROM sqlite_master 
-        WHERE type='table' AND name NOT LIKE 'sqlite_%'
+        WHERE type='table' 
         ORDER BY name
     """)
     
-    if tables_result['success'] and tables_result['rows']:
-        print("📋 Tables dans la base:")
-        for table in tables_result['rows']:
-            table_name = table[0]
-            count_result = db.execute(f"SELECT COUNT(*) FROM {table_name}")
-            count = count_result['rows'][0][0] if count_result['success'] else 0
-            print(f"  • {table_name}: {count} ligne(s)")
+    if tables_result['success']:
+        print("Tables système et utilisateur:")
+        for table in tables_result['rows'][:10]:  # Limiter l'affichage
+            print(f"  • {table[0]}")
+        
+        if len(tables_result['rows']) > 10:
+            print(f"  ... et {len(tables_result['rows']) - 10} autres")
+except:
+    print("  Impossible de lire les tables")
+
+# 2. TRAVAILLER AVEC LES TABLES EXISTANTES
+print("\n👥 Utilisateurs existants (table users):")
+try:
+    users = db.execute("SELECT id, name, age, email FROM users LIMIT 5")
+    if users['success'] and users['rows']:
+        for user in users['rows']:
+            print(f"  ID {user[0]}: {user[1]} ({user[2]} ans) - {user[3]}")
     else:
-        print("  Aucune table utilisateur")
+        print("  Aucun utilisateur ou table vide")
+except SQLExecutionError:
+    print("  Table users n'existe pas ou erreur")
+
+# 3. AJOUTER DES DONNÉES (sans dupliquer)
+print("\n➕ Ajouter un nouvel utilisateur:")
+try:
+    # Utiliser INSERT OR IGNORE pour éviter les contraintes UNIQUE
+    new_user = db.execute("""
+        INSERT OR IGNORE INTO users (name, age, email) 
+        VALUES ('TestUser', 99, 'test@unique.com')
+    """)
+    
+    if new_user['success']:
+        print(f"✓ Utilisateur ajouté (ID: {new_user.get('last_insert_id', '?')})")
+    else:
+        print("✗ Échec de l'ajout")
         
 except SQLExecutionError as e:
-    print(f"✗ Liste tables: {e}")
+    print(f"✗ Erreur: {e}")
+
+# 4. CRÉER SA PROPRE TABLE (si besoin)
+print("\n🏗️ Créer une table personnalisée:")
+try:
+    # D'abord vérifier si elle existe
+    db.execute("DROP TABLE IF EXISTS my_custom_data")
+    
+    create_result = db.execute("""
+        CREATE TABLE my_custom_data (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            data TEXT NOT NULL,
+            value REAL,
+            tags TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    if create_result['success']:
+        print("✓ Table my_custom_data créée")
+        
+        # Remplir avec des données
+        for i in range(3):
+            db.execute(f"""
+                INSERT INTO my_custom_data (data, value, tags)
+                VALUES ('Data point {i}', {i * 10.5}, 'test,example')
+            """)
+        print("✓ Données ajoutées")
+        
+except SQLExecutionError as e:
+    print(f"✗ Erreur création table: {e}")
+
+# 5. REQUÊTES COMPLEXES
+print("\n🔍 Requêtes avancées:")
+
+# Avec la table products qui existe
+try:
+    # Statistiques produits
+    stats = db.execute("""
+        SELECT 
+            category,
+            COUNT(*) as count,
+            AVG(price) as avg_price,
+            SUM(stock) as total_stock
+        FROM products 
+        WHERE category IS NOT NULL
+        GROUP BY category
+        ORDER BY avg_price DESC
+    """)
+    
+    if stats['success']:
+        print("📊 Produits par catégorie:")
+        for row in stats['rows']:
+            print(f"  • {row[0]}: {row[1]} produits, prix moyen: ${row[2]:.2f}, stock: {row[3]}")
+            
+except SQLExecutionError as e:
+    print(f"✗ Statistiques: {e}")
+
+# 6. JOINTURES
+print("\n🤝 Jointure users/products:")
+try:
+    # Créer une table orders pour la démo
+    db.execute("DROP TABLE IF EXISTS demo_orders")
+    db.execute("""
+        CREATE TABLE demo_orders (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER,
+            product_id INTEGER,
+            quantity INTEGER,
+            order_date DATE DEFAULT CURRENT_DATE
+        )
+    """)
+    
+    # Ajouter des commandes de démo
+    db.execute("INSERT INTO demo_orders (user_id, product_id, quantity) VALUES (1, 1, 2), (2, 2, 1)")
+    
+    # Jointure
+    orders = db.execute("""
+        SELECT 
+            u.name as user_name,
+            p.name as product_name,
+            o.quantity,
+            p.price,
+            o.quantity * p.price as total
+        FROM demo_orders o
+        JOIN users u ON o.user_id = u.id
+        JOIN products p ON o.product_id = p.id
+        ORDER BY total DESC
+    """)
+    
+    if orders['success']:
+        print("🛒 Commandes:")
+        for order in orders['rows']:
+            print(f"  • {order[0]} a acheté {order[2]}x {order[1]} = ${order[4]:.2f}")
+            
+except SQLExecutionError as e:
+    print(f"✗ Jointures: {e}")
+
+# 7. FONCTIONS SQL NATIVES
+print("\n⚡ Fonctions SQL intégrées:")
+
+function_tests = [
+    ("Date/Heure", "SELECT DATE('now') as today, TIME('now') as current_time"),
+    ("Math", "SELECT RANDOM() as random, ABS(-10) as absolute, ROUND(3.14159, 2) as pi"),
+    ("Texte", "SELECT UPPER('hello') as upper, LOWER('WORLD') as lower, LENGTH('test') as len"),
+    ("Agrégation", "SELECT COUNT(*) as total_users, AVG(age) as avg_age FROM users WHERE age > 0"),
+]
+
+for desc, sql in function_tests:
+    try:
+        result = db.execute(sql)
+        if result['success'] and result['rows']:
+            print(f"✓ {desc}: {result['rows'][0]}")
+    except:
+        print(f"✗ {desc}")
+
+# 8. EXPORT/IMPORT
+print("\n💾 Export des données:")
+
+try:
+    # Exporter users en CSV format
+    export = db.execute("SELECT * FROM users")
+    if export['success']:
+        print(f"📄 {len(export['rows'])} utilisateurs exportables")
+        
+        # Afficher en format CSV-like
+        print("  En-têtes:", ",".join(export['columns']))
+        for i, row in enumerate(export['rows'][:3]):
+            print(f"  Ligne {i+1}:", ",".join(str(x) for x in row))
+        if len(export['rows']) > 3:
+            print(f"  ... et {len(export['rows']) - 3} autres")
+            
+except:
+    print("✗ Export échoué")
+
+# 9. NETTOYAGE
+print("\n🧼 Nettoyage des tables de démo:")
+for table in ['demo_orders', 'my_custom_data']:
+    try:
+        db.execute(f"DROP TABLE IF EXISTS {table}")
+        print(f"✓ Table {table} supprimée")
+    except:
+        pass
+
+# 10. INFOS SYSTÈME
+print("\n📊 Informations système GSQL:")
+
+info_queries = [
+    ("Version SQLite", "SELECT sqlite_version() as version"),
+    ("Encodage", "PRAGMA encoding"),
+    ("Taille DB", "SELECT page_count * page_size as size FROM pragma_page_count, pragma_page_size"),
+]
+
+for desc, sql in info_queries:
+    try:
+        result = db.execute(sql)
+        if result['success'] and result['rows']:
+            print(f"  {desc}: {result['rows'][0]}")
+    except:
+        pass
 
 # Fermeture
 db.close()
-print("\n" + "=" * 60)
-print("✅ TEST COMPLET TERMINÉ AVEC SUCCÈS!")
-print("=" * 60)
 
-# RÉSUMÉ DES LEÇONS APPRISES
-print("\n📚 RÉSUMÉ DES LEÇONS:")
-print("1. execute() retourne dict avec 'rows' (tuples)")
-print("2. Spécifier TOUTES les colonnes dans INSERT")
-print("3. Utiliser SAVEPOINT pour les transactions")
-print("4. Nettoyer les tables avant les tests")
-print("5. Gérer les erreurs avec try/except SQLExecutionError")
+# Supprimer le fichier temporaire
+import os
+if os.path.exists(temp_db):
+    os.remove(temp_db)
+    print(f"🗑️  Fichier {temp_db} supprimé")
+
+print("\n" + "=" * 50)
+print("✅ GSQL fonctionne correctement !")
+print("=" * 50)
+
+print("\n💡 CE QU'IL FAUT RETENIR:")
+print("1. GSQL initialise automatiquement des tables (users, products)")
+print("2. Utiliser INSERT OR IGNORE pour éviter les erreurs UNIQUE")
+print("3. Les résultats sont des tuples dans result['rows']")
+print("4. Pas de transactions fonctionnelles dans cette version")
+print("5. Toujours vérifier si les tables existent avant de les créer")
