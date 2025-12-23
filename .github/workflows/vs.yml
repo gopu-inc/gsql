@@ -2,8 +2,7 @@ name: 🐳 Publication Docker
 
 on:
   push:
-    tags:
-      - 'v*'
+    
     branches:
       - main
       - develop
