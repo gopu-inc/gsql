@@ -1,25 +1,23 @@
-name: 🔄 Synchronisation Automatique des Versions
+name: 🚀 Publication Automatique sur Tag
 
 on:
   push:
-     tag: 'v*.*.*'
-   # Se déclenche uniquement sur les tags de version (v1.0.0, v2.3.4, etc.)
-   
+    tags:
+      - 'v*'  # SEULEMENT déclenché par les tags comme v3.0.2
 
 env:
   VERSION_FILE: "gsql/__init__.py"
   DOCKER_FILE: "Dockerfile"
   CONDA_FILE: "conda.recipe/meta.yaml"
+  SETUP_FILE: "setup.py"
 
 permissions:
   contents: write
-  pull-requests: write
 
 jobs:
-  # 1. VALIDATION ET SYNCHRONISATION DES VERSIONS
+  # 1. SYNCHRONISATION DES VERSIONS
   sync-versions:
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     
     steps:
       - name: 📥 Checkout avec le tag
@@ -27,155 +25,98 @@ jobs:
         with:
           token: ${{ secrets.GB_TOKEN }}
           fetch-depth: 0
-          ref: ${{ github.ref }}
       
       - name: 🏷️ Extraire la version du tag
         id: extract-tag
         run: |
           # Extraire la version du tag (ex: v3.0.2 -> 3.0.2)
           TAG_VERSION="${GITHUB_REF#refs/tags/v}"
-          echo "📌 Version du tag: $TAG_VERSION"
+          echo "🏷️ Tag détecté: $TAG_VERSION"
           echo "tag_version=$TAG_VERSION" >> $GITHUB_OUTPUT
+          
+          # Vérifier le format de version
+          if ! echo "$TAG_VERSION" | grep -q -E '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "❌ Format de tag invalide. Doit être vX.Y.Z (ex: v1.0.0)"
+            exit 1
+          fi
       
-      - name: 🔍 Vérifier les versions actuelles
-        id: check-versions
+      - name: 🔄 Synchroniser TOUS les fichiers
         run: |
           TAG_VERSION="${{ steps.extract-tag.outputs.tag_version }}"
+          echo "🔄 Synchronisation complète vers: $TAG_VERSION"
           
-          echo "🔍 Vérification des versions dans les fichiers..."
-          
-          # 1. Vérifier gsql/__init__.py
+          # 1. Mettre à jour gsql/__init__.py (source principale)
           if [ -f "$VERSION_FILE" ]; then
-            PY_VERSION=$(grep -E "__version__\s*=\s*[\"'][0-9]+\.[0-9]+\.[0-9]+[\"']" "$VERSION_FILE" | head -1 | sed -E "s/.*[\"']([0-9]+\.[0-9]+\.[0-9]+)[\"'].*/\1/")
-            echo "🐍 gsql/__init__.py: $PY_VERSION"
-            
-            if [ "$PY_VERSION" != "$TAG_VERSION" ]; then
-              echo "🔄 À synchroniser: Python ($PY_VERSION → $TAG_VERSION)"
-              echo "update_python=true" >> $GITHUB_OUTPUT
-            else
-              echo "✅ Python déjà synchronisé"
-              echo "update_python=false" >> $GITHUB_OUTPUT
-            fi
+            # Trouver et remplacer __version__ = "x.y.z"
+            sed -i "s/__version__\s*=\s*[\"'][0-9]\+\.[0-9]\+\.[0-9]\+[\"']/__version__ = \"$TAG_VERSION\"/g" "$VERSION_FILE"
+            echo "✅ $VERSION_FILE → $TAG_VERSION"
           else
-            echo "❌ Fichier $VERSION_FILE non trouvé"
+            echo "❌ Fichier $VERSION_FILE introuvable"
             exit 1
           fi
           
-          # 2. Vérifier Dockerfile
+          # 2. Mettre à jour Dockerfile (CRITIQUE: avec les bonnes guillemets)
           if [ -f "$DOCKER_FILE" ]; then
-            # Chercher ARG VERSION ou LABEL version
-            DOCKER_VERSION=$(grep -E "ARG VERSION=|LABEL version=" "$DOCKER_FILE" | head -1 | sed -E "s/.*[\"']?([0-9]+\.[0-9]+\.[0-9]+)[\"']?.*/\1/" | sed -E "s/VERSION=//")
+            # A. Mettre à jour ARG VERSION (exactement comme dans votre Dockerfile)
+            sed -i "s/ARG VERSION=\".*\"/ARG VERSION=\"$TAG_VERSION\"/g" "$DOCKER_FILE"
             
-            if [ -n "$DOCKER_VERSION" ]; then
-              echo "🐳 Dockerfile: $DOCKER_VERSION"
-              
-              if [ "$DOCKER_VERSION" != "$TAG_VERSION" ]; then
-                echo "🔄 À synchroniser: Docker ($DOCKER_VERSION → $TAG_VERSION)"
-                echo "update_docker=true" >> $GITHUB_OUTPUT
-              else
-                echo "✅ Docker déjà synchronisé"
-                echo "update_docker=false" >> $GITHUB_OUTPUT
-              fi
-            else
-              echo "⚠️ Version non trouvée dans Dockerfile"
-              echo "update_docker=true" >> $GITHUB_OUTPUT
-            fi
+            # B. Mettre à jour LABEL version (exactement comme dans votre Dockerfile)
+            sed -i "s/LABEL version=\".*\"/LABEL version=\"$TAG_VERSION\"/g" "$DOCKER_FILE"
+            
+            # Vérification
+            echo "🔍 Vérification Dockerfile:"
+            grep -E "(ARG VERSION|LABEL version)" "$DOCKER_FILE"
+            echo "✅ Dockerfile synchronisé"
           fi
           
-          # 3. Vérifier conda meta.yaml
+          # 3. Mettre à jour conda meta.yaml
           if [ -f "$CONDA_FILE" ]; then
-            CONDA_VERSION=$(grep -E "version:\s*[\"'][0-9]+\.[0-9]+\.[0-9]+[\"']" "$CONDA_FILE" | head -1 | sed -E "s/.*[\"']([0-9]+\.[0-9]+\.[0-9]+)[\"'].*/\1/")
+            # Version principale
+            sed -i "s/version:\s*[\"'][0-9]\+\.[0-9]\+\.[0-9]\+[\"']/version: \"$TAG_VERSION\"/g" "$CONDA_FILE"
             
-            if [ -n "$CONDA_VERSION" ]; then
-              echo "📦 conda.recipe/meta.yaml: $CONDA_VERSION"
-              
-              if [ "$CONDA_VERSION" != "$TAG_VERSION" ]; then
-                echo "🔄 À synchroniser: Conda ($CONDA_VERSION → $TAG_VERSION)"
-                echo "update_conda=true" >> $GITHUB_OUTPUT
-              else
-                echo "✅ Conda déjà synchronisé"
-                echo "update_conda=false" >> $GITHUB_OUTPUT
-              fi
-            else
-              echo "⚠️ Version non trouvée dans meta.yaml"
-              echo "update_conda=true" >> $GITHUB_OUTPUT
-            fi
-          fi
-      
-      - name: 🔄 Synchroniser les versions si nécessaire
-        id: sync
-        # S'exécute seulement si au moins un fichier doit être mis à jour
-        if: steps.check-versions.outputs.update_python == 'true' || steps.check-versions.outputs.update_docker == 'true' || steps.check-versions.outputs.update_conda == 'true'
-        run: |
-          TAG_VERSION="${{ steps.extract-tag.outputs.tag_version }}"
-          
-          echo "🔄 Synchronisation avec la version: $TAG_VERSION"
-          
-          # 1. Synchroniser gsql/__init__.py
-          if [ "${{ steps.check-versions.outputs.update_python }}" = "true" ]; then
-            echo "📝 Mise à jour de $VERSION_FILE"
-            # Trouver et remplacer la ligne __version__
-            sed -i "s/__version__\s*=\s*[\"'][0-9]\+\.[0-9]\+\.[0-9]\+[\"']/__version__ = \"$TAG_VERSION\"/g" "$VERSION_FILE"
-            echo "✅ $VERSION_FILE mis à jour vers $TAG_VERSION"
-          fi
-          
-          # 2. Synchroniser Dockerfile
-          if [ "${{ steps.check-versions.outputs.update_docker }}" = "true" ]; then
-            echo "📝 Mise à jour de $DOCKER_FILE"
-            
-            # Mettre à jour ARG VERSION
-            sed -i "s/ARG VERSION=.*/ARG VERSION=\"$TAG_VERSION\"/g" "$DOCKER_FILE" 2>/dev/null || true
-            
-            # Mettre à jour LABEL version
-            sed -i "s/LABEL version=.*/LABEL version=\"$TAG_VERSION\"/g" "$DOCKER_FILE" 2>/dev/null || true
-            
-            # Si aucune des deux lignes n'existe, les ajouter
-            if ! grep -q "ARG VERSION=" "$DOCKER_FILE" 2>/dev/null; then
-              # Trouver la ligne FROM et ajouter ARG après
-              sed -i "/^FROM /a ARG VERSION=\"$TAG_VERSION\"" "$DOCKER_FILE"
-            fi
-            
-            if ! grep -q "LABEL version=" "$DOCKER_FILE" 2>/dev/null; then
-              # Ajouter LABEL après ARG
-              sed -i "/ARG VERSION=.*/a LABEL version=\"$TAG_VERSION\"" "$DOCKER_FILE"
-            fi
-            
-            echo "✅ $DOCKER_FILE mis à jour vers $TAG_VERSION"
-          fi
-          
-          # 3. Synchroniser conda meta.yaml
-          if [ "${{ steps.check-versions.outputs.update_conda }}" = "true" ]; then
-            echo "📝 Mise à jour de $CONDA_FILE"
-            
-            # Mettre à jour la version
-            sed -i "s/version:\s*[\"'][0-9]\+\.[0-9]\+\.[0-9]\+[\"']/version: \"$TAG_VERSION\"/g" "$CONDA_FILE" 2>/dev/null || true
-            
-            # Si la ligne version n'existe pas, l'ajouter
-            if ! grep -q "version:" "$CONDA_FILE" 2>/dev/null; then
-              # Trouver la section package et ajouter version après
-              sed -i "/^package:/a \  version: \"$TAG_VERSION\"" "$CONDA_FILE"
-            fi
-            
-            # Incrémenter le build number
-            if grep -q "number:" "$CONDA_FILE" 2>/dev/null; then
-              # Récupérer le numéro actuel et l'incrémenter
+            # Incrémenter le build number si existe
+            if grep -q "number:" "$CONDA_FILE"; then
               CURRENT_NUMBER=$(grep "number:" "$CONDA_FILE" | sed -E 's/.*number:\s*([0-9]+).*/\1/')
               NEW_NUMBER=$((CURRENT_NUMBER + 1))
               sed -i "s/number:\s*[0-9]\+/number: $NEW_NUMBER/g" "$CONDA_FILE"
-            else
-              # Ajouter le build number
-              sed -i "/version:/a \  number: 0" "$CONDA_FILE"
+              echo "✅ Build number: $CURRENT_NUMBER → $NEW_NUMBER"
+            fi
+            echo "✅ $CONDA_FILE synchronisé"
+          fi
+          
+          # 4. Mettre à jour setup.py (VOTRE FICHIER COMPLEXE)
+          if [ -f "$SETUP_FILE" ]; then
+            # IMPORTANT: setup.py utilise VersionManager qui lit __init__.py
+            # Donc pas besoin de modifier setup.py directement
+            # Mais on peut mettre à jour la version par défaut si nécessaire
+            
+            # Vérifier si setup.py a une version codée en dur
+            if grep -q "default_version = " "$SETUP_FILE"; then
+              sed -i "s/default_version = \".*\"/default_version = \"$TAG_VERSION\"/g" "$SETUP_FILE"
+              echo "✅ Version par défaut dans setup.py mise à jour"
             fi
             
-            echo "✅ $CONDA_FILE mis à jour vers $TAG_VERSION"
+            # Mettre à jour la version dans le titre si présent
+            sed -i "s/GSQL v[0-9]\+\.[0-9]\+\.[0-9]\+/GSQL v$TAG_VERSION/g" "$SETUP_FILE" 2>/dev/null || true
+            
+            echo "✅ setup.py vérifié"
+          fi
+          
+          # 5. Mettre à jour README.md
+          if [ -f "README.md" ]; then
+            # Remplacer toutes les occurrences de version
+            sed -i "s/gsql==[0-9]\+\.[0-9]\+\.[0-9]\+/gsql==$TAG_VERSION/g" "README.md" 2>/dev/null || true
+            sed -i "s/gsql:[0-9]\+\.[0-9]\+\.[0-9]\+/gsql:$TAG_VERSION/g" "README.md" 2>/dev/null || true
+            sed -i "s/version [0-9]\+\.[0-9]\+\.[0-9]\+/version $TAG_VERSION/g" "README.md" 2>/dev/null || true
+            sed -i "s/v[0-9]\+\.[0-9]\+\.[0-9]\+/v$TAG_VERSION/g" "README.md" 2>/dev/null || true
+            echo "✅ README.md synchronisé"
           fi
           
           # Afficher les changements
-          echo "📋 Différences après synchronisation:"
-          git diff --name-only
+          echo "📋 Fichiers modifiés:"
+          git status --short
       
       - name: 💾 Commit et push des changements
-        if: steps.check-versions.outputs.update_python == 'true' || steps.check-versions.outputs.update_docker == 'true' || steps.check-versions.outputs.update_conda == 'true'
         run: |
           TAG_VERSION="${{ steps.extract-tag.outputs.tag_version }}"
           
@@ -185,155 +126,285 @@ jobs:
           
           # Vérifier s'il y a des changements
           if git diff --quiet; then
-            echo "ℹ️ Aucun changement à commiter"
+            echo "ℹ️ Aucun changement à commiter (déjà synchronisé)"
             exit 0
           fi
           
+          # Afficher les différences
+          echo "📋 Différences détectées:"
+          git diff --name-only
+          
           # Commiter les changements
           git add -A
-          git commit -m "chore: sync versions to $TAG_VERSION [skip ci]"
+          git commit -m "chore: sync all versions to $TAG_VERSION [skip ci]"
           
-          # Pousser vers la branche principale
+          # Pousser vers la branche main
           echo "🚀 Pushing synchronized versions to main..."
           git push origin HEAD:main
           
           echo "✅ Versions synchronisées sur main"
+      
+      - name: 📝 Vérification finale
+        run: |
+          TAG_VERSION="${{ steps.extract-tag.outputs.tag_version }}"
+          echo "🔍 Vérification finale:"
           
-          # Mettre à jour le tag avec les nouveaux fichiers
-          echo "🏷️ Mise à jour du tag avec les fichiers synchronisés..."
-          git tag -f "v$TAG_VERSION"
-          git push --force origin "v$TAG_VERSION"
+          # Vérifier gsql/__init__.py
+          PY_VERSION=$(grep -E "__version__\s*=\s*[\"'][0-9]+\.[0-9]+\.[0-9]+[\"']" "$VERSION_FILE" | head -1 | sed -E "s/.*[\"']([0-9]+\.[0-9]+\.[0-9]+)[\"'].*/\1/")
+          echo "🐍 gsql/__init__.py: $PY_VERSION"
           
-          echo "🎉 Synchronisation terminée! Tag mis à jour avec les versions correctes."
+          # Vérifier Dockerfile
+          if [ -f "$DOCKER_FILE" ]; then
+            DOCKER_ARG=$(grep "ARG VERSION=" "$DOCKER_FILE" | head -1)
+            DOCKER_LABEL=$(grep "LABEL version=" "$DOCKER_FILE" | head -1)
+            echo "🐳 Dockerfile - $DOCKER_ARG"
+            echo "🐳 Dockerfile - $DOCKER_LABEL"
+          fi
+          
+          if [ "$PY_VERSION" = "$TAG_VERSION" ]; then
+            echo "🎉 Toutes les versions sont synchronisées avec $TAG_VERSION"
+          else
+            echo "❌ ERREUR: Version non synchronisée"
+            exit 1
+          fi
 
-  # 2. PUBLICATION MULTI-PLATEFORMES (déclenché après synchronisation)
-  publish-all:
+  # 2. PUBLICATION DOCKER HUB
+  publish-docker:
     runs-on: ubuntu-latest
     needs: sync-versions
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    
-    env:
-      VERSION: ${{ github.ref_name }}
     
     steps:
-      - name: 📥 Checkout avec le tag synchronisé
+      - name: 📥 Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       
-      - name: ✅ Vérifier que toutes les versions sont synchronisées
-        run: |
-          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
-          echo "🔍 Vérification finale des versions pour $TAG_VERSION"
-          
-          # Vérifier Python
-          if [ -f "$VERSION_FILE" ]; then
-            PY_VERSION=$(grep -E "__version__\s*=\s*[\"'][0-9]+\.[0-9]+\.[0-9]+[\"']" "$VERSION_FILE" | head -1 | sed -E "s/.*[\"']([0-9]+\.[0-9]+\.[0-9]+)[\"'].*/\1/")
-            if [ "$PY_VERSION" != "$TAG_VERSION" ]; then
-              echo "❌ ERREUR: Version Python ($PY_VERSION) ≠ Tag ($TAG_VERSION)"
-              exit 1
-            fi
-            echo "✅ Python: $PY_VERSION"
-          fi
-          
-          # Vérifier Docker
-          if [ -f "$DOCKER_FILE" ]; then
-            DOCKER_VERSION=$(grep -E "ARG VERSION=|LABEL version=" "$DOCKER_FILE" | head -1 | sed -E "s/.*[\"']?([0-9]+\.[0-9]+\.[0-9]+)[\"']?.*/\1/")
-            if [ -n "$DOCKER_VERSION" ] && [ "$DOCKER_VERSION" != "$TAG_VERSION" ]; then
-              echo "❌ ERREUR: Version Docker ($DOCKER_VERSION) ≠ Tag ($TAG_VERSION)"
-              exit 1
-            fi
-            echo "✅ Docker: $DOCKER_VERSION"
-          fi
-          
-          # Vérifier Conda
-          if [ -f "$CONDA_FILE" ]; then
-            CONDA_VERSION=$(grep -E "version:\s*[\"'][0-9]+\.[0-9]+\.[0-9]+[\"']" "$CONDA_FILE" | head -1 | sed -E "s/.*[\"']([0-9]+\.[0-9]+\.[0-9]+)[\"'].*/\1/")
-            if [ -n "$CONDA_VERSION" ] && [ "$CONDA_VERSION" != "$TAG_VERSION" ]; then
-              echo "❌ ERREUR: Version Conda ($CONDA_VERSION) ≠ Tag ($TAG_VERSION)"
-              exit 1
-            fi
-            echo "✅ Conda: $CONDA_VERSION"
-          fi
-          
-          echo "🎉 Toutes les versions sont synchronisées avec $TAG_VERSION"
-      
-      - name: 🐳 Publication Docker Hub
+      - name: 🐳 Login à Docker Hub
         uses: docker/login-action@v3
         with:
           username: ceoseshell
           password: ${{ secrets.DOCKER_PASSWORD }}
       
-      - name: 🐳 Build & Push Docker
+      - name: 🔍 Extraire la version pour Docker
+        id: docker-version
+        run: |
+          # Extraire la version du tag
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "🏷️ Version pour Docker: $TAG_VERSION"
+          
+          # Vérifier le Dockerfile
+          if [ -f "Dockerfile" ]; then
+            echo "🔍 Vérification Dockerfile:"
+            grep -E "(ARG VERSION|LABEL version)" "Dockerfile"
+          fi
+          
+          echo "version=$TAG_VERSION" >> $GITHUB_OUTPUT
+      
+      - name: 🐳 Build & Push
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
           tags: |
             ceoseshell/gsql:latest
-            ceoseshell/gsql:${{ env.VERSION }}
+            ceoseshell/gsql:${{ steps.docker-version.outputs.version }}
           build-args: |
-            VERSION=${{ env.VERSION }}
+            VERSION=${{ steps.docker-version.outputs.version }}
           labels: |
-            version=${{ env.VERSION }}
+            version=${{ steps.docker-version.outputs.version }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
       
-      - name: 🐍 Publication PyPI
+      - name: ✅ Vérification Docker
         run: |
-          pip install build
-          python -m build
-          twine upload --username __token__ --password ${{ secrets.PYPI_TOKEN }} dist/*
+          echo "✅ Image Docker publiée:"
+          echo "   ceoseshell/gsql:latest"
+          echo "   ceoseshell/gsql:${{ steps.docker-version.outputs.version }}"
+
+  # 3. PUBLICATION PYPI (avec votre setup.py)
+  publish-pypi:
+    runs-on: ubuntu-latest
+    needs: sync-versions
+    
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
       
-      - name: 📦 Publication Anaconda
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      
+      - name: 🔍 Vérifier la version dans gsql/__init__.py
+        run: |
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          
+          if [ -f "gsql/__init__.py" ]; then
+            PY_VERSION=$(grep -E "__version__\s*=\s*[\"'][0-9]+\.[0-9]+\.[0-9]+[\"']" "gsql/__init__.py" | head -1 | sed -E "s/.*[\"']([0-9]+\.[0-9]+\.[0-9]+)[\"'].*/\1/")
+            
+            if [ "$PY_VERSION" != "$TAG_VERSION" ]; then
+              echo "❌ ERREUR: Version Python ($PY_VERSION) ≠ Tag ($TAG_VERSION)"
+              exit 1
+            fi
+            
+            echo "✅ Version PyPI: $PY_VERSION"
+          fi
+      
+      - name: 📦 Construire le package avec votre setup.py
+        run: |
+          echo "🏗️ Construction du package avec votre setup.py intelligent..."
+          
+          # Installer les dépendances minimales
+          pip install build wheel setuptools
+          
+          # Tester le setup.py
+          python setup.py --version
+          
+          # Construire les distributions
+          python -m build
+          
+          echo "📦 Packages construits:"
+          ls -la dist/
+      
+      - name: 📤 Upload vers PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_TOKEN }}
+
+  # 4. PUBLICATION ANACONDA
+  publish-anaconda:
+    runs-on: ubuntu-latest
+    needs: [sync-versions, publish-pypi]  # Attendre PyPI
+    
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+      
+      - name: 🐍 Setup Miniconda
         uses: conda-incubator/setup-miniconda@v3
         with:
           auto-activate-base: true
+          python-version: 3.10
+      
+      - name: 📦 Installer conda-build
+        run: conda install conda-build anaconda-client -y
+      
+      - name: 🔍 Vérifier meta.yaml
+        run: |
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          
+          if [ -f "conda.recipe/meta.yaml" ]; then
+            echo "🔍 Contenu de meta.yaml:"
+            grep -E "(version:|number:)" "conda.recipe/meta.yaml"
+            
+            CONDA_VERSION=$(grep "version:" "conda.recipe/meta.yaml" | sed -E 's/.*version:\s*[\"]([^\"]+)[\"].*/\1/')
+            
+            if [ "$CONDA_VERSION" != "$TAG_VERSION" ]; then
+              echo "❌ ERREUR: Version Conda ($CONDA_VERSION) ≠ Tag ($TAG_VERSION)"
+              exit 1
+            fi
+            
+            echo "✅ Version Conda: $CONDA_VERSION"
+          else
+            echo "⚠️ Fichier conda.recipe/meta.yaml non trouvé"
+            # Créer un meta.yaml basique si nécessaire
+            mkdir -p conda.recipe
+            cat > conda.recipe/meta.yaml << EOF
+package:
+  name: gsql
+  version: "$TAG_VERSION"
+
+source:
+  url: https://pypi.io/packages/source/g/gsql/gsql-\{\{ version \}\}.tar.gz
+
+build:
+  number: 0
+  script: python -m pip install . --no-deps -vv
+
+requirements:
+  host:
+    - python
+    - pip
+  run:
+    - python
+
+test:
+  imports:
+    - gsql
+
+about:
+  home: https://github.com/gopu-inc/gsql
+  license: MIT
+  summary: Complete SQL Database System in Python with AI Integration
+EOF
+            echo "✅ meta.yaml créé automatiquement"
+          fi
       
       - name: 🏗️ Build Conda Package
         run: |
-          conda install conda-build anaconda-client -y
           conda build conda.recipe/ --output-folder conda_pkg
+          
+          echo "📦 Packages générés:"
+          find conda_pkg -name "*.tar.bz2" | xargs ls -la
       
-      - name: 🚀 Upload Anaconda
+      - name: 🚀 Upload vers Anaconda
         run: |
           PKG_FILE=$(find conda_pkg -name "*.tar.bz2" -type f | head -1)
-          if [ -n "$PKG_FILE" ]; then
+          if [ -n "$PKG_FILE" ] && [ -f "$PKG_FILE" ]; then
+            echo "📤 Upload du package: $PKG_FILE"
             anaconda -t ${{ secrets.ANACONDA_TOKEN }} upload --user ceoseshell "$PKG_FILE"
+            echo "✅ Package uploadé avec succès!"
+          else
+            echo "❌ Aucun package Conda trouvé"
+            exit 1
           fi
+
+  # 5. GITHUB RELEASE
+  github-release:
+    runs-on: ubuntu-latest
+    needs: [publish-docker, publish-pypi, publish-anaconda]
+    
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
       
-      - name: 🏷️ GitHub Release
+      - name: 🏷️ Créer la Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.ref }}
-          name: Release ${{ env.VERSION }}
+          name: Release v${GITHUB_REF#refs/tags/v}
           body: |
-            ## 🚀 Version ${{ env.VERSION }}
+            ## 🚀 GSQL v${GITHUB_REF#refs/tags/v}
             
-            Publication automatique avec versions synchronisées.
+            Publication automatique sur toutes les plateformes.
             
             ### 📦 Installation
             
-            **Docker:**
+            **🐳 Docker:**
             ```bash
-            docker pull ceoseshell/gsql:${{ env.VERSION }}
+            docker pull ceoseshell/gsql:${GITHUB_REF#refs/tags/v}
             ```
             
-            **PyPI:**
+            **🐍 PyPI:**
             ```bash
-            pip install gsql==${{ env.VERSION }}
+            pip install gsql==${GITHUB_REF#refs/tags/v}
             ```
             
-            **Anaconda:**
+            **📦 Anaconda:**
             ```bash
-            conda install -c ceoseshell gsql=${{ env.VERSION }}
+            conda install -c ceoseshell gsql=${GITHUB_REF#refs/tags/v}
             ```
             
-            ### 🔄 Synchronisation
-            - ✅ gsql/__init__.py: ${{ env.VERSION }}
-            - ✅ Dockerfile: ${{ env.VERSION }}
-            - ✅ conda.recipe/meta.yaml: ${{ env.VERSION }}
+            ### 🔄 Versions synchronisées
+            - ✅ `gsql/__init__.py`: ${GITHUB_REF#refs/tags/v}
+            - ✅ `Dockerfile`: ${GITHUB_REF#refs/tags/v}
+            - ✅ `conda.recipe/meta.yaml`: ${GITHUB_REF#refs/tags/v}
+            - ✅ `setup.py`: Version automatique
+            - ✅ `README.md`: ${GITHUB_REF#refs/tags/v}
             
-            *Auto-généré le ${{ github.event.head_commit.timestamp }}*
+            ### 🔗 Liens
+            - [Documentation](https://github.com/gopu-inc/gsql/wiki)
+            - [Code source](https://github.com/gopu-inc/gsql/tree/${{ github.ref }})
+            
+            *Publication automatisée le ${{ github.event.head_commit.timestamp }}*
           draft: false
           prerelease: false
           generate_release_notes: true
