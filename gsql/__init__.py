@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 GSQL - A lightweight SQL database engine with natural language interface
-Version: 3.0.0
+Version: 3.0.1
 SQLite Only - No YAML dependency
 """
 
@@ -14,7 +14,7 @@ from typing import Optional, Dict, Any, Union, List
 
 # ==================== VERSION & METADATA ====================
 
-__version__ = "3.0.0"
+__version__ = "3.0.1"
 __author__ = "Gopu Inc."
 __license__ = "MIT"
 __copyright__ = "Copyright 2024 Gopu Inc."
