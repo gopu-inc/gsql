@@ -1,0 +1,22 @@
+# Exemple de meta.yaml
+package:
+  name: gsql
+  version: "3.0.1"  # Assurez-vous que la version correspond à votre tag
+
+source:
+  url: https://pypi.io/packages/source/g/gsql/gsql-{{ version }}.tar.gz  # Ou .whl
+
+build:
+  number: 0
+
+requirements:
+  host:
+    - python
+    - pip
+  run:
+    - python
+
+about:
+  home: https://github.com/votrecompte/gsql
+  license: MIT
+  summary: Votre description ici
