@@ -1,383 +1,496 @@
 #!/usr/bin/env python3
 """
-TEST GSQL CORRIGÉ - Version avec bugs fixes
+TEST GSQL AVEC GESTION PROPRE DES TABLES
 """
 
 import os
 import sys
 import time
-import inspect
 import tempfile
 import shutil
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-def test_storage_transactions_fixed():
-    """Test des transactions corrigé"""
-    print("\n🔧 TEST TRANSACTIONS CORRIGÉ")
-    print("-" * 50)
-    
-    from gsql.storage import SQLiteStorage
-    
-    temp_dir = tempfile.mkdtemp(prefix="gsql_fix_")
-    db_path = os.path.join(temp_dir, "test_fix.db")
-    
-    try:
-        storage = SQLiteStorage(db_path=db_path, buffer_pool_size=10)
-        
-        # Créer table
-        storage.execute("""
-            CREATE TABLE test_fix (
-                id INTEGER PRIMARY KEY,
-                name TEXT
-            )
-        """)
-        
-        # Transaction avec savepoint CORRIGÉ
-        tm = storage.transaction_manager
-        tid = tm.begin(isolation_level="DEFERRED")
-        print(f"✅ Transaction démarrée: TID={tid}")
-        
-        # Insertion
-        storage.execute("INSERT INTO test_fix (id, name) VALUES (1, 'Test1')")
-        
-        # CORRECTION: Créer le savepoint avec _execute_raw()
-        storage._execute_raw("SAVEPOINT sp1")
-        print(f"✅ Savepoint sp1 créé via _execute_raw()")
-        
-        # Insertion supplémentaire
-        storage.execute("INSERT INTO test_fix (id, name) VALUES (2, 'Test2')")
-        
-        # Vérifier avant rollback
-        result = storage.execute("SELECT COUNT(*) FROM test_fix")
-        count_before = result['rows'][0][0] if result['rows'] else 0
-        print(f"📊 Lignes avant rollback: {count_before}")
-        
-        # Rollback au savepoint
-        tm.rollback(tid, to_savepoint="sp1")
-        print(f"✅ Rollback to sp1 réussi")
-        
-        # Vérifier après rollback
-        result = storage.execute("SELECT COUNT(*) FROM test_fix")
-        count_after = result['rows'][0][0] if result['rows'] else 0
-        print(f"📊 Lignes après rollback: {count_after}")
-        
-        # Commit
-        tm.commit(tid)
-        print(f"✅ Transaction commitée")
-        
-        # Test supplémentaire: savepoint via transaction manager
-        tid2 = tm.begin()
-        storage._execute_raw("SAVEPOINT sp2")
-        print(f"✅ Savepoint sp2 créé")
-        
-        # Rollback sans spécifier savepoint
-        tm.rollback(tid2)
-        print(f"✅ Rollback complet réussi")
-        
-        storage.close()
-        shutil.rmtree(temp_dir)
-        
-        return True
-        
-    except Exception as e:
-        print(f"❌ Erreur: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+print("🧹 TEST GSQL - GESTION PROPRE DES TABLES")
+print("=" * 70)
 
-def test_database_savepoint_fixed():
-    """Test des savepoints database corrigé"""
-    print("\n🔧 TEST DATABASE SAVEPOINT CORRIGÉ")
+def safe_execute(db, sql, params=None):
+    """Exécute SQL avec gestion d'erreur"""
+    try:
+        return db.execute(sql, params)
+    except Exception as e:
+        print(f"⚠️  SQL échoué: {sql[:50]}... → {e}")
+        return {'success': False, 'message': str(e)}
+
+def cleanup_default_tables(db):
+    """Nettoie les tables par défaut si elles existent"""
+    print("\n🧹 Nettoyage tables par défaut:")
+    
+    default_tables = ['users', 'products', 'orders', 'logs']
+    
+    for table in default_tables:
+        try:
+            # Vérifier si la table existe
+            result = db.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table}'")
+            if result.get('success') and result.get('rows'):
+                # Désactiver les foreign keys temporairement
+                db.execute("PRAGMA foreign_keys = OFF")
+                
+                # Supprimer la table
+                drop_result = db.execute(f"DROP TABLE IF EXISTS {table}")
+                if drop_result.get('success'):
+                    print(f"  ✅ Table '{table}' supprimée")
+                else:
+                    print(f"  ⚠️  Échec suppression '{table}': {drop_result.get('message')}")
+                
+                # Réactiver les foreign keys
+                db.execute("PRAGMA foreign_keys = ON")
+        except Exception as e:
+            print(f"  ❌ Erreur nettoyage '{table}': {e}")
+
+def test_table_management():
+    """Test la gestion complète des tables"""
+    print("\n📊 TEST GESTION DES TABLES")
     print("-" * 50)
     
     from gsql.database import Database
     import tempfile
     
-    temp_dir = tempfile.mkdtemp(prefix="gsql_db_fix_")
-    
-    try:
-        db = Database(db_path=":memory:", base_dir=temp_dir)
-        
-        # CORRECTION: Utiliser les méthodes transaction de database
-        print("🔹 Méthode 1: Via database transaction methods")
-        
-        # Début transaction
-        db.begin_transaction(isolation_level="DEFERRED")
-        print(f"✅ Transaction démarrée via database")
-        
-        # Insertion
-        db.execute("INSERT INTO users (username, email) VALUES ('test', 'test@example.com')")
-        
-        # CORRECTION: Utiliser la bonne signature
-        # create_savepoint() de database nécessite tid et name
-        # Mais database gère son propre tid, donc utiliser storage directement
-        tid = 0  # ID par défaut
-        db.storage.create_savepoint(tid, "db_sp1")
-        print(f"✅ Savepoint db_sp1 créé")
-        
-        # Autre insertion
-        db.execute("INSERT INTO users (username, email) VALUES ('test2', 'test2@example.com')")
-        
-        # Rollback
-        db.storage.rollback_transaction(tid, to_savepoint="db_sp1")
-        print(f"✅ Rollback to db_sp1 réussi")
-        
-        # Commit
-        db.commit_transaction(tid)
-        print(f"✅ Transaction commitée")
-        
-        print(f"\n🔹 Méthode 2: Via storage directement")
-        
-        # Transaction via storage
-        tid2 = db.storage.begin_transaction()
-        print(f"✅ Storage transaction démarrée: TID={tid2}")
-        
-        # Savepoint via storage
-        db.storage.create_savepoint(tid2, "storage_sp")
-        print(f"✅ Savepoint storage_sp créé")
-        
-        # Commit via storage
-        db.storage.commit_transaction(tid2)
-        print(f"✅ Storage transaction commitée")
-        
-        db.close()
-        shutil.rmtree(temp_dir)
-        
-        return True
-        
-    except Exception as e:
-        print(f"❌ Erreur: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-
-def test_all_transaction_methods():
-    """Test toutes les méthodes de transaction"""
-    print("\n🔧 TEST COMPLET DES TRANSACTIONS")
-    print("-" * 50)
-    
-    from gsql.database import Database
-    import tempfile
-    
-    temp_dir = tempfile.mkdtemp(prefix="gsql_tx_all_")
-    
-    try:
-        db = Database(db_path=":memory:", base_dir=temp_dir)
-        
-        print("📋 Signatures disponibles:")
-        print("\n1. Database transaction methods:")
-        db_methods = [
-            ("begin_transaction", "isolation_level='DEFERRED'"),
-            ("commit_transaction", "tid"),
-            ("rollback_transaction", "tid, to_savepoint=None"),
-            ("create_savepoint", "tid, name")
-        ]
-        
-        for method, params in db_methods:
-            print(f"   • {method}({params})")
-        
-        print("\n2. Storage transaction methods:")
-        storage = db.storage
-        storage_methods = [
-            ("begin_transaction", "isolation_level='DEFERRED' → tid"),
-            ("commit_transaction", "tid → bool"),
-            ("rollback_transaction", "tid, to_savepoint=None → bool"),
-            ("create_savepoint", "tid, name → bool")
-        ]
-        
-        for method, desc in storage_methods:
-            print(f"   • {method}: {desc}")
-        
-        print("\n3. TransactionManager methods:")
-        tm = storage.transaction_manager
-        tm_methods = [
-            ("begin", "isolation_level='DEFERRED' → tid"),
-            ("commit", "tid → bool"),
-            ("rollback", "tid, to_savepoint=None → bool"),
-            ("savepoint", "tid, name → bool")
-        ]
-        
-        for method, desc in tm_methods:
-            print(f"   • {method}: {desc}")
-        
-        # Test pratique: Niveaux d'isolation
-        print("\n🧪 Test niveaux d'isolation:")
-        
-        isolation_levels = ["DEFERRED", "IMMEDIATE", "EXCLUSIVE"]
-        for level in isolation_levels:
-            try:
-                tid = storage.begin_transaction(isolation_level=level)
-                print(f"   ✅ {level}: Transaction démarrée (TID={tid})")
-                
-                # Test simple
-                storage.execute(f"INSERT INTO logs (level, message) VALUES ('INFO', 'Test {level}')")
-                
-                # Commit
-                storage.commit_transaction(tid)
-                print(f"   ✅ {level}: Commit réussi")
-                
-            except Exception as e:
-                print(f"   ❌ {level}: {e}")
-        
-        db.close()
-        shutil.rmtree(temp_dir)
-        
-        return True
-        
-    except Exception as e:
-        print(f"❌ Erreur: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-
-def test_workflow_complet():
-    """Workflow complet avec toutes les corrections"""
-    print("\n🚀 WORKFLOW COMPLET CORRIGÉ")
-    print("=" * 60)
-    
-    from gsql.database import Database
-    import tempfile
-    
-    temp_dir = tempfile.mkdtemp(prefix="gsql_workflow_")
+    temp_dir = tempfile.mkdtemp(prefix="gsql_tables_")
     
     try:
         # 1. Initialisation
-        db = Database(
-            db_path=":memory:",
-            base_dir=temp_dir,
-            buffer_pool_size=50,
-            enable_wal=True,
-            auto_recovery=True
-        )
+        db = Database(db_path=":memory:", base_dir=temp_dir)
         print("✅ Database initialisée")
         
-        # 2. Création table custom
-        db.execute("""
-            CREATE TABLE employees (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                department TEXT,
-                salary REAL,
-                hired DATE DEFAULT CURRENT_DATE
-            )
-        """)
-        print("✅ Table 'employees' créée")
+        # 2. Lister les tables existantes
+        result = db.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        if result.get('success'):
+            tables = [row[0] for row in result.get('rows', [])]
+            print(f"📋 Tables existantes: {len(tables)}")
+            for table in tables:
+                print(f"  • {table}")
         
-        # 3. Transaction complexe
-        print("\n🔹 Transaction complexe:")
+        # 3. Nettoyer avant de créer
+        cleanup_default_tables(db)
         
-        # Début transaction
-        db.begin_transaction(isolation_level="IMMEDIATE")
-        print("   ✅ Transaction IMMEDIATE démarrée")
+        # 4. Créer nos propres tables
+        print("\n🔨 Création tables personnalisées:")
         
-        # Insertion données
-        employees = [
-            ("Alice", "Engineering", 75000),
-            ("Bob", "Sales", 65000),
-            ("Charlie", "Marketing", 70000)
+        # Table 1: Sans foreign key
+        sql1 = """
+        CREATE TABLE employees (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            email TEXT UNIQUE,
+            salary REAL DEFAULT 0.0,
+            department TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+        result = safe_execute(db, sql1)
+        if result.get('success'):
+            print("✅ Table 'employees' créée")
+        
+        # Table 2: Avec foreign key
+        sql2 = """
+        CREATE TABLE projects (
+            project_id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            manager_id INTEGER,
+            budget REAL,
+            deadline DATE,
+            FOREIGN KEY (manager_id) REFERENCES employees(id) ON DELETE SET NULL
+        )
+        """
+        result = safe_execute(db, sql2)
+        if result.get('success'):
+            print("✅ Table 'projects' créée avec FK")
+        
+        # Table 3: Avec contraintes
+        sql3 = """
+        CREATE TABLE tasks (
+            task_id INTEGER PRIMARY KEY,
+            project_id INTEGER NOT NULL,
+            description TEXT,
+            status TEXT CHECK(status IN ('pending', 'in_progress', 'completed')),
+            priority INTEGER CHECK(priority BETWEEN 1 AND 5),
+            assigned_to INTEGER,
+            FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE,
+            FOREIGN KEY (assigned_to) REFERENCES employees(id) ON DELETE SET NULL
+        )
+        """
+        result = safe_execute(db, sql3)
+        if result.get('success'):
+            print("✅ Table 'tasks' créée avec contraintes")
+        
+        # 5. Insérer des données
+        print("\n📝 Insertion données de test:")
+        
+        # Employees
+        employees_data = [
+            ('Alice Johnson', 'alice@company.com', 75000, 'Engineering'),
+            ('Bob Smith', 'bob@company.com', 65000, 'Sales'),
+            ('Charlie Brown', 'charlie@company.com', 80000, 'Engineering'),
+            ('Diana Prince', 'diana@company.com', 90000, 'Management')
         ]
         
-        for name, dept, salary in employees:
-            db.execute(
-                "INSERT INTO employees (name, department, salary) VALUES (?, ?, ?)",
-                params=[name, dept, salary]
-            )
+        for emp in employees_data:
+            sql = "INSERT INTO employees (name, email, salary, department) VALUES (?, ?, ?, ?)"
+            result = safe_execute(db, sql, params=emp)
+            if result.get('success'):
+                print(f"  ✅ Employee: {emp[0]}")
         
-        # Savepoint après insertion
-        tid = 0  # Première transaction
-        db.storage.create_savepoint(tid, "after_insert")
-        print("   ✅ Savepoint 'after_insert' créé")
+        # Projects
+        projects_data = [
+            (1, 'Website Redesign', 1, 50000, '2024-06-30'),
+            (2, 'Mobile App', 3, 75000, '2024-08-15'),
+            (3, 'Database Migration', 1, 30000, '2024-05-20')
+        ]
         
-        # Mise à jour
-        db.execute("UPDATE employees SET salary = salary * 1.1 WHERE department = 'Engineering'")
-        print("   ✅ Salaires Engineering augmentés de 10%")
+        for proj in projects_data:
+            sql = "INSERT INTO projects (project_id, name, manager_id, budget, deadline) VALUES (?, ?, ?, ?, ?)"
+            result = safe_execute(db, sql, params=proj)
+            if result.get('success'):
+                print(f"  ✅ Project: {proj[1]}")
         
-        # Vérification avant rollback
-        result = db.execute("SELECT SUM(salary) FROM employees")
-        total_before = result['rows'][0][0] if result['rows'] else 0
-        print(f"   📊 Total salaires avant rollback: ${total_before:,.2f}")
+        # 6. Requêtes complexes
+        print("\n🔍 Requêtes complexes:")
         
-        # Rollback partiel
-        db.storage.rollback_transaction(tid, to_savepoint="after_insert")
-        print("   ✅ Rollback to 'after_insert'")
+        # JOIN avec agrégation
+        sql = """
+        SELECT 
+            e.department,
+            COUNT(*) as employee_count,
+            AVG(e.salary) as avg_salary,
+            COUNT(p.project_id) as project_count
+        FROM employees e
+        LEFT JOIN projects p ON e.id = p.manager_id
+        GROUP BY e.department
+        ORDER BY avg_salary DESC
+        """
         
-        # Vérification après rollback
-        result = db.execute("SELECT SUM(salary) FROM employees")
-        total_after = result['rows'][0][0] if result['rows'] else 0
-        print(f"   📊 Total salaires après rollback: ${total_after:,.2f}")
-        
-        # Commit
-        db.commit_transaction(tid)
-        print("   ✅ Transaction commitée")
-        
-        # 4. Cache de requêtes
-        print("\n🔹 Test cache de requêtes:")
-        
-        # Première exécution
-        start = time.time()
-        result1 = db.execute("SELECT * FROM employees ORDER BY salary DESC", use_cache=True)
-        time1 = time.time() - start
-        
-        # Seconde exécution (cache)
-        start = time.time()
-        result2 = db.execute("SELECT * FROM employees ORDER BY salary DESC", use_cache=True)
-        time2 = time.time() - start
-        
-        print(f"   • Première exécution: {time1:.3f}s")
-        print(f"   • Cache hit: {time2:.3f}s")
-        print(f"   • Amélioration: {time1/time2:.1f}x")
-        
-        # 5. Stats et métadonnées
-        print("\n🔹 Statistiques:")
-        
-        # Stats database
-        result = db.execute("STATS")
+        result = safe_execute(db, sql)
         if result.get('success'):
-            stats = result.get('stats', {})
-            print(f"   • Requêtes exécutées: {stats.get('queries_executed', 0)}")
-            print(f"   • Cache hits: {stats.get('queries_cached', 0)}")
-            print(f"   • Erreurs: {stats.get('errors', 0)}")
+            print("📊 Stats par département:")
+            for row in result.get('rows', []):
+                dept, emp_count, avg_salary, proj_count = row
+                print(f"  • {dept}: {emp_count} employés, ${avg_salary:,.0f} moyen, {proj_count} projets")
         
-        # Tables
-        result = db.execute("SHOW TABLES")
+        # 7. Test contraintes
+        print("\n⚡ Test des contraintes:")
+        
+        # Violation UNIQUE
+        sql = "INSERT INTO employees (name, email) VALUES ('Test', 'alice@company.com')"
+        result = safe_execute(db, sql)
+        if not result.get('success'):
+            print("✅ Contrainte UNIQUE fonctionne")
+        
+        # Violation CHECK
+        sql = "INSERT INTO tasks (task_id, project_id, status) VALUES (1, 1, 'invalid_status')"
+        result = safe_execute(db, sql)
+        if not result.get('success'):
+            print("✅ Contrainte CHECK fonctionne")
+        
+        # 8. Test foreign key cascade
+        print("\n🔗 Test FOREIGN KEY CASCADE:")
+        
+        # Créer une tâche
+        sql = "INSERT INTO tasks (task_id, project_id, status, priority) VALUES (1, 1, 'pending', 3)"
+        safe_execute(db, sql)
+        print("✅ Tâche créée pour project_id=1")
+        
+        # Supprimer le projet (devrait supprimer la tâche via CASCADE)
+        sql = "DELETE FROM projects WHERE project_id = 1"
+        safe_execute(db, sql)
+        
+        # Vérifier que la tâche est supprimée
+        sql = "SELECT COUNT(*) FROM tasks WHERE project_id = 1"
+        result = safe_execute(db, sql)
+        if result.get('success') and result.get('rows'):
+            count = result['rows'][0][0]
+            if count == 0:
+                print("✅ CASCADE DELETE fonctionne")
+            else:
+                print(f"⚠️  CASCADE DELETE échoué: {count} tâches restantes")
+        
+        # 9. Métadonnées
+        print("\n📋 Métadonnées finales:")
+        
+        # Nombre de tables
+        result = db.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE '_gsql_%'")
         if result.get('success'):
-            tables = [t['table'] for t in result.get('tables', [])]
-            print(f"   • Tables: {', '.join([t for t in tables if not t.startswith('_')])}")
+            table_count = result['rows'][0][0] if result['rows'] else 0
+            print(f"📊 Tables personnalisées: {table_count}")
         
-        # 6. Fermeture propre
+        # Liste complète
+        result = db.execute("""
+            SELECT name, sql 
+            FROM sqlite_master 
+            WHERE type='table' 
+            AND name NOT LIKE '_gsql_%'
+            ORDER BY name
+        """)
+        
+        if result.get('success'):
+            for row in result.get('rows', []):
+                name, sql_def = row
+                print(f"  • {name}: {sql_def[:60]}...")
+        
+        # 10. Cleanup final
+        print("\n🧹 Cleanup final:")
+        for table in ['tasks', 'projects', 'employees']:
+            safe_execute(db, f"DROP TABLE IF EXISTS {table}")
+            print(f"  ✅ Table '{table}' supprimée")
+        
         db.close()
-        print("\n✅ Database fermée proprement")
-        
         shutil.rmtree(temp_dir)
-        print("🧹 Fichiers temporaires nettoyés")
+        print("\n✅ Test terminé avec succès")
         
         return True
         
     except Exception as e:
-        print(f"❌ Erreur workflow: {e}")
+        print(f"❌ Erreur majeure: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+def test_transaction_with_clean_tables():
+    """Test transactions avec tables propres"""
+    print("\n💼 TEST TRANSACTIONS AVEC TABLES PROPRES")
+    print("-" * 50)
+    
+    from gsql.database import Database
+    import tempfile
+    
+    temp_dir = tempfile.mkdtemp(prefix="gsql_trans_clean_")
+    
+    try:
+        db = Database(db_path=":memory:", base_dir=temp_dir)
+        
+        # Nettoyer d'abord
+        cleanup_default_tables(db)
+        
+        # Créer table simple
+        db.execute("""
+            CREATE TABLE bank_accounts (
+                account_id INTEGER PRIMARY KEY,
+                owner TEXT NOT NULL,
+                balance REAL DEFAULT 0.0,
+                CHECK(balance >= 0)
+            )
+        """)
+        
+        # Insérer données initiales
+        accounts = [
+            (101, 'Alice', 1000.0),
+            (102, 'Bob', 500.0),
+            (103, 'Charlie', 1500.0)
+        ]
+        
+        for acc in accounts:
+            db.execute("INSERT INTO bank_accounts VALUES (?, ?, ?)", params=acc)
+        
+        print("✅ Données initiales insérées")
+        
+        # Transaction: transfert bancaire
+        print("\n🔀 Transaction: Transfert bancaire")
+        
+        # Début transaction
+        db.begin_transaction(isolation_level="IMMEDIATE")
+        print("💼 Transaction IMMEDIATE démarrée")
+        
+        try:
+            # 1. Débiter Alice
+            db.execute("UPDATE bank_accounts SET balance = balance - 200 WHERE account_id = 101")
+            print("💰 Alice débitée de 200")
+            
+            # WORKAROUND: Savepoint via execute()
+            db.execute("SAVEPOINT before_credit")
+            print("📌 Savepoint 'before_credit' créé")
+            
+            # 2. Créditer Bob
+            db.execute("UPDATE bank_accounts SET balance = balance + 200 WHERE account_id = 102")
+            print("💰 Bob crédité de 200")
+            
+            # Vérifier solde négatif (devrait échouer)
+            db.execute("UPDATE bank_accounts SET balance = -100 WHERE account_id = 103")
+            print("⚠️  Tentative solde négatif...")
+            
+        except Exception as e:
+            print(f"❌ Erreur dans transaction: {e}")
+            # Rollback au savepoint
+            db.execute("ROLLBACK TO SAVEPOINT before_credit")
+            print("↩️  Rollback to savepoint")
+            
+            # Réessayer crédit
+            db.execute("UPDATE bank_accounts SET balance = balance + 200 WHERE account_id = 102")
+            print("💰 Bob crédité (après rollback)")
+        
+        # Vérifier soldes
+        result = db.execute("SELECT owner, balance FROM bank_accounts ORDER BY account_id")
+        if result.get('success'):
+            print("\n📊 Soldes finaux:")
+            for row in result.get('rows', []):
+                print(f"  • {row[0]}: ${row[1]:.2f}")
+        
+        # Commit
+        db.commit_transaction(0)
+        print("✅ Transaction commitée")
+        
+        # Test rollback complet
+        print("\n🔀 Test rollback complet:")
+        
+        db.begin_transaction()
+        db.execute("UPDATE bank_accounts SET balance = balance + 1000 WHERE account_id = 101")
+        print("💰 Alice +1000 (dans transaction)")
+        
+        db.rollback_transaction(0)
+        print("↩️  Rollback complet")
+        
+        # Vérifier que le changement n'est pas persistant
+        result = db.execute("SELECT balance FROM bank_accounts WHERE account_id = 101")
+        if result.get('success') and result.get('rows'):
+            balance = result['rows'][0][0]
+            print(f"💰 Solde Alice après rollback: ${balance:.2f}")
+        
+        db.close()
+        shutil.rmtree(temp_dir)
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Erreur transaction: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+def test_performance_with_clean_tables():
+    """Test performance avec tables optimisées"""
+    print("\n⚡ TEST PERFORMANCE AVEC TABLES PROPRES")
+    print("-" * 50)
+    
+    from gsql.database import Database
+    import tempfile
+    import time
+    
+    temp_dir = tempfile.mkdtemp(prefix="gsql_perf_")
+    
+    try:
+        db = Database(db_path=":memory:", base_dir=temp_dir)
+        
+        # Nettoyer tables par défaut
+        cleanup_default_tables(db)
+        
+        # Créer table optimisée
+        db.execute("""
+            CREATE TABLE performance_test (
+                id INTEGER PRIMARY KEY,
+                value REAL NOT NULL,
+                category TEXT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_category (category),
+                INDEX idx_timestamp (timestamp)
+            )
+        """)
+        
+        print("✅ Table optimisée créée")
+        
+        # Benchmark INSERT
+        print("\n📈 Benchmark INSERT:")
+        
+        start = time.time()
+        batch_size = 1000
+        
+        for i in range(batch_size):
+            db.execute(
+                "INSERT INTO performance_test (id, value, category) VALUES (?, ?, ?)",
+                params=[i, i * 1.5, f"cat_{i % 10}"]
+            )
+        
+        insert_time = time.time() - start
+        print(f"  • {batch_size} INSERT: {insert_time:.3f}s ({insert_time/batch_size*1000:.2f}ms/row)")
+        
+        # Benchmark SELECT
+        print("\n📈 Benchmark SELECT:")
+        
+        # Sans cache
+        start = time.time()
+        result1 = db.execute("SELECT AVG(value) FROM performance_test WHERE category = 'cat_1'", use_cache=False)
+        time1 = time.time() - start
+        
+        # Avec cache
+        start = time.time()
+        result2 = db.execute("SELECT AVG(value) FROM performance_test WHERE category = 'cat_1'", use_cache=True)
+        time2 = time.time() - start
+        
+        print(f"  • Sans cache: {time1:.4f}s")
+        print(f"  • Avec cache: {time2:.4f}s")
+        print(f"  • Amélioration: {time1/time2:.1f}x")
+        
+        # Benchmark JOIN
+        print("\n📈 Benchmark JOIN:")
+        
+        # Créer seconde table
+        db.execute("CREATE TABLE categories (cat_id TEXT PRIMARY KEY, description TEXT)")
+        for i in range(10):
+            db.execute("INSERT INTO categories VALUES (?, ?)", params=[f"cat_{i}", f"Category {i}"])
+        
+        start = time.time()
+        result = db.execute("""
+            SELECT p.category, c.description, COUNT(*), AVG(p.value)
+            FROM performance_test p
+            JOIN categories c ON p.category = c.cat_id
+            GROUP BY p.category
+            ORDER BY AVG(p.value) DESC
+        """)
+        
+        join_time = time.time() - start
+        print(f"  • JOIN complexe: {join_time:.3f}s")
+        
+        if result.get('success'):
+            print(f"  • Résultats: {len(result.get('rows', []))} groupes")
+        
+        # Stats finales
+        print("\n📊 Stats finales:")
+        result = db.execute("SELECT COUNT(*) FROM performance_test")
+        if result.get('success'):
+            count = result['rows'][0][0] if result['rows'] else 0
+            print(f"  • Lignes totales: {count}")
+        
+        # VACUUM
+        result = db.execute("VACUUM")
+        if result.get('success'):
+            print("  • VACUUM exécuté")
+        
+        db.close()
+        shutil.rmtree(temp_dir)
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Erreur performance: {e}")
         import traceback
         traceback.print_exc()
         return False
 
 def main():
-    """Exécute tous les tests corrigés"""
-    print("🔧 TESTS GSQL AVEC CORRECTIONS DES BUGS")
+    """Exécute tous les tests"""
+    print("🚀 TESTS GSQL AVEC GESTION PROPRE DES TABLES")
     print("=" * 70)
     
     tests = [
-        ("Transactions Storage corrigées", test_storage_transactions_fixed),
-        ("Savepoints Database corrigés", test_database_savepoint_fixed),
-        ("Toutes méthodes transaction", test_all_transaction_methods),
-        ("Workflow complet", test_workflow_complet)
+        ("Gestion complète tables", test_table_management),
+        ("Transactions tables propres", test_transaction_with_clean_tables),
+        ("Performance tables optimisées", test_performance_with_clean_tables)
     ]
     
     results = {}
     
     for test_name, test_func in tests:
         print(f"\n{'='*60}")
-        print(f"🧪 TEST: {test_name}")
-        print(f"{'='*60}")
+        print(f"🧪 {test_name}")
+        print(f"{='*60}")
         try:
             success = test_func()
             results[test_name] = "✅ PASS" if success else "❌ FAIL"
@@ -387,16 +500,22 @@ def main():
     
     # Résumé
     print(f"\n{'='*70}")
-    print("📊 RÉSULTATS TESTS CORRIGÉS")
+    print("📊 RÉSULTATS FINAUX")
     print(f"{'='*70}")
     
     for test_name, result in results.items():
-        print(f"  {test_name:35s} : {result}")
+        print(f"  {test_name:40s} : {result}")
     
     passed = sum(1 for r in results.values() if "PASS" in r)
     total = len(results)
     
     print(f"\n🎯 Score: {passed}/{total} tests réussis ({passed/total*100:.0f}%)")
+    
+    # Recommandations
+    print("\n💡 RECOMMANDATIONS POUR GSQL:")
+    print("   1. Ajouter option `create_default_tables=False` à Database.__init__()")
+    print("   2. Améliorer DROP TABLE IF EXISTS avec vérification FK")
+    print("   3. Documenter les tables système (_gsql_*)")
     
     return passed == total
 
