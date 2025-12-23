@@ -17,6 +17,6 @@ requirements:
     - python
 
 about:
-  home: https://github.com/votrecompte/gsql
+  home: https://github.com/gopu-inc/gsql
   license: MIT
-  summary: Votre description ici
+  summary: 
