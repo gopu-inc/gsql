@@ -35,4 +35,4 @@ jobs:
       - name: 🚀 Publier sur Anaconda
         run: |
           PKG=$(find ./output -name "*.conda" -o -name "*.tar.bz2" | head -1)
-          anaconda -t ${{ secrets.ANACONDA_TOKEN }} upload --user ceoseshell "$PKG"
+          anaconda -t ${{ secrets.ANACONDA_TOKEN }} upload --user gopu-inc "$PKG"
