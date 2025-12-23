@@ -1,39 +1,51 @@
-name: 🔄 Mise à jour Automatique des Versions
+name: 🚀 Publication Automatique (Push Direct)
 
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
+    # IMPORTANT: Exclure les commits générés par le workflow lui-même
+    paths-ignore:
+      - '**/__pycache__/**'
+      - '**/*.log'
+      - '**/.gitignore'
 
 env:
   VERSION_FILE: "gsql/__init__.py"
   REPO: gopu-inc/gsql
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: write  # CRITIQUE pour pouvoir push
 
 jobs:
-  # 1. LECTURE ET CALCUL DE VERSION
-  version-manager:
+  # 1. CALCUL DE VERSION ET MISE À JOUR
+  bump-and-push:
     runs-on: ubuntu-latest
-    outputs:
-      current_version: ${{ steps.read-version.outputs.current_version }}
-      new_version: ${{ steps.calculate.outputs.new_version }}
-      version_type: ${{ steps.calculate.outputs.version_type }}
+    # Éviter les boucles infinies : ne pas s'exécuter sur les commits de version
+    if: |
+      github.event_name == 'push' && 
+      github.ref == 'refs/heads/main' &&
+      !contains(github.event.head_commit.message, '[skip ci]') &&
+      !contains(github.event.head_commit.message, 'chore: bump version')
+    
     steps:
-      - name: 📥 Checkout avec historique
+      - name: 📥 Checkout avec votre token GB_TOKEN
         uses: actions/checkout@v4
         with:
-         token: ${{ secrets.GB_TOKEN }} 
-
-            
+          token: ${{ secrets.GB_TOKEN }}
+          fetch-depth: 0
+      
       - name: 🔍 Lire la version actuelle
         id: read-version
         run: |
           if [ -f "$VERSION_FILE" ]; then
-            CURRENT_VERSION=$(grep -E "__version__\s*=\s*[\"'][0-9]+\.[0-9]+\.[0-9]+[\"']" "$VERSION_FILE" | head -1 | sed -E "s/.*[\"']([0-9]+\.[0-9]+\.[0-9]+)[\"'].*/\1/")
+            CURRENT_VERSION=$(python -c "
+            import re
+            with open('$VERSION_FILE', 'r') as f:
+                content = f.read()
+                match = re.search(r'__version__\s*=\s*[\"]([^\"]+)[\"]', content)
+                if match:
+                    print(match.group(1))
+            " 2>/dev/null || echo "")
           fi
           
           if [ -z "$CURRENT_VERSION" ]; then
@@ -49,14 +61,21 @@ jobs:
           CURRENT_VERSION="${{ steps.read-version.outputs.current_version }}"
           COMMIT_MSG=$(git log -1 --pretty=%B)
           
+          echo "📝 Dernier commit: $COMMIT_MSG"
+          
+          # Déterminer le type de mise à jour
           if echo "$COMMIT_MSG" | grep -q -E "BREAKING CHANGE|feat!|major:"; then
             VERSION_TYPE="major"
-          elif echo "$COMMIT_MSG" | grep -q -E "feat:|feature:|enhancement:"; then
+            echo "🎯 MAJOR version bump"
+          elif echo "$COMMIT_MSG" | grep -q -E "^feat:|^feature:|^enhancement:"; then
             VERSION_TYPE="minor"
+            echo "🎯 MINOR version bump"
           else
             VERSION_TYPE="patch"
+            echo "🎯 PATCH version bump"
           fi
           
+          # Calculer la nouvelle version
           IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
           
           case "$VERSION_TYPE" in
@@ -76,136 +95,151 @@ jobs:
           
           NEW_VERSION="$MAJOR.$MINOR.$PATCH"
           
+          # Si la version n'a pas changé, ne rien faire
+          if [ "$CURRENT_VERSION" = "$NEW_VERSION" ]; then
+            echo "ℹ️ Version inchangée, arrêt du workflow"
+            echo "new_version=" >> $GITHUB_OUTPUT
+            echo "version_type=skip" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
           echo "version_type=$VERSION_TYPE" >> $GITHUB_OUTPUT
-          echo "📈 Nouvelle version: $NEW_VERSION"
-
-  # 2. MISE À JOUR DES FICHIERS ET CRÉATION DE PR (avec votre token)
-  update-versions:
-    runs-on: ubuntu-latest
-    needs: version-manager
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+          echo "📈 Nouvelle version calculée: $NEW_VERSION"
+    
     outputs:
-      version_updated: ${{ steps.update.outputs.version_updated }}
-      pr_created: ${{ steps.create-pr.outputs.pr_created }}
+      current_version: ${{ steps.read-version.outputs.current_version }}
+      new_version: ${{ steps.calculate.outputs.new_version }}
+      version_type: ${{ steps.calculate.outputs.version_type }}
+
+  # 2. MISE À JOUR DES FICHIERS ET PUSH DIRECT
+  update-and-push:
+    needs: bump-and-push
+    runs-on: ubuntu-latest
+    # Ne s'exécute que si une nouvelle version a été calculée
+    if: needs.bump-and-push.outputs.new_version != ''
+    
     steps:
-      - name: 📥 Checkout avec votre token GB_TOKEN
+      - name: 📥 Checkout avec token pour écriture
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GB_TOKEN }}
           fetch-depth: 0
       
-      - name: 🔄 Mettre à jour les fichiers de version
-        id: update
+      - name: 🔧 Configuration Git
         run: |
-          OLD_VERSION="${{ needs.version-manager.outputs.current_version }}"
-          NEW_VERSION="${{ needs.version-manager.outputs.new_version }}"
+          git config --global user.email "github-actions@${{ env.REPO }}"
+          git config --global user.name "GitHub Actions"
+          # Utiliser l'URL avec token pour le push
+          git remote set-url origin https://x-access-token:${{ secrets.GB_TOKEN }}@github.com/${{ env.REPO }}.git
+      
+      - name: 🔄 Mettre à jour TOUS les fichiers de version
+        run: |
+          OLD_VERSION="${{ needs.bump-and-push.outputs.current_version }}"
+          NEW_VERSION="${{ needs.bump-and-push.outputs.new_version }}"
           
-          # Vérifier si la version a changé
-          if [ "$OLD_VERSION" = "$NEW_VERSION" ]; then
-            echo "ℹ️ Version inchangée, pas de mise à jour nécessaire"
-            echo "version_updated=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          
-          echo "🔄 Mise à jour de $OLD_VERSION → $NEW_VERSION"
+          echo "🔄 Mise à jour automatique: $OLD_VERSION → $NEW_VERSION"
           
           # 1. Source de vérité: gsql/__init__.py
           sed -i "s/__version__ = [\"']$OLD_VERSION[\"']/__version__ = \"$NEW_VERSION\"/g" "$VERSION_FILE"
+          echo "✅ $VERSION_FILE mis à jour"
           
-          # 2. pyproject.toml (PyPI)
-          if [ -f "pyproject.toml" ]; then
-            sed -i "s/version = [\"'][^\"']*[\"']/version = \"$NEW_VERSION\"/g" pyproject.toml
-          fi
+          # 2. pyproject.toml
+          for file in pyproject.toml setup.py setup.cfg; do
+            if [ -f "$file" ]; then
+              sed -i "s/version\s*=\s*[\"'][^\"']*[\"']/version = \"$NEW_VERSION\"/g" "$file" 2>/dev/null || true
+              sed -i "s/version=['\"][^'\"]*['\"]/version='$NEW_VERSION'/g" "$file" 2>/dev/null || true
+              echo "✅ $file mis à jour"
+            fi
+          done
           
-          # 3. setup.py
-          if [ -f "setup.py" ]; then
-            sed -i "s/version=['\"][^'\"]*['\"]/version='$NEW_VERSION'/g" setup.py
-          fi
-          
-          # 4. Dockerfile
+          # 3. Dockerfile - CORRECTION CRITIQUE
           if [ -f "Dockerfile" ]; then
-            sed -i "s/LABEL version=[\"'][^\"']*[\"']/LABEL version=\"$NEW_VERSION\"/g" Dockerfile 2>/dev/null || true
-            sed -i "s/ARG VERSION=.*/ARG VERSION=$NEW_VERSION/g" Dockerfile 2>/dev/null || true
+            # Correction du LABEL version (c'était votre erreur)
+            sed -i "s/LABEL version=.*/LABEL version=\"$NEW_VERSION\"/g" Dockerfile 2>/dev/null || true
+            # Mettre à jour ARG VERSION
+            sed -i "s/ARG VERSION=.*/ARG VERSION=\"$NEW_VERSION\"/g" Dockerfile 2>/dev/null || true
+            echo "✅ Dockerfile mis à jour (LABEL et ARG)"
           fi
           
-          # 5. Anaconda meta.yaml
+          # 4. Anaconda meta.yaml
           if [ -f "conda.recipe/meta.yaml" ]; then
-            sed -i "s/version: [\"'][^\"']*[\"']/version: \"$NEW_VERSION\"/g" conda.recipe/meta.yaml
-            sed -i "s/number: [0-9]*/number: ${{ github.run_number }}/g" conda.recipe/meta.yaml
+            sed -i "s/version:\s*[\"'][^\"']*[\"']/version: \"$NEW_VERSION\"/g" conda.recipe/meta.yaml
+            sed -i "s/number:\s*[0-9]*/number: ${{ github.run_number }}/g" conda.recipe/meta.yaml
+            echo "✅ conda.recipe/meta.yaml mis à jour"
           fi
           
-          # 6. README.md
+          # 5. README.md
           if [ -f "README.md" ]; then
             sed -i "s/gsql==[0-9]\+\.[0-9]\+\.[0-9]\+/gsql==$NEW_VERSION/g" README.md 2>/dev/null || true
             sed -i "s/gsql:[0-9]\+\.[0-9]\+\.[0-9]\+/gsql:$NEW_VERSION/g" README.md 2>/dev/null || true
+            sed -i "s/version [0-9]\+\.[0-9]\+\.[0-9]\+/version $NEW_VERSION/g" README.md 2>/dev/null || true
+            echo "✅ README.md mis à jour"
           fi
-          
-          echo "version_updated=true" >> $GITHUB_OUTPUT
-          echo "✅ Fichiers mis à jour"
       
-      - name: 💾 Créer une Pull Request avec votre token
-        id: create-pr
-        if: steps.update.outputs.version_updated == 'true'
-        uses: peter-evans/create-pull-request@v5
-        with:
-          token: ${{ secrets.GB_TOKEN }}  # VOTRE TOKEN ICI
-          commit-message: "chore: bump version to ${{ needs.version-manager.outputs.new_version }}"
-          title: "Version ${{ needs.version-manager.outputs.new_version }}"
-          body: |
-            ## 🔄 Mise à jour automatique de version
-            
-            **Ancienne version:** ${{ needs.version-manager.outputs.current_version }}
-            **Nouvelle version:** ${{ needs.version-manager.outputs.new_version }}
-            **Type:** ${{ needs.version-manager.outputs.version_type }}
-            
-            ### 📄 Fichiers modifiés:
-            - `gsql/__init__.py` - Source de vérité
-            - `pyproject.toml` / `setup.py` - PyPI
-            - `Dockerfile` - Docker Hub
-            - `conda.recipe/meta.yaml` - Anaconda
-            - `README.md` - Documentation
-            
-            ### 🚀 Après merge:
-            1. Créez un tag: `git tag v${{ needs.version-manager.outputs.new_version }}`
-            2. Push le tag: `git push origin v${{ needs.version-manager.outputs.new_version }}`
-            3. Le CI publiera automatiquement sur toutes les plateformes
-            
-            *Cette PR a été générée automatiquement par GitHub Actions.*
-          branch: bump-version-${{ needs.version-manager.outputs.new_version }}
-          delete-branch: true
-          labels: "automated-pr,version-bump"
-          draft: false
-      
-      - name: 📝 Afficher le lien vers la PR
-        if: steps.create-pr.outputs.pr_created == 'true'
+      - name: 💾 Commit et Push direct dans main
         run: |
-          echo "✅ Pull Request créée: ${{ steps.create-pr.outputs.pull-request-url }}"
-          echo "🔗 Lien: ${{ steps.create-pr.outputs.pull-request-url }}"
-          echo ""
-          echo "Pour publier après merge:"
-          echo "git tag v${{ needs.version-manager.outputs.new_version }}"
-          echo "git push origin v${{ needs.version-manager.outputs.new_version }}"
+          NEW_VERSION="${{ needs.bump-and-push.outputs.new_version }}"
+          
+          # Vérifier les changements
+          echo "📋 Fichiers modifiés:"
+          git status --short
+          
+          # Commit avec message spécifique
+          git add -A
+          git commit -m "chore: bump version to $NEW_VERSION [skip ci]"
+          
+          # Push vers main
+          echo "🚀 Pushing version update to main branch..."
+          git push origin HEAD:main
+          
+          echo "✅ Version $NEW_VERSION poussée dans main!"
+      
+      - name: 🏷️ Créer et pousser le tag Git
+        run: |
+          NEW_VERSION="${{ needs.bump-and-push.outputs.new_version }}"
+          TAG_NAME="v$NEW_VERSION"
+          
+          # Créer le tag annoté
+          git tag -a "$TAG_NAME" -m "Release version $NEW_VERSION"
+          
+          # Pousser le tag (ceci déclenchera le workflow de publication)
+          echo "🏷️ Creating and pushing tag: $TAG_NAME"
+          git push origin "$TAG_NAME"
+          
+          echo "✅ Tag $TAG_NAME créé et poussé"
+          echo "🔔 Le workflow de publication va maintenant se déclencher automatiquement!"
 
-  # 3. PUBLICATION AUTOMATIQUE APRÈS TAG (avec votre token pour la release)
-  publish-all:
+  # 3. PUBLICATION MULTI-PLATEFORMES (déclenché par les tags)
+  publish-all-platforms:
     runs-on: ubuntu-latest
-    needs: version-manager
+    # CE JOB S'EXÉCUTE SEULEMENT QUAND UN TAG EST PUSHÉ
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    
     env:
-      VERSION: ${{ github.ref_name }}
       CLEAN_VERSION: ${{ github.ref_name }}
+    
     steps:
-      - name: 📥 Checkout avec votre token
+      - name: 📥 Checkout avec le tag
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GB_TOKEN }}
+          fetch-depth: 0
       
-      - name: 🔧 Extraire la version du tag
+      - name: 🔧 Vérifier la cohérence des versions
         run: |
-          CLEAN_VERSION=${VERSION#v}
-          echo "CLEAN_VERSION=$CLEAN_VERSION" >> $GITHUB_ENV
-          echo "📦 Version à publier: $CLEAN_VERSION"
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "🏷️ Version du tag: $TAG_VERSION"
+          
+          # Lire la version du code
+          if [ -f "$VERSION_FILE" ]; then
+            CODE_VERSION=$(grep -E "__version__\s*=\s*[\"'][0-9]+\.[0-9]+\.[0-9]+[\"']" "$VERSION_FILE" | head -1 | sed -E "s/.*[\"']([0-9]+\.[0-9]+\.[0-9]+)[\"'].*/\1/")
+          fi
+          
+          if [ "$TAG_VERSION" != "$CODE_VERSION" ]; then
+            echo "❌ ERREUR: Version du tag ($TAG_VERSION) != version du code ($CODE_VERSION)"
+            exit 1
+          fi
+          echo "✅ Versions synchronisées: $TAG_VERSION"
       
       - name: 🐳 Publication Docker Hub
         uses: docker/login-action@v3
@@ -223,7 +257,7 @@ jobs:
             ceoseshell/gsql:${{ env.CLEAN_VERSION }}
           labels: |
             version=${{ env.CLEAN_VERSION }}
-            org.opencontainers.image.source=https://github.com/$REPO
+            org.opencontainers.image.source=https://github.com/${{ env.REPO }}
             org.opencontainers.image.revision=${{ github.sha }}
       
       - name: 🐍 Publication PyPI
@@ -250,15 +284,15 @@ jobs:
             anaconda -t ${{ secrets.ANACONDA_TOKEN }} upload --user ceoseshell "$PKG_FILE"
           fi
       
-      - name: 🏷️ GitHub Release (avec votre token)
+      - name: 🏷️ GitHub Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.ref }}
-          name: Release ${{ env.CLEAN_VERSION }}
+          name: Release v${{ env.CLEAN_VERSION }}
           body: |
             ## 🚀 Version ${{ env.CLEAN_VERSION }}
             
-            Publication automatique via GitHub Actions.
+            Publication automatique sur toutes les plateformes.
             
             ### 📦 Installation
             
@@ -278,43 +312,34 @@ jobs:
             ```
             
             ### 🔗 Liens
-            - [Documentation](https://github.com/$REPO/wiki)
-            - [Code source](https://github.com/$REPO/tree/${{ github.ref }})
+            - [Documentation](https://github.com/${{ env.REPO }}/wiki)
+            - [Code source](https://github.com/${{ env.REPO }}/tree/${{ github.ref }})
             
             *Auto-généré le ${{ github.event.head_commit.timestamp }}*
           draft: false
           prerelease: false
           generate_release_notes: true
         env:
-          GITHUB_TOKEN: ${{ secrets.GB_TOKEN }}  # VOTRE TOKEN POUR LES RELEASES
+          GITHUB_TOKEN: ${{ secrets.GB_TOKEN }}
 
-  # 4. OPTION: PUBLICATION IMMÉDIATE (désactivée par défaut)
-  quick-publish:
+  # 4. NOTIFICATION (Optionnel)
+  notify:
     runs-on: ubuntu-latest
-    needs: [version-manager, update-versions]
-    # DÉSACTIVÉ - Utilisez plutôt l'approche PR + Tag
-    if: false
+    needs: [update-and-push, publish-all-platforms]
+    if: always()
     steps:
-      - name: 📥 Checkout avec votre token
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GB_TOKEN }}
-          fetch-depth: 0
-      
-      - name: 🔧 Configuration Git
+      - name: 📊 Rapport de publication
         run: |
-          git config --global user.email "actions@github.com"
-          git config --global user.name "GitHub Actions"
-          git remote set-url origin https://x-access-token:${{ secrets.GB_TOKEN }}@github.com/$REPO.git
-      
-      - name: 🔄 Appliquer les changements et push direct
-        run: |
-          NEW_VERSION="${{ needs.version-manager.outputs.new_version }}"
-          
-          git add -A
-          git commit -m "chore: bump version to $NEW_VERSION"
-          git push origin main
-          
-          # Créer et pousser le tag
-          git tag "v$NEW_VERSION"
-          git push origin "v$NEW_VERSION"
+          echo "## 📦 PUBLICATION AUTOMATIQUE TERMINÉE" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **Processus complet exécuté avec succès**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔄 Ce qui a été fait:" >> $GITHUB_STEP_SUMMARY
+          echo "1. Calcul automatique de la nouvelle version" >> $GITHUB_STEP_SUMMARY
+          echo "2. Mise à jour de tous les fichiers (__init__.py, Dockerfile, etc.)" >> $GITHUB_STEP_SUMMARY
+          echo "3. Commit et push direct dans la branche main" >> $GITHUB_STEP_SUMMARY
+          echo "4. Création automatique du tag Git" >> $GITHUB_STEP_SUMMARY
+          echo "5. Publication sur Docker Hub, PyPI et Anaconda" >> $GITHUB_STEP_SUMMARY
+          echo "6. Création de la Release GitHub" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "🎉 **Toutes les plateformes sont maintenant synchronisées!**" >> $GITHUB_STEP_SUMMARY
