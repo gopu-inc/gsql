@@ -1,45 +1,24 @@
-name: 📦 Publication Anaconda
+name: 📦 Publication Anaconda Automatique
+
 on:
-  # SEULEMENT sur les tags, PAS sur les branches
   push:
-    tags:
-      - 'v*'
+    branches: [main]  # Se déclenche sur chaque nouveau commit dans main
 
 jobs:
   conda:
     runs-on: ubuntu-latest
-    # Optionnel : si vous avez d'autres jobs de publication
-    # needs: [docker-publish, pypi-publish]
     
     steps:
-      - name: 📥 Checkout
+      - name: 📥 Checkout du code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # Important pour avoir les tags
       
-      - name: 🏷️ Extraire version du tag (CORRIGÉ)
+      - name: 🏷️ Déterminer la version
         id: version
         run: |
-          # Vérifier que c'est bien un tag qui a déclenché le workflow
-          if [[ "${{ github.ref }}" != refs/tags/* ]]; then
-            echo "❌ ERREUR : Ce workflow doit être déclenché par un tag, pas une branche!"
-            echo "   Trigger: ${{ github.ref }}"
-            exit 1
-          fi
-          
-          # Extraire proprement la version du tag
-          VERSION="${GITHUB_REF#refs/tags/v}"
-          
-          # Vérifier le format de version (doit être X.Y.Z)
-          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "❌ ERREUR : Format de version invalide: $VERSION"
-            echo "   Le tag doit suivre le format vX.Y.Z (ex: v3.0.1)"
-            exit 1
-          fi
-          
+          # Version basée sur la date et le SHA du commit
+          VERSION="$(date +%Y.%m.%d).${GITHUB_SHA:0:7}"
           echo "VERSION=$VERSION" >> $GITHUB_ENV
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "✅ Version extraite: $VERSION"
+          echo "📦 Version automatique: $VERSION"
       
       - name: 🐍 Setup Miniconda
         uses: conda-incubator/setup-miniconda@v3
@@ -47,54 +26,60 @@ jobs:
           auto-activate-base: true
           miniconda-version: "latest"
       
-      - name: 📦 Installer conda-build et anaconda-client
-        shell: bash
+      - name: 📦 Créer meta.yaml dynamique
         run: |
-          $CONDA/bin/conda install -y conda-build anaconda-client
-          $CONDA/bin/conda --version
-          $CONDA/bin/conda-build --version
+          mkdir -p conda.recipe
+          cat > conda.recipe/meta.yaml << EOF
+package:
+  name: gsql
+  version: $VERSION
+
+build:
+  number: 0
+  noarch: python
+  script: python -m pip install . --no-deps -vv
+
+requirements:
+  host:
+    - python >=3.8
+    - pip
+  run:
+    - python >=3.8
+    - click >=8.0.0
+    - colorama >=0.4.4
+    - pandas >=1.3.0
+    - numpy >=1.21.0
+    - nltk >=3.6.0
+
+test:
+  imports:
+    - gsql
+
+about:
+  home: https://github.com/${{ github.repository }}
+  license: MIT
+  summary: Complete SQL Database System in Python with AI Integration
+EOF
+          echo "✅ meta.yaml généré avec version $VERSION"
       
-      - name: 🔍 Vérifier et mettre à jour meta.yaml
-        shell: bash
+      - name: 🏗️ Construire et publier directement
         run: |
-          echo "🔍 Mise à jour de conda.recipe/meta.yaml avec version: $VERSION"
+          # Activer conda
+          source $CONDA/etc/profile.d/conda.sh
+          conda activate base
           
-          if [ -f "conda.recipe/meta.yaml" ]; then
-            # CORRECTION : Mise à jour robuste de la version
-            sed -i "s#version:[[:space:]]*[\"'][0-9]\+\.[0-9]\+\.[0-9]\+[\"']#version: \"$VERSION\"#g" conda.recipe/meta.yaml
-            
-            # Vérification
-            echo "✅ Version mise à jour:"
-            grep -E "version:[[:space:]]*\"" conda.recipe/meta.yaml
-            
-          else
-            echo "❌ ERREUR: conda.recipe/meta.yaml introuvable!"
-            exit 1
-          fi
-      
-      - name: 🏗️ Construire le package Conda
-        shell: bash
-        run: |
-          echo "🏗️ Construction du package Conda v$VERSION..."
+          # Installer conda-build si nécessaire
+          conda install -y conda-build anaconda-client
           
-          # Nettoyer les builds précédentes
-          rm -rf conda_pkg 2>/dev/null || true
+          # Construire directement depuis le code source
+          conda build conda.recipe/ --output-folder . --no-anaconda-upload
           
-          # Construire le package
-          $CONDA/bin/conda-build conda.recipe/ --output-folder conda_pkg
-          
-          echo "📦 Package généré:"
-          find conda_pkg -name "*.tar.bz2" -type f | xargs ls -la
-      
-      - name: 🚀 Upload vers Anaconda.org
-        shell: bash
-        run: |
-          PKG_FILE=$(find conda_pkg -name "*.tar.bz2" -type f | head -1)
-          
-          if [ -n "$PKG_FILE" ] && [ -f "$PKG_FILE" ]; then
-            echo "📤 Upload de gsql-$VERSION vers Anaconda.org..."
-            $CONDA/bin/anaconda -t ${{ secrets.ANACONDA_TOKEN }} upload --user ceoseshell "$PKG_FILE" --force
-            echo "✅ Package uploadé: https://anaconda.org/ceoseshell/gsql"
+          # Uploader vers Anaconda
+          PKG_FILE=$(find . -name "gsql-$VERSION-*.tar.bz2" -type f | head -1)
+          if [ -n "$PKG_FILE" ]; then
+            echo "📤 Publication sur Anaconda..."
+            anaconda -t ${{ secrets.ANACONDA_TOKEN }} upload --user ceoseshell "$PKG_FILE"
+            echo "✅ Publié: https://anaconda.org/ceoseshell/gsql"
           else
             echo "❌ Aucun package trouvé!"
             exit 1
@@ -102,11 +87,7 @@ jobs:
       
       - name: ✅ Confirmation
         run: |
-          echo "🎉 PUBLICATION ANACONDA TERMINÉE !"
-          echo "================================="
-          echo "📦 gsql v$VERSION publié sur Anaconda.org"
-          echo ""
+          echo "🎉 PUBLICATION ANACONDA AUTOMATIQUE RÉUSSIE!"
+          echo "📦 Version: $VERSION"
+          echo "📅 Date: $(date)"
           echo "🔗 https://anaconda.org/ceoseshell/gsql"
-          echo ""
-          echo "📥 Installation:"
-          echo "  conda install -c ceoseshell gsql=$VERSION"
