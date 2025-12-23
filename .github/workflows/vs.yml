@@ -26,9 +26,9 @@ jobs:
       - name: 📥 Checkout avec historique
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-          token: ${{ secrets.GB_TOKEN }}  # VOTRE TOKEN
-      
+         token: ${{ secrets.GB_TOKEN }} 
+
+            
       - name: 🔍 Lire la version actuelle
         id: read-version
         run: |
