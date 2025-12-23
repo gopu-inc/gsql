@@ -1,248 +1,339 @@
 #!/usr/bin/env python3
 """
-GSQL WORKING CODE - Basé sur les découvertes réelles
+TEST COMPLET DU MODULE STORAGE GSQL
+Analyse de gsql/storage.py et ses composants
 """
 
-from gsql.database import Database
-from gsql.exceptions import SQLExecutionError
-
-print("🚀 GSQL v3.0.9 - Code qui marche vraiment")
-print("=" * 50)
-
-# IMPORTANT: ":memory:" ne fonctionne pas comme attendu
-# Utilisons un fichier temporaire unique
-import tempfile
-import uuid
-
-# Créer un fichier temporaire unique
-temp_db = f"/tmp/gsql_test_{uuid.uuid4().hex[:8]}.db"
-print(f"📁 Base: {temp_db}")
-
-db = Database(db_path=temp_db)
-
-# 1. COMPRENDRE CE QUI EXISTE DÉJÀ
-print("\n📋 Tables existantes:")
-try:
-    tables_result = db.execute("""
-        SELECT name FROM sqlite_master 
-        WHERE type='table' 
-        ORDER BY name
-    """)
-    
-    if tables_result['success']:
-        print("Tables système et utilisateur:")
-        for table in tables_result['rows'][:10]:  # Limiter l'affichage
-            print(f"  • {table[0]}")
-        
-        if len(tables_result['rows']) > 10:
-            print(f"  ... et {len(tables_result['rows']) - 10} autres")
-except:
-    print("  Impossible de lire les tables")
-
-# 2. TRAVAILLER AVEC LES TABLES EXISTANTES
-print("\n👥 Utilisateurs existants (table users):")
-try:
-    users = db.execute("SELECT id, name, age, email FROM users LIMIT 5")
-    if users['success'] and users['rows']:
-        for user in users['rows']:
-            print(f"  ID {user[0]}: {user[1]} ({user[2]} ans) - {user[3]}")
-    else:
-        print("  Aucun utilisateur ou table vide")
-except SQLExecutionError:
-    print("  Table users n'existe pas ou erreur")
-
-# 3. AJOUTER DES DONNÉES (sans dupliquer)
-print("\n➕ Ajouter un nouvel utilisateur:")
-try:
-    # Utiliser INSERT OR IGNORE pour éviter les contraintes UNIQUE
-    new_user = db.execute("""
-        INSERT OR IGNORE INTO users (name, age, email) 
-        VALUES ('TestUser', 99, 'test@unique.com')
-    """)
-    
-    if new_user['success']:
-        print(f"✓ Utilisateur ajouté (ID: {new_user.get('last_insert_id', '?')})")
-    else:
-        print("✗ Échec de l'ajout")
-        
-except SQLExecutionError as e:
-    print(f"✗ Erreur: {e}")
-
-# 4. CRÉER SA PROPRE TABLE (si besoin)
-print("\n🏗️ Créer une table personnalisée:")
-try:
-    # D'abord vérifier si elle existe
-    db.execute("DROP TABLE IF EXISTS my_custom_data")
-    
-    create_result = db.execute("""
-        CREATE TABLE my_custom_data (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            data TEXT NOT NULL,
-            value REAL,
-            tags TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    if create_result['success']:
-        print("✓ Table my_custom_data créée")
-        
-        # Remplir avec des données
-        for i in range(3):
-            db.execute(f"""
-                INSERT INTO my_custom_data (data, value, tags)
-                VALUES ('Data point {i}', {i * 10.5}, 'test,example')
-            """)
-        print("✓ Données ajoutées")
-        
-except SQLExecutionError as e:
-    print(f"✗ Erreur création table: {e}")
-
-# 5. REQUÊTES COMPLEXES
-print("\n🔍 Requêtes avancées:")
-
-# Avec la table products qui existe
-try:
-    # Statistiques produits
-    stats = db.execute("""
-        SELECT 
-            category,
-            COUNT(*) as count,
-            AVG(price) as avg_price,
-            SUM(stock) as total_stock
-        FROM products 
-        WHERE category IS NOT NULL
-        GROUP BY category
-        ORDER BY avg_price DESC
-    """)
-    
-    if stats['success']:
-        print("📊 Produits par catégorie:")
-        for row in stats['rows']:
-            print(f"  • {row[0]}: {row[1]} produits, prix moyen: ${row[2]:.2f}, stock: {row[3]}")
-            
-except SQLExecutionError as e:
-    print(f"✗ Statistiques: {e}")
-
-# 6. JOINTURES
-print("\n🤝 Jointure users/products:")
-try:
-    # Créer une table orders pour la démo
-    db.execute("DROP TABLE IF EXISTS demo_orders")
-    db.execute("""
-        CREATE TABLE demo_orders (
-            id INTEGER PRIMARY KEY,
-            user_id INTEGER,
-            product_id INTEGER,
-            quantity INTEGER,
-            order_date DATE DEFAULT CURRENT_DATE
-        )
-    """)
-    
-    # Ajouter des commandes de démo
-    db.execute("INSERT INTO demo_orders (user_id, product_id, quantity) VALUES (1, 1, 2), (2, 2, 1)")
-    
-    # Jointure
-    orders = db.execute("""
-        SELECT 
-            u.name as user_name,
-            p.name as product_name,
-            o.quantity,
-            p.price,
-            o.quantity * p.price as total
-        FROM demo_orders o
-        JOIN users u ON o.user_id = u.id
-        JOIN products p ON o.product_id = p.id
-        ORDER BY total DESC
-    """)
-    
-    if orders['success']:
-        print("🛒 Commandes:")
-        for order in orders['rows']:
-            print(f"  • {order[0]} a acheté {order[2]}x {order[1]} = ${order[4]:.2f}")
-            
-except SQLExecutionError as e:
-    print(f"✗ Jointures: {e}")
-
-# 7. FONCTIONS SQL NATIVES
-print("\n⚡ Fonctions SQL intégrées:")
-
-function_tests = [
-    ("Date/Heure", "SELECT DATE('now') as today, TIME('now') as current_time"),
-    ("Math", "SELECT RANDOM() as random, ABS(-10) as absolute, ROUND(3.14159, 2) as pi"),
-    ("Texte", "SELECT UPPER('hello') as upper, LOWER('WORLD') as lower, LENGTH('test') as len"),
-    ("Agrégation", "SELECT COUNT(*) as total_users, AVG(age) as avg_age FROM users WHERE age > 0"),
-]
-
-for desc, sql in function_tests:
-    try:
-        result = db.execute(sql)
-        if result['success'] and result['rows']:
-            print(f"✓ {desc}: {result['rows'][0]}")
-    except:
-        print(f"✗ {desc}")
-
-# 8. EXPORT/IMPORT
-print("\n💾 Export des données:")
-
-try:
-    # Exporter users en CSV format
-    export = db.execute("SELECT * FROM users")
-    if export['success']:
-        print(f"📄 {len(export['rows'])} utilisateurs exportables")
-        
-        # Afficher en format CSV-like
-        print("  En-têtes:", ",".join(export['columns']))
-        for i, row in enumerate(export['rows'][:3]):
-            print(f"  Ligne {i+1}:", ",".join(str(x) for x in row))
-        if len(export['rows']) > 3:
-            print(f"  ... et {len(export['rows']) - 3} autres")
-            
-except:
-    print("✗ Export échoué")
-
-# 9. NETTOYAGE
-print("\n🧼 Nettoyage des tables de démo:")
-for table in ['demo_orders', 'my_custom_data']:
-    try:
-        db.execute(f"DROP TABLE IF EXISTS {table}")
-        print(f"✓ Table {table} supprimée")
-    except:
-        pass
-
-# 10. INFOS SYSTÈME
-print("\n📊 Informations système GSQL:")
-
-info_queries = [
-    ("Version SQLite", "SELECT sqlite_version() as version"),
-    ("Encodage", "PRAGMA encoding"),
-    ("Taille DB", "SELECT page_count * page_size as size FROM pragma_page_count, pragma_page_size"),
-]
-
-for desc, sql in info_queries:
-    try:
-        result = db.execute(sql)
-        if result['success'] and result['rows']:
-            print(f"  {desc}: {result['rows'][0]}")
-    except:
-        pass
-
-# Fermeture
-db.close()
-
-# Supprimer le fichier temporaire
+import sys
 import os
-if os.path.exists(temp_db):
-    os.remove(temp_db)
-    print(f"🗑️  Fichier {temp_db} supprimé")
+import inspect
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-print("\n" + "=" * 50)
-print("✅ GSQL fonctionne correctement !")
-print("=" * 50)
+print("🔬 TEST COMPLET DU STORAGE GSQL")
+print("=" * 60)
 
-print("\n💡 CE QU'IL FAUT RETENIR:")
-print("1. GSQL initialise automatiquement des tables (users, products)")
-print("2. Utiliser INSERT OR IGNORE pour éviter les erreurs UNIQUE")
-print("3. Les résultats sont des tuples dans result['rows']")
-print("4. Pas de transactions fonctionnelles dans cette version")
-print("5. Toujours vérifier si les tables existent avant de les créer")
+# 1. IMPORT ET ANALYSE DES COMPOSANTS
+try:
+    from gsql.storage import (
+        SQLiteStorage,
+        BufferPool,
+        TransactionManager,
+        create_storage,
+        get_storage_stats
+    )
+    
+    print("✅ Modules storage importés avec succès")
+    
+    # Analyse des classes
+    print("\n📦 CLASSES DISPONIBLES:")
+    
+    # SQLiteStorage
+    print(f"\n🏗️  SQLiteStorage:")
+    sig = inspect.signature(SQLiteStorage.__init__)
+    print(f"   Signature: __init__{sig}")
+    
+    # Voir les méthodes principales
+    methods = [m for m in dir(SQLiteStorage) if not m.startswith('_') and callable(getattr(SQLiteStorage, m))]
+    print(f"   Méthodes ({len(methods)}): {', '.join(sorted(methods))}")
+    
+    # BufferPool
+    print(f"\n🏗️  BufferPool:")
+    if BufferPool:
+        sig = inspect.signature(BufferPool.__init__)
+        print(f"   Signature: __init__{sig}")
+    
+    # TransactionManager  
+    print(f"\n🏗️  TransactionManager:")
+    if TransactionManager:
+        sig = inspect.signature(TransactionManager.__init__)
+        print(f"   Signature: __init__{sig}")
+    
+    # Fonctions
+    print(f"\n🔧 FONCTIONS:")
+    print(f"   • create_storage: {create_storage}")
+    print(f"   • get_storage_stats: {get_storage_stats}")
+    
+except ImportError as e:
+    print(f"❌ Erreur d'import: {e}")
+    sys.exit(1)
+
+# 2. TEST PRATIQUE DE SQLiteStorage
+print("\n" + "=" * 60)
+print("🧪 TEST PRATIQUE SQLiteStorage")
+print("=" * 60)
+
+try:
+    # Créer une instance SQLiteStorage
+    print("\n1. Création SQLiteStorage:")
+    
+    # Test avec différentes configurations
+    configs = [
+        {
+            "name": "Base mémoire simple",
+            "params": {"db_path": ":memory:", "buffer_pool_size": 50}
+        },
+        {
+            "name": "Base fichier avec WAL",
+            "params": {"db_path": "/tmp/test_storage.db", "enable_wal": True, "buffer_pool_size": 100}
+        },
+        {
+            "name": "Base avec auto-recovery",
+            "params": {"db_path": "/tmp/test_recovery.db", "auto_recovery": True}
+        }
+    ]
+    
+    for config in configs:
+        print(f"\n🔹 {config['name']}:")
+        print(f"   Paramètres: {config['params']}")
+        
+        try:
+            storage = SQLiteStorage(**config['params'])
+            print(f"   ✅ Création réussie")
+            
+            # Tester les méthodes basiques
+            print(f"   🧪 Test des méthodes:")
+            
+            # execute()
+            try:
+                result = storage.execute("SELECT 1 as test")
+                print(f"     • execute(): {result.get('type', 'unknown')}")
+            except Exception as e:
+                print(f"     • execute(): ❌ {e}")
+            
+            # begin_transaction()
+            if hasattr(storage, 'begin_transaction'):
+                try:
+                    storage.begin_transaction()
+                    print(f"     • begin_transaction(): ✅")
+                except Exception as e:
+                    print(f"     • begin_transaction(): ❌ {e}")
+            
+            # commit()
+            if hasattr(storage, 'commit'):
+                try:
+                    storage.commit()
+                    print(f"     • commit(): ✅")
+                except Exception as e:
+                    print(f"     • commit(): ❌ {e}")
+            
+            # get_stats()
+            if hasattr(storage, 'get_stats'):
+                try:
+                    stats = storage.get_stats()
+                    print(f"     • get_stats(): {stats}")
+                except Exception as e:
+                    print(f"     • get_stats(): ❌ {e}")
+            
+            # Fermer proprement
+            if hasattr(storage, 'close'):
+                storage.close()
+                print(f"   🔒 Storage fermé")
+            
+        except Exception as e:
+            print(f"   ❌ Erreur: {e}")
+    
+except Exception as e:
+    print(f"❌ Erreur test SQLiteStorage: {e}")
+    import traceback
+    traceback.print_exc()
+
+# 3. TEST BUFFERPOOL
+print("\n" + "=" * 60)
+print("🧠 TEST BUFFERPOOL")
+print("=" * 60)
+
+try:
+    if BufferPool:
+        print("\n1. Création BufferPool:")
+        
+        sizes = [10, 50, 100, 500]
+        for size in sizes:
+            try:
+                bp = BufferPool(size)
+                print(f"   ✅ BufferPool({size}) créé")
+                
+                # Tester les méthodes
+                methods_to_test = ['get', 'put', 'clear', 'size', 'get_stats']
+                for method in methods_to_test:
+                    if hasattr(bp, method):
+                        print(f"     • {method}() disponible")
+                
+            except Exception as e:
+                print(f"   ❌ BufferPool({size}): {e}")
+    
+    else:
+        print("⚠️  BufferPool non disponible")
+        
+except Exception as e:
+    print(f"❌ Erreur BufferPool: {e}")
+
+# 4. TEST TRANSACTION MANAGER
+print("\n" + "=" * 60)
+print("💼 TEST TRANSACTION MANAGER")
+print("=" * 60)
+
+try:
+    if TransactionManager:
+        print("\n1. Création TransactionManager:")
+        
+        try:
+            tm = TransactionManager()
+            print(f"   ✅ TransactionManager créé")
+            
+            # Tester les méthodes
+            tx_methods = ['begin', 'commit', 'rollback', 'savepoint', 'rollback_to_savepoint']
+            for method in tx_methods:
+                if hasattr(tm, method):
+                    print(f"     • {method}() disponible")
+            
+        except Exception as e:
+            print(f"   ❌ TransactionManager: {e}")
+    
+    else:
+        print("⚠️  TransactionManager non disponible")
+        
+except Exception as e:
+    print(f"❌ Erreur TransactionManager: {e}")
+
+# 5. TEST CREATE_STORAGE
+print("\n" + "=" * 60)
+print("🏭 TEST CREATE_STORAGE")
+print("=" * 60)
+
+try:
+    if create_storage:
+        print("\n1. Fonction create_storage:")
+        
+        # Tester avec différents backends
+        backends = ['sqlite', 'memory']  # À ajuster selon ce qui est disponible
+        
+        for backend in backends:
+            try:
+                storage = create_storage(backend=backend, db_path=":memory:")
+                if storage:
+                    print(f"   ✅ create_storage('{backend}'): {type(storage).__name__}")
+                    
+                    # Tester une opération basique
+                    result = storage.execute("SELECT 1")
+                    print(f"     • Test execute: {result.get('success', False)}")
+                    
+                else:
+                    print(f"   ❌ create_storage('{backend}'): retourné None")
+                    
+            except Exception as e:
+                print(f"   ❌ create_storage('{backend}'): {e}")
+    
+    else:
+        print("⚠️  create_storage non disponible")
+        
+except Exception as e:
+    print(f"❌ Erreur create_storage: {e}")
+
+# 6. BENCHMARK DE PERFORMANCE
+print("\n" + "=" * 60)
+print("📊 BENCHMARK DE PERFORMANCE")
+print("=" * 60)
+
+import time
+
+def benchmark_storage():
+    """Benchmark du storage"""
+    
+    try:
+        storage = SQLiteStorage(db_path=":memory:", buffer_pool_size=100)
+        
+        # Créer table de test
+        storage.execute("CREATE TABLE benchmark (id INTEGER, data TEXT, value REAL)")
+        
+        print("\n1. Benchmark INSERT:")
+        
+        # Test INSERT
+        start = time.time()
+        for i in range(1000):
+            storage.execute(f"INSERT INTO benchmark VALUES ({i}, 'data_{i}', {i * 1.5})")
+        insert_time = time.time() - start
+        print(f"   ✅ 1000 INSERT: {insert_time:.3f}s ({insert_time/1000:.5f}s par ligne)")
+        
+        # Test SELECT
+        print("\n2. Benchmark SELECT:")
+        
+        start = time.time()
+        result = storage.execute("SELECT COUNT(*) as count, AVG(value) as avg FROM benchmark")
+        select_time = time.time() - start
+        print(f"   ✅ SELECT agrégat: {select_time:.4f}s")
+        
+        if result.get('success') and result.get('rows'):
+            print(f"   📊 Résultats: {result['rows'][0]}")
+        
+        # Test BufferPool (si disponible)
+        print("\n3. Test cache (si disponible):")
+        if hasattr(storage, 'buffer_pool'):
+            bp = storage.buffer_pool
+            if bp and hasattr(bp, 'get_stats'):
+                stats = bp.get_stats()
+                print(f"   📈 Stats BufferPool: {stats}")
+        
+        storage.close()
+        
+    except Exception as e:
+        print(f"❌ Benchmark: {e}")
+
+benchmark_storage()
+
+# 7. TEST YAML_STORAGE (si disponible)
+print("\n" + "=" * 60)
+print("📁 TEST YAML_STORAGE")
+print("=" * 60)
+
+try:
+    # Essayer d'importer yaml_storage
+    import importlib.util
+    
+    # Vérifier si le fichier existe
+    yaml_path = os.path.join(os.path.dirname(__file__), '..', 'stockage', 'yaml_storage.py')
+    
+    if os.path.exists(yaml_path):
+        print(f"✅ Fichier yaml_storage.py trouvé: {yaml_path}")
+        
+        # Essayer l'import dynamique
+        spec = importlib.util.spec_from_file_location("yaml_storage", yaml_path)
+        yaml_module = importlib.util.module_from_spec(spec)
+        
+        try:
+            spec.loader.exec_module(yaml_module)
+            print("✅ Module yaml_storage importé dynamiquement")
+            
+            # Chercher la classe YAMLStorage
+            if hasattr(yaml_module, 'YAMLStorage'):
+                YAMLStorage = yaml_module.YAMLStorage
+                print(f"✅ Classe YAMLStorage trouvée")
+                
+                # Tester
+                try:
+                    yaml_storage = YAMLStorage()
+                    print(f"✅ Instance YAMLStorage créée")
+                    
+                    # Tester les méthodes
+                    test_methods = ['save', 'load', 'delete', 'list']
+                    for method in test_methods:
+                        if hasattr(yaml_storage, method):
+                            print(f"   • {method}() disponible")
+                            
+                except Exception as e:
+                    print(f"❌ Instance YAMLStorage: {e}")
+                    
+            else:
+                print("⚠️  Classe YAMLStorage non trouvée dans le module")
+                
+        except Exception as e:
+            print(f"❌ Import yaml_storage: {e}")
+            
+    else:
+        print("⚠️  Fichier yaml_storage.py non trouvé")
+        
+except Exception as e:
+    print(f"❌ Test yaml_storage: {e}")
+
+print("\n" + "=" * 60)
+print("✅ TEST STORAGE TERMINÉ")
+print("=" * 60)
