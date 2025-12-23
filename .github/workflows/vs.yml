@@ -1,11 +1,12 @@
-name: 🚀 Publication Directe (No-Test)
+name: 🚀 Publication Multi-Plateformes
 
 on:
   push:
-    branches: main # Se déclenche seulement sur les tags de version
+    branches: main
+    # Se déclenche seulement sur les tags de version (ex: v3.0.1)
 
 jobs:
-  # PUBLISH TO DOCKER HUB
+  # 1. PUBLICATION DOCKER
   docker:
     runs-on: ubuntu-latest
     steps:
@@ -17,16 +18,28 @@ jobs:
         with:
           username: ceoseshell
           password: ${{ secrets.DOCKER_PASSWORD }}
-      - name: Install system dependencies
+      
+      - name: 🔧 Install system dependencies
         run: |
-         sudo apt-get update
-         sudo apt-get install -y \
-         gcc \
-         g++ \
-         build-essential \
-         python3-dev
-         
-      - name: 🏗️ Build & Push
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc \
+            g++ \
+            build-essential \
+            python3-dev
+      
+      - name: 📝 Update README with Docker version
+        run: |
+          # Mettre à jour la version Docker dans le README
+          sed -i 's/gsql:latest/gsql:3.0.1/g' README.md 2>/dev/null || true
+          sed -i 's/docker version: .*/docker version: 3.0.1/g' README.md 2>/dev/null || true
+          
+          # Ajouter section documentation Docker
+          if ! grep -q "## Docker" README.md; then
+            echo -e "\n## Docker\n\n```bash\ndocker pull ceoseshell/gsql:3.0.1\ndocker run -it ceoseshell/gsql:3.0.1\n```" >> README.md
+          fi
+      
+      - name: 🐳 Build & Push Docker Image
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -34,35 +47,97 @@ jobs:
           tags: |
             ceoseshell/gsql:latest
             ceoseshell/gsql:${{ github.ref_name }}
+            ceoseshell/gsql:3.0.1
+          labels: |
+            version=3.0.1
+            org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
+            org.opencontainers.image.source=${{ github.event.repository.html_url }}
 
-  # PUBLISH TO PYPI
+  # 2. PUBLICATION PYPI
   pypi:
     runs-on: ubuntu-latest
+    needs: [docker]  # Dépend du job docker
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@v4
       
-      - name: 📦 Build Package
-        run: |
-          pip install build
-          python -m build
+      - name: 🔧 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      
+      - name: 📦 Install build tools
+        run: pip install build twine
+      
+      - name: 🏗️ Build Package
+        run: python -m build
+      
+      - name: 🧪 Verify Package
+        run: twine check dist/*
       
       - name: 📤 Upload to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           password: ${{ secrets.PYPI_TOKEN }}
 
-  # PUBLISH TO ANACONDA
+  # 3. PUBLICATION ANACONDA (VRAI PACKAGE CONDA)
   anaconda:
     runs-on: ubuntu-latest
+    needs: [pypi]  # Dépend du job PyPI
+    strategy:
+      matrix:
+        platform: [linux-64, osx-64, win-64, noarch, pycharm]  # Multi-plateformes
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@v4
       
-      - name: 📤 Direct Anaconda Upload
+      - name: 🐍 Setup Miniconda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          auto-activate-base: true
+          miniconda-version: "latest"
+          python-version: 3.10
+      
+      - name: 📦 Install conda-build et anaconda-client
+        run: conda install conda-build anaconda-client -y
+      
+      - name: 🏗️ Build Conda Package
         run: |
-          # Télécharge directement depuis PyPI et upload vers Anaconda
-          pip download gsql --no-deps -d ./pkg
-          anaconda upload --user ceoseshell ./pkg/gsql-*.tar.gz
+          # Construire le package Conda
+          conda build conda.recipe/ --output-folder conda_pkg
+          
+          # Lister les fichiers générés
+          find conda_pkg -type f -name "*.tar.bz2" | xargs ls -la
+      
+      - name: 🚀 Upload vers Anaconda
+        run: |
+          # Upload pour la plateforme spécifique
+          if [ "${{ matrix.platform }}" = "noarch" ]; then
+            # Chercher les packages noarch
+            PKG_FILE=$(find conda_pkg -name "*.tar.bz2" -type f | head -1)
+          else
+            # Chercher les packages pour la plateforme spécifique
+            PKG_FILE=$(find conda_pkg/${{ matrix.platform }} -name "*.tar.bz2" -type f 2>/dev/null || echo "")
+          fi
+          
+          if [ -n "$PKG_FILE" ] && [ -f "$PKG_FILE" ]; then
+            echo "📤 Upload du package: $PKG_FILE"
+            anaconda -t ${{ secrets.ANACONDA_TOKEN }} upload --user ceoseshell "$PKG_FILE"
+          else
+            echo "⚠️ Aucun package trouvé pour ${{ matrix.platform }}"
+          fi
         env:
-          ANACONDA_TOKEN: ${{ secrets.CONDA_FORGE_TOKEN }}
+          ANACONDA_TOKEN: ${{ secrets.ANACONDA_TOKEN }}
+
+  # 4. NOTIFICATION (Optionnel)
+  notification:
+    runs-on: ubuntu-latest
+    needs: [docker, pypi, anaconda]
+    if: always()
+    steps:
+      - name: 📊 Status Report
+        run: |
+          echo "📦 Publication terminée !"
+          echo "Docker: ceoseshell/gsql:3.0.1"
+          echo "PyPI: https://pypi.org/project/gsql/3.0.1/"
+          echo "Anaconda: https://anaconda.org/ceoseshell/gsql"
