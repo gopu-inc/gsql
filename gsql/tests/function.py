@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-TEST GSQL AVEC GESTION PROPRE DES TABLES
+TEST GSQL AVEC GESTION PROPRE DES TABLES - VERSION CORRIGÉE
 """
 
 import os
@@ -11,7 +11,7 @@ import shutil
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-print("🧹 TEST GSQL - GESTION PROPRE DES TABLES")
+print("🧹 TEST GSQL - GESTION PROPRE DES TABLES (CORRIGÉ)")
 print("=" * 70)
 
 def safe_execute(db, sql, params=None):
@@ -69,7 +69,7 @@ def test_table_management():
             tables = [row[0] for row in result.get('rows', [])]
             print(f"📋 Tables existantes: {len(tables)}")
             for table in tables:
-                print("=" * 60)
+                print(f"  • {table}")
         
         # 3. Nettoyer avant de créer
         cleanup_default_tables(db)
@@ -488,9 +488,9 @@ def main():
     results = {}
     
     for test_name, test_func in tests:
-        print(f"\n{'='*60}")
+        print("\n" + "=" * 60)
         print(f"🧪 {test_name}")
-        print(f"{='*60}")
+        print("=" * 60)
         try:
             success = test_func()
             results[test_name] = "✅ PASS" if success else "❌ FAIL"
@@ -499,9 +499,9 @@ def main():
             results[test_name] = "💥 ERROR"
     
     # Résumé
-    print(f"\n{'='*70}")
+    print("\n" + "=" * 70)
     print("📊 RÉSULTATS FINAUX")
-    print(f"{'='*70}")
+    print("=" * 70)
     
     for test_name, result in results.items():
         print(f"  {test_name:40s} : {result}")
