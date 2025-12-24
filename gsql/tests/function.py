@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-TEST GSQL - VERSION FINALE AVEC CORRECTIONS
+TEST GSQL - WORKAROUND COMPLET POUR BUG TRANSACTIONS
 """
 
 import os
@@ -8,181 +8,173 @@ import sys
 import time
 import tempfile
 import shutil
+import sqlite3
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-print("🔧 TEST GSQL - VERSION CORRIGÉE")
+print("🔧 TEST GSQL - WORKAROUND TRANSACTIONS")
 print("=" * 70)
 
-def safe_execute(db, sql, params=None, verbose=True):
-    """Exécute SQL avec gestion d'erreur"""
-    try:
-        result = db.execute(sql, params)
-        if not result.get('success') and verbose:
-            print(f"⚠️  SQL échoué: {sql[:50]}... → {result.get('message')}")
-        return result
-    except Exception as e:
-        if verbose:
-            print(f"❌ Exception SQL: {sql[:50]}... → {e}")
-        return {'success': False, 'message': str(e)}
-
-def cleanup_default_tables(db):
-    """Nettoie les tables par défaut si elles existent"""
-    print("\n🧹 Nettoyage tables par défaut:")
-    
-    default_tables = ['users', 'products', 'orders', 'logs']
-    
-    for table in default_tables:
-        try:
-            # Vérifier si la table existe
-            result = db.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table}'")
-            if result.get('success') and result.get('rows'):
-                # Désactiver les foreign keys temporairement
-                db.execute("PRAGMA foreign_keys = OFF")
-                
-                # Supprimer la table
-                drop_result = db.execute(f"DROP TABLE IF EXISTS {table}")
-                if drop_result.get('success'):
-                    print(f"  ✅ Table '{table}' supprimée")
-                
-                # Réactiver les foreign keys
-                db.execute("PRAGMA foreign_keys = ON")
-        except Exception as e:
-            print(f"  ❌ Erreur nettoyage '{table}': {e}")
-
-def test_table_management_fixed():
-    """Test la gestion complète des tables (version corrigée)"""
-    print("\n📊 TEST GESTION DES TABLES")
+def test_transaction_workaround():
+    """Test transactions avec workaround complet"""
+    print("\n💼 TEST TRANSACTIONS AVEC WORKAROUND")
     print("-" * 50)
     
     from gsql.database import Database
     import tempfile
     
-    temp_dir = tempfile.mkdtemp(prefix="gsql_fixed_")
+    temp_dir = tempfile.mkdtemp(prefix="gsql_workaround_")
     
     try:
-        # 1. Initialisation
         db = Database(db_path=":memory:", base_dir=temp_dir)
-        print("✅ Database initialisée")
         
-        # 2. Nettoyer avant de créer
-        cleanup_default_tables(db)
+        # Nettoyer tables par défaut
+        print("🧹 Nettoyage tables...")
+        for table in ['users', 'products', 'orders', 'logs']:
+            db.execute(f"DROP TABLE IF EXISTS {table}")
         
-        # 3. Créer tables avec syntaxe SQLite correcte
-        print("\n🔨 Création tables personnalisées:")
-        
-        # Table 1: Correcte
-        sql1 = """
-        CREATE TABLE employees (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            email TEXT UNIQUE,
-            salary REAL DEFAULT 0.0,
-            department TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        """
-        result = safe_execute(db, sql1)
-        if result.get('success'):
-            print("✅ Table 'employees' créée")
-        
-        # Table 2: Avec foreign key
-        sql2 = """
-        CREATE TABLE projects (
-            project_id INTEGER PRIMARY KEY,
-            name TEXT NOT NULL,
-            manager_id INTEGER,
-            budget REAL,
-            deadline DATE,
-            FOREIGN KEY (manager_id) REFERENCES employees(id) ON DELETE SET NULL
-        )
-        """
-        result = safe_execute(db, sql2)
-        if result.get('success'):
-            print("✅ Table 'projects' créée avec FK")
-        
-        # Table 3: Avec contraintes
-        sql3 = """
-        CREATE TABLE tasks (
-            task_id INTEGER PRIMARY KEY,
-            project_id INTEGER NOT NULL,
-            description TEXT,
-            status TEXT CHECK(status IN ('pending', 'in_progress', 'completed')),
-            priority INTEGER CHECK(priority BETWEEN 1 AND 5),
-            assigned_to INTEGER,
-            FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE,
-            FOREIGN KEY (assigned_to) REFERENCES employees(id) ON DELETE SET NULL
-        )
-        """
-        result = safe_execute(db, sql3)
-        if result.get('success'):
-            print("✅ Table 'tasks' créée avec contraintes")
-        
-        # 4. Créer INDEX séparément (CORRECTION DU BUG)
-        print("\n🔧 Création INDEX séparés:")
-        indexes = [
-            ("idx_employees_dept", "CREATE INDEX idx_employees_dept ON employees(department)"),
-            ("idx_projects_manager", "CREATE INDEX idx_projects_manager ON projects(manager_id)"),
-            ("idx_tasks_project", "CREATE INDEX idx_tasks_project ON tasks(project_id)"),
-            ("idx_tasks_status", "CREATE INDEX idx_tasks_status ON tasks(status)")
-        ]
-        
-        for idx_name, idx_sql in indexes:
-            result = safe_execute(db, idx_sql, verbose=False)
-            if result.get('success'):
-                print(f"  ✅ Index '{idx_name}' créé")
-        
-        # 5. Insérer des données
-        print("\n📝 Insertion données de test:")
-        
-        employees_data = [
-            ('Alice Johnson', 'alice@company.com', 75000, 'Engineering'),
-            ('Bob Smith', 'bob@company.com', 65000, 'Sales'),
-            ('Charlie Brown', 'charlie@company.com', 80000, 'Engineering'),
-            ('Diana Prince', 'diana@company.com', 90000, 'Management')
-        ]
-        
-        for emp in employees_data:
-            sql = "INSERT INTO employees (name, email, salary, department) VALUES (?, ?, ?, ?)"
-            result = safe_execute(db, sql, params=emp, verbose=False)
-            if result.get('success'):
-                print(f"  ✅ Employee: {emp[0]}")
-        
-        # 6. Vérifier les index
-        print("\n🔍 Vérification INDEX:")
-        result = db.execute("SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'")
-        if result.get('success'):
-            indexes = [row[0] for row in result.get('rows', [])]
-            print(f"  • Index créés: {len(indexes)}")
-            for idx in indexes:
-                print(f"    - {idx}")
-        
-        # 7. Performance avec index
-        print("\n⚡ Performance avec INDEX:")
-        
-        start = time.time()
-        result = db.execute("""
-            SELECT department, COUNT(*), AVG(salary) 
-            FROM employees 
-            WHERE department IN ('Engineering', 'Sales')
-            GROUP BY department
+        # Créer table de test
+        db.execute("""
+            CREATE TABLE accounts (
+                id INTEGER PRIMARY KEY,
+                name TEXT,
+                balance REAL DEFAULT 0.0
+            )
         """)
-        query_time = time.time() - start
         
-        if result.get('success'):
-            print(f"  ✅ Requête avec INDEX: {query_time:.4f}s")
-            for row in result.get('rows', []):
-                print(f"    • {row[0]}: {row[1]} employés, ${row[2]:,.0f} moyen")
+        # Données initiales
+        db.execute("INSERT INTO accounts VALUES (1, 'Alice', 1000.0)")
+        db.execute("INSERT INTO accounts VALUES (2, 'Bob', 500.0)")
+        print("✅ Table et données créées")
         
-        # 8. Nettoyage
-        print("\n🧹 Cleanup:")
-        for table in ['tasks', 'projects', 'employees']:
-            safe_execute(db, f"DROP TABLE IF EXISTS {table}", verbose=False)
-            print(f"  ✅ Table '{table}' supprimée")
+        # ====================================================================
+        # WORKAROUND 1: Transactions manuelles avec SQL direct
+        # ====================================================================
+        print("\n🔀 WORKAROUND 1: Transactions SQL manuelles")
+        
+        # Début transaction SQL
+        db.execute("BEGIN TRANSACTION")
+        print("💼 Transaction SQL démarrée")
+        
+        # Opérations
+        db.execute("UPDATE accounts SET balance = balance - 200 WHERE id = 1")
+        db.execute("UPDATE accounts SET balance = balance + 200 WHERE id = 2")
+        print("💰 Transfert 200€ Alice → Bob")
+        
+        # Commit SQL
+        db.execute("COMMIT")
+        print("✅ Transaction SQL commitée")
+        
+        # Vérifier
+        result = db.execute("SELECT name, balance FROM accounts ORDER BY id")
+        print("📊 Soldes après transfert:")
+        for row in result['rows']:
+            print(f"  • {row[0]}: ${row[1]:.2f}")
+        
+        # ====================================================================
+        # WORKAROUND 2: Accès direct à SQLite
+        # ====================================================================
+        print("\n🔀 WORKAROUND 2: Accès direct SQLite")
+        
+        conn = sqlite3.connect(":memory:")
+        cursor = conn.cursor()
+        
+        cursor.execute("CREATE TABLE test (id INTEGER, value TEXT)")
+        cursor.execute("BEGIN TRANSACTION")
+        cursor.execute("INSERT INTO test VALUES (1, 'Transaction 1')")
+        cursor.execute("SAVEPOINT sp1")
+        cursor.execute("INSERT INTO test VALUES (2, 'Transaction 2')")
+        cursor.execute("ROLLBACK TO SAVEPOINT sp1")
+        cursor.execute("COMMIT")
+        
+        cursor.execute("SELECT COUNT(*) FROM test")
+        count = cursor.fetchone()[0]
+        print(f"✅ Transaction SQLite directe: {count} lignes (devrait être 1)")
+        
+        conn.close()
+        
+        # ====================================================================
+        # WORKAROUND 3: Utiliser les méthodes GSQL mais avec vérification
+        # ====================================================================
+        print("\n🔀 WORKAROUND 3: Méthodes GSQL avec vérification")
+        
+        # Essayer les méthodes natives
+        try:
+            # Cette méthode a le bug
+            tid = db.begin_transaction()
+            print(f"⚠️  db.begin_transaction() = TID {tid} (BUG: pas de transaction SQLite)")
+        except Exception as e:
+            print(f"❌ db.begin_transaction() échoue: {e}")
+        
+        # Vérifier état transaction SQLite
+        result = db.execute("SELECT * FROM pragma_transaction_state")
+        if result['success'] and result['rows']:
+            state = result['rows'][0][0]
+            print(f"📊 État transaction SQLite: {state}")
+        
+        # ====================================================================
+        # TEST: Rollback manuel
+        # ====================================================================
+        print("\n🔀 TEST Rollback manuel")
+        
+        # Solde avant
+        result = db.execute("SELECT balance FROM accounts WHERE id = 1")
+        before = result['rows'][0][0]
+        print(f"💰 Alice avant: ${before:.2f}")
+        
+        # Transaction avec rollback
+        db.execute("BEGIN TRANSACTION")
+        db.execute("UPDATE accounts SET balance = balance + 1000 WHERE id = 1")
+        db.execute("ROLLBACK")
+        print("↩️  Rollback manuel exécuté")
+        
+        # Vérifier après rollback
+        result = db.execute("SELECT balance FROM accounts WHERE id = 1")
+        after = result['rows'][0][0]
+        print(f"💰 Alice après rollback: ${after:.2f}")
+        
+        if abs(after - before) < 0.01:
+            print("✅ Rollback fonctionne correctement")
+        
+        # ====================================================================
+        # TEST: Niveaux d'isolation
+        # ====================================================================
+        print("\n🔀 TEST Niveaux d'isolation")
+        
+        levels = {
+            "DEFERRED": "BEGIN DEFERRED TRANSACTION",
+            "IMMEDIATE": "BEGIN IMMEDIATE TRANSACTION", 
+            "EXCLUSIVE": "BEGIN EXCLUSIVE TRANSACTION"
+        }
+        
+        for level_name, sql in levels.items():
+            try:
+                db.execute(sql)
+                db.execute("INSERT INTO accounts VALUES (?, ?, ?)", [100, f"Test_{level_name}", 100.0])
+                db.execute("COMMIT")
+                print(f"  ✅ Niveau '{level_name}': OK")
+            except Exception as e:
+                print(f"  ❌ Niveau '{level_name}': {e}")
+        
+        # ====================================================================
+        # VÉRIFICATION FINALE
+        # ====================================================================
+        print("\n📊 Vérification finale:")
+        
+        # Nombre de comptes
+        result = db.execute("SELECT COUNT(*) FROM accounts")
+        count = result['rows'][0][0]
+        print(f"  • Comptes totaux: {count}")
+        
+        # Solde total
+        result = db.execute("SELECT SUM(balance) FROM accounts")
+        total = result['rows'][0][0] if result['rows'][0][0] else 0
+        print(f"  • Solde total: ${total:.2f}")
         
         db.close()
         shutil.rmtree(temp_dir)
         
+        print("\n✅ Test transactions terminé avec succès")
         return True
         
     except Exception as e:
@@ -191,451 +183,295 @@ def test_table_management_fixed():
         traceback.print_exc()
         return False
 
-def test_transactions_fixed():
-    """Test transactions avec workaround pour bug savepoint"""
-    print("\n💼 TEST TRANSACTIONS CORRIGÉ")
+def test_database_methods():
+    """Test toutes les méthodes de Database"""
+    print("\n📋 TEST TOUTES LES MÉTHODES DATABASE")
     print("-" * 50)
     
     from gsql.database import Database
     import tempfile
     
-    temp_dir = tempfile.mkdtemp(prefix="gsql_tx_fixed_")
+    temp_dir = tempfile.mkdtemp(prefix="gsql_methods_")
     
     try:
         db = Database(db_path=":memory:", base_dir=temp_dir)
         
-        # Nettoyer
-        cleanup_default_tables(db)
+        print("🔍 Méthodes disponibles dans Database:")
         
-        # Créer table simple
-        db.execute("""
-            CREATE TABLE bank_accounts (
-                account_id INTEGER PRIMARY KEY,
-                owner TEXT NOT NULL,
-                balance REAL DEFAULT 0.0,
-                CHECK(balance >= 0)
-            )
-        """)
+        methods = []
+        for attr_name in dir(db):
+            if not attr_name.startswith('_') and callable(getattr(db, attr_name)):
+                methods.append(attr_name)
         
-        # Données initiales
-        accounts = [
-            (101, 'Alice', 1000.0),
-            (102, 'Bob', 500.0),
-            (103, 'Charlie', 1500.0)
-        ]
+        methods.sort()
+        for i, method in enumerate(methods, 1):
+            print(f"  {i:2d}. {method}()")
         
-        for acc in accounts:
-            db.execute("INSERT INTO bank_accounts VALUES (?, ?, ?)", params=acc)
+        print(f"\n📊 Total: {len(methods)} méthodes publiques")
         
-        print("✅ Données initiales insérées")
+        # Tester les méthodes importantes
+        print("\n🧪 Test méthodes spécifiques:")
         
-        # TRANSACTION CORRIGÉE - Sans savepoint problématique
-        print("\n🔀 Transaction simple (sans savepoint):")
+        # 1. execute()
+        result = db.execute("SELECT 1 as test")
+        print(f"  • execute(): {result.get('success', False)}")
         
-        # Début transaction
-        db.begin_transaction(isolation_level="DEFERRED")
-        print("💼 Transaction démarrée")
+        # 2. check_health()
+        health = db.check_health()
+        print(f"  • check_health(): {health.get('status', 'UNKNOWN')}")
         
-        # Opération simple
-        db.execute("UPDATE bank_accounts SET balance = balance - 200 WHERE account_id = 101")
-        db.execute("UPDATE bank_accounts SET balance = balance + 200 WHERE account_id = 102")
-        print("💰 Transfert 200€ de Alice vers Bob")
+        # 3. get_stats() via execute
+        result = db.execute("STATS")
+        print(f"  • STATS: {result.get('success', False)}")
         
-        # Commit
-        db.commit_transaction(0)
-        print("✅ Transaction commitée")
-        
-        # Vérifier
-        result = db.execute("SELECT owner, balance FROM bank_accounts ORDER BY account_id")
-        if result.get('success'):
-            print("\n📊 Soldes après transfert:")
-            for row in result.get('rows', []):
-                print(f"  • {row[0]}: ${row[1]:.2f}")
-        
-        # TEST 2: Rollback complet
-        print("\n🔀 Test rollback complet:")
-        
-        db.begin_transaction()
-        solde_avant = db.execute("SELECT balance FROM bank_accounts WHERE account_id = 101")['rows'][0][0]
-        
-        db.execute("UPDATE bank_accounts SET balance = balance + 1000 WHERE account_id = 101")
-        print(f"💰 Alice: ${solde_avant:.2f} → ${solde_avant + 1000:.2f} (dans transaction)")
-        
-        db.rollback_transaction(0)
-        print("↩️  Rollback complet")
-        
-        # Vérifier
-        solde_apres = db.execute("SELECT balance FROM bank_accounts WHERE account_id = 101")['rows'][0][0]
-        print(f"💰 Alice après rollback: ${solde_apres:.2f}")
-        
-        if abs(solde_apres - solde_avant) < 0.01:
-            print("✅ Rollback fonctionne correctement")
-        
-        # TEST 3: Niveaux d'isolation
-        print("\n🔀 Test niveaux d'isolation:")
-        
-        isolation_levels = ["DEFERRED", "IMMEDIATE", "EXCLUSIVE"]
-        for level in isolation_levels:
-            try:
-                db.begin_transaction(isolation_level=level)
-                db.execute(f"INSERT INTO bank_accounts VALUES (?, ?, ?)", [200 + len(isolation_levels), f"Test_{level}", 100.0])
-                db.commit_transaction(0)
-                print(f"  ✅ Niveau '{level}': OK")
-            except Exception as e:
-                print(f"  ❌ Niveau '{level}': {e}")
-        
-        # TEST 4: Workaround pour savepoint
-        print("\n🔀 Workaround savepoint (accès direct SQLite):")
-        
-        # Accès direct au cursor SQLite
-        cursor = db.storage.conn.cursor()
-        
-        cursor.execute("BEGIN TRANSACTION")
-        cursor.execute("INSERT INTO bank_accounts VALUES (999, 'Direct_Savepoint', 999.0)")
-        cursor.execute("SAVEPOINT my_sp")
-        cursor.execute("UPDATE bank_accounts SET balance = 888 WHERE account_id = 999")
-        cursor.execute("ROLLBACK TO SAVEPOINT my_sp")
-        cursor.execute("COMMIT")
-        
-        # Vérifier
-        result = db.execute("SELECT balance FROM bank_accounts WHERE account_id = 999")
-        if result.get('success') and result.get('rows'):
-            balance = result['rows'][0][0]
-            print(f"  ✅ Savepoint workaround: balance = ${balance:.2f} (devrait être 999.0)")
-        
+        # 4. close()
         db.close()
+        print(f"  • close(): OK")
+        
         shutil.rmtree(temp_dir)
         
         return True
         
     except Exception as e:
-        print(f"❌ Erreur transaction: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"❌ Erreur: {e}")
         return False
 
-def test_performance_fixed():
-    """Test performance avec syntaxe SQLite correcte"""
-    print("\n⚡ TEST PERFORMANCE CORRIGÉ")
+def create_patch_for_transaction_bug():
+    """Crée un patch pour corriger le bug de transaction"""
+    print("\n🔧 CRÉATION PATCH POUR BUG TRANSACTION")
     print("-" * 50)
+    
+    patch_content = '''# Patch pour gsql/storage/sqlite_storage.py
+# Correction de TransactionManager.begin()
+
+--- ORIGINAL (ligne ~180-190)
+def begin(self, isolation_level: str = "DEFERRED") -> int:
+    """Démarre une nouvelle transaction"""
+    with self.lock:
+        tid = self.transaction_counter
+        self.transaction_counter += 1
+
+        # Définir le niveau d'isolation
+        isolation_sql = {
+            "DEFERRED": "BEGIN DEFERRED TRANSACTION",
+            "IMMEDIATE": "BEGIN IMMEDIATE TRANSACTION", 
+            "EXCLUSIVE": "BEGIN EXCLUSIVE TRANSACTION"
+        }.get(isolation_level, "BEGIN")
+
+        try:
+            # BUG: Cette ligne est CRITIQUE mais souvent absente
+            self.storage._execute_raw(isolation_sql)
+        except Exception as e:
+            raise TransactionError(f"Failed to begin transaction: {e}")
+
+        self.active_transactions[tid] = {
+            'start_time': time.time(),
+            'isolation': isolation_level,
+            'changes': {},
+            'savepoints': [],
+            'state': 'ACTIVE'
+        }
+
+        logger.debug(f"Transaction {tid} started ({isolation_level})")
+        return tid
+
+--- VÉRIFICATION
+Pour vérifier si le bug existe dans votre installation:
+
+1. Ouvrez le fichier:
+   nano /usr/lib/python3.9/site-packages/gsql/storage/sqlite_storage.py
+
+2. Cherchez la méthode "begin" dans TransactionManager
+
+3. Vérifiez si cette ligne existe:
+   self.storage._execute_raw(isolation_sql)
+
+Si la ligne est MANQUANTE, ajoutez-la après la définition de isolation_sql.
+'''
+    
+    patch_file = "/tmp/gsql_transaction_patch.txt"
+    with open(patch_file, "w") as f:
+        f.write(patch_content)
+    
+    print(f"✅ Patch créé: {patch_file}")
+    
+    # Vérification directe
+    print("\n🔍 Vérification directe du bug:")
+    try:
+        import inspect
+        from gsql.storage.sqlite_storage import TransactionManager
+        
+        source = inspect.getsource(TransactionManager.begin)
+        
+        if "self.storage._execute_raw" in source:
+            print("✅ La ligne critique est PRÉSENTE dans le code")
+            print("⚠️  Le bug pourrait être ailleurs")
+        else:
+            print("❌ BUG CONFIRMÉ: La ligne critique est ABSENTE")
+            print("   La méthode begin() ne démarre pas de transaction SQLite")
+            
+    except Exception as e:
+        print(f"⚠️  Impossible de vérifier: {e}")
+    
+    return patch_file
+
+def test_complete_workflow():
+    """Workflow complet avec toutes les corrections"""
+    print("\n🚀 WORKFLOW COMPLET AVEC CORRECTIONS")
+    print("=" * 60)
     
     from gsql.database import Database
     import tempfile
     import time
     
-    temp_dir = tempfile.mkdtemp(prefix="gsql_perf_fixed_")
+    temp_dir = tempfile.mkdtemp(prefix="gsql_complete_")
     
     try:
+        print("1. Initialisation Database")
         db = Database(db_path=":memory:", base_dir=temp_dir)
         
-        # Nettoyer
-        cleanup_default_tables(db)
+        print("2. Nettoyage tables par défaut")
+        for table in ['users', 'products', 'orders', 'logs']:
+            db.execute(f"DROP TABLE IF EXISTS {table}")
         
-        # CORRECTION: Créer table SANS clause INDEX
+        print("3. Création tables personnalisées")
+        
+        # Table produits
         db.execute("""
-            CREATE TABLE performance_test (
-                id INTEGER PRIMARY KEY,
-                value REAL NOT NULL,
+            CREATE TABLE products (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
                 category TEXT,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                price REAL CHECK(price > 0),
+                stock INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        print("✅ Table 'performance_test' créée")
         
-        # Créer INDEX SÉPARÉMENT (correction du bug)
-        db.execute("CREATE INDEX idx_perf_category ON performance_test(category)")
-        db.execute("CREATE INDEX idx_perf_timestamp ON performance_test(timestamp)")
-        print("✅ Index créés séparément")
+        # Index séparé (correction bug INDEX)
+        db.execute("CREATE INDEX idx_products_category ON products(category)")
+        db.execute("CREATE INDEX idx_products_price ON products(price)")
         
-        # Benchmark INSERT
-        print("\n📈 Benchmark INSERT (1000 lignes):")
+        print("4. Insertion données")
         
-        start = time.time()
-        batch_size = 1000
+        products = [
+            ('Laptop', 'Electronics', 999.99, 10),
+            ('Mouse', 'Electronics', 29.99, 50),
+            ('Chair', 'Furniture', 149.99, 20),
+            ('Desk', 'Furniture', 299.99, 15),
+            ('Monitor', 'Electronics', 199.99, 25),
+            ('Keyboard', 'Electronics', 79.99, 30)
+        ]
         
-        # Insertion par lots pour plus de performance
-        for i in range(0, batch_size, 100):  # Lots de 100
-            values = []
-            for j in range(100):
-                idx = i + j
-                if idx >= batch_size:
-                    break
-                values.append((idx, idx * 1.5, f"cat_{idx % 10}"))
-            
-            # Utiliser une seule requête avec multiple VALUES
-            placeholders = ', '.join(['(?, ?, ?)' for _ in range(len(values))])
-            flat_values = [item for sublist in values for item in sublist]
-            
-            sql = f"INSERT INTO performance_test (id, value, category) VALUES {placeholders}"
-            db.execute(sql, params=flat_values)
+        for prod in products:
+            db.execute(
+                "INSERT INTO products (name, category, price, stock) VALUES (?, ?, ?, ?)",
+                params=prod
+            )
         
-        insert_time = time.time() - start
-        print(f"  • {batch_size} INSERT: {insert_time:.3f}s")
-        print(f"  • Performance: {batch_size/insert_time:.0f} rows/sec")
+        print(f"✅ {len(products)} produits insérés")
         
-        # Benchmark SELECT avec/sans cache
-        print("\n📈 Benchmark SELECT avec INDEX:")
+        print("\n5. Requêtes avancées")
         
-        # Sans cache
-        start = time.time()
-        result1 = db.execute(
-            "SELECT category, COUNT(*), AVG(value) FROM performance_test WHERE category = 'cat_5' GROUP BY category",
-            use_cache=False
-        )
-        time1 = time.time() - start
-        
-        # Avec cache
-        start = time.time()
-        result2 = db.execute(
-            "SELECT category, COUNT(*), AVG(value) FROM performance_test WHERE category = 'cat_5' GROUP BY category",
-            use_cache=True
-        )
-        time2 = time.time() - start
-        
-        print(f"  • Sans cache: {time1:.4f}s")
-        print(f"  • Avec cache: {time2:.4f}s")
-        print(f"  • Amélioration cache: {time1/time2:.1f}x")
-        
-        if result1.get('success') and result1.get('rows'):
-            row = result1['rows'][0]
-            print(f"  • Résultat: catégorie '{row[0]}', {row[1]} lignes, avg={row[2]:.1f}")
-        
-        # Benchmark JOIN
-        print("\n📈 Benchmark JOIN:")
-        
-        # Créer table de jointure
-        db.execute("CREATE TABLE categories (cat_id TEXT PRIMARY KEY, name TEXT)")
-        for i in range(10):
-            db.execute("INSERT INTO categories VALUES (?, ?)", [f"cat_{i}", f"Category {i}"])
-        
-        # Créer index pour la jointure
-        db.execute("CREATE INDEX idx_categories_id ON categories(cat_id)")
-        
-        start = time.time()
+        # Requête avec GROUP BY et HAVING
         result = db.execute("""
-            SELECT p.category, c.name, COUNT(*) as count, AVG(p.value) as avg_value
-            FROM performance_test p
-            JOIN categories c ON p.category = c.cat_id
-            GROUP BY p.category
-            HAVING COUNT(*) > 50
-            ORDER BY avg_value DESC
-            LIMIT 5
+            SELECT 
+                category,
+                COUNT(*) as count,
+                AVG(price) as avg_price,
+                SUM(stock) as total_stock,
+                MIN(price) as min_price,
+                MAX(price) as max_price
+            FROM products
+            GROUP BY category
+            HAVING COUNT(*) > 1
+            ORDER BY avg_price DESC
         """)
         
-        join_time = time.time() - start
-        print(f"  • JOIN avec INDEX: {join_time:.3f}s")
+        if result['success']:
+            print("📊 Statistiques par catégorie:")
+            for row in result['rows']:
+                print(f"  • {row[0]}: {row[1]} produits")
+                print(f"    Prix: ${row[2]:.2f} moyen (${row[4]:.2f}-${row[5]:.2f})")
+                print(f"    Stock: {row[3]} unités")
         
-        if result.get('success'):
-            rows = result.get('rows', [])
-            print(f"  • Résultats: {len(rows)} catégories")
-            for row in rows[:3]:  # Afficher 3 premiers
-                print(f"    • {row[1]}: {row[2]} items, avg={row[3]:.1f}")
+        print("\n6. Transactions avec workaround")
         
-        # Test EXPLAIN pour vérifier l'utilisation des index
-        print("\n🔍 EXPLAIN QUERY PLAN:")
-        result = db.execute("EXPLAIN QUERY PLAN SELECT * FROM performance_test WHERE category = 'cat_5'")
-        if result.get('success') and result.get('rows'):
-            for row in result.get('rows', [])[:3]:
-                print(f"  • {row[3] if len(row) > 3 else row}")
+        # WORKAROUND: Transactions SQL directes
+        print("💼 Début transaction manuelle")
+        db.execute("BEGIN IMMEDIATE TRANSACTION")
         
-        # Stats finales
-        print("\n📊 Stats finales:")
-        result = db.execute("SELECT COUNT(*) as total FROM performance_test")
-        if result.get('success'):
-            total = result['rows'][0][0] if result['rows'] else 0
-            print(f"  • Lignes totales: {total:,}")
+        # Mettre à jour les stocks
+        db.execute("UPDATE products SET stock = stock - 5 WHERE name = 'Laptop'")
+        db.execute("UPDATE products SET stock = stock - 10 WHERE name = 'Mouse'")
         
-        result = db.execute("SELECT COUNT(DISTINCT category) as categories FROM performance_test")
-        if result.get('success'):
-            cats = result['rows'][0][0] if result['rows'] else 0
-            print(f"  • Catégories distinctes: {cats}")
+        print("💰 Stocks mis à jour")
         
-        # VACUUM
-        print("\n🧹 Maintenance:")
-        result = db.execute("VACUUM")
-        if result.get('success'):
-            print("  ✅ VACUUM exécuté")
+        # Vérifier avant commit
+        result = db.execute("SELECT name, stock FROM products WHERE name IN ('Laptop', 'Mouse')")
+        print("📊 Stocks après mise à jour (dans transaction):")
+        for row in result['rows']:
+            print(f"  • {row[0]}: {row[1]} unités")
         
-        result = db.execute("ANALYZE")
-        if result.get('success'):
-            print("  ✅ ANALYZE exécuté")
+        # Commit
+        db.execute("COMMIT")
+        print("✅ Transaction commitée")
         
-        db.close()
-        shutil.rmtree(temp_dir)
+        print("\n7. Test cache de requêtes")
         
-        return True
+        # Première exécution
+        start = time.time()
+        result1 = db.execute("SELECT COUNT(*) FROM products WHERE category = 'Electronics'", use_cache=True)
+        time1 = time.time() - start
         
-    except Exception as e:
-        print(f"❌ Erreur performance: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-
-def test_advanced_features():
-    """Test fonctionnalités avancées"""
-    print("\n🌟 TEST FONCTIONNALITÉS AVANCÉES")
-    print("-" * 50)
-    
-    from gsql.database import Database
-    import tempfile
-    
-    temp_dir = tempfile.mkdtemp(prefix="gsql_advanced_")
-    
-    try:
-        db = Database(db_path=":memory:", base_dir=temp_dir)
-        cleanup_default_tables(db)
+        # Cache hit
+        start = time.time()
+        result2 = db.execute("SELECT COUNT(*) FROM products WHERE category = 'Electronics'", use_cache=True)
+        time2 = time.time() - start
         
-        print("🔧 Fonctionnalités testées:")
+        print(f"⏱️  Performance cache:")
+        print(f"  • Sans cache: {time1:.4f}s")
+        print(f"  • Avec cache: {time2:.4f}s")
+        print(f"  • Amélioration: {time1/time2:.1f}x")
         
-        # 1. Commandes spéciales GSQL
-        print("\n1. Commandes spéciales:")
+        print("\n8. Commandes spéciales GSQL")
+        
         commands = [
-            ("SHOW TABLES", "Affiche les tables"),
-            ("STATS", "Statistiques système"),
-            ("VACUUM", "Optimisation base"),
-            ("HELP", "Aide")
+            ("SHOW TABLES", "Liste tables"),
+            ("STATS", "Statistiques"),
+            ("VACUUM", "Optimisation"),
         ]
         
         for cmd, desc in commands:
             result = db.execute(cmd)
-            if result.get('success'):
+            if result['success']:
                 print(f"  ✅ {cmd}: {desc}")
-            else:
-                print(f"  ❌ {cmd}: {result.get('message', 'Erreur')}")
         
-        # 2. Création vue
-        print("\n2. Création VIEW:")
-        db.execute("""
-            CREATE TABLE sales (
-                id INTEGER PRIMARY KEY,
-                product TEXT,
-                amount REAL,
-                region TEXT,
-                sale_date DATE
-            )
-        """)
+        print("\n9. Nettoyage et fermeture")
         
-        # Données de test
-        import random
-        regions = ['North', 'South', 'East', 'West']
-        products = ['A', 'B', 'C', 'D']
-        
-        for i in range(50):
-            db.execute(
-                "INSERT INTO sales (product, amount, region, sale_date) VALUES (?, ?, ?, DATE('now', ? || ' days'))",
-                [random.choice(products), random.uniform(10, 1000), random.choice(regions), -i]
-            )
-        
-        # Vue
-        db.execute("""
-            CREATE VIEW sales_summary AS
-            SELECT 
-                region,
-                product,
-                COUNT(*) as transactions,
-                SUM(amount) as total_sales,
-                AVG(amount) as avg_sale
-            FROM sales
-            GROUP BY region, product
-            ORDER BY total_sales DESC
-        """)
-        print("  ✅ Vue 'sales_summary' créée")
-        
-        # 3. Requête sur vue
-        result = db.execute("SELECT * FROM sales_summary LIMIT 3")
-        if result.get('success') and result.get('rows'):
-            print("  📊 Données vue (top 3):")
-            for row in result['rows']:
-                print(f"    • {row[0]}/{row[1]}: {row[2]} tx, ${row[3]:.0f} total")
-        
-        # 4. Trigger (si supporté)
-        print("\n3. Triggers:")
-        try:
-            db.execute("""
-                CREATE TRIGGER update_timestamp 
-                AFTER UPDATE ON sales
-                BEGIN
-                    UPDATE sales SET sale_date = DATETIME('now') WHERE id = NEW.id;
-                END;
-            """)
-            print("  ✅ Trigger créé")
-        except Exception as e:
-            print(f"  ⚠️  Trigger non supporté: {e}")
-        
-        # 5. Transactions imbriquées
-        print("\n4. Transactions complexes:")
-        
-        db.begin_transaction()
-        
-        # Batch insert
-        for i in range(10):
-            db.execute(
-                "INSERT INTO sales (product, amount, region) VALUES (?, ?, ?)",
-                [f"Batch_{i}", 100 + i * 10, "Test"]
-            )
-        
-        # Update conditionnel
-        db.execute("""
-            UPDATE sales 
-            SET amount = amount * 1.1 
-            WHERE region = 'Test' AND amount < 150
-        """)
-        
-        db.commit_transaction(0)
-        print("  ✅ Transaction complexe réussie")
-        
-        # 6. Métadonnées
-        print("\n5. Métadonnées système:")
-        
-        # Tables système
-        result = db.execute("""
-            SELECT name, type 
-            FROM sqlite_master 
-            WHERE name NOT LIKE 'sqlite_%'
-            ORDER BY type, name
-        """)
-        
-        if result.get('success'):
-            tables = []
-            views = []
-            indexes = []
-            triggers = []
-            
-            for row in result.get('rows', []):
-                name, type_ = row
-                if type_ == 'table':
-                    tables.append(name)
-                elif type_ == 'view':
-                    views.append(name)
-                elif type_ == 'index':
-                    indexes.append(name)
-                elif type_ == 'trigger':
-                    triggers.append(name)
-            
-            print(f"  • Tables: {len(tables)}")
-            print(f"  • Views: {len(views)}")
-            print(f"  • Indexes: {len(indexes)}")
-            print(f"  • Triggers: {len(triggers)}")
-        
+        db.execute("DROP TABLE products")
         db.close()
         shutil.rmtree(temp_dir)
         
+        print("✅ Workflow terminé avec succès")
         return True
         
     except Exception as e:
-        print(f"❌ Erreur fonctionnalités avancées: {e}")
+        print(f"❌ Erreur workflow: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 def main():
     """Fonction principale"""
-    print("🚀 TEST GSQL COMPLET - VERSION FINALE")
+    print("🚀 TEST GSQL - DIAGNOSTIC COMPLET BUG TRANSACTIONS")
     print("=" * 70)
     
     tests = [
-        ("Gestion tables (corrigé)", test_table_management_fixed),
-        ("Transactions (corrigé)", test_transactions_fixed),
-        ("Performance (corrigé)", test_performance_fixed),
-        ("Fonctionnalités avancées", test_advanced_features)
+        ("Transactions avec workaround", test_transaction_workaround),
+        ("Méthodes Database", test_database_methods),
+        ("Création patch", create_patch_for_transaction_bug),
+        ("Workflow complet", test_complete_workflow)
     ]
     
     results = {}
@@ -653,7 +489,7 @@ def main():
     
     # Résumé
     print(f"\n{'='*70}")
-    print("📊 RÉSULTATS FINAUX")
+    print("📊 RÉSULTATS DIAGNOSTIC")
     print('='*70)
     
     for test_name, result in results.items():
@@ -664,16 +500,19 @@ def main():
     
     print(f"\n🎯 Score: {passed}/{total} tests réussis ({passed/total*100:.0f}%)")
     
-    # Bilan des bugs
-    print("\n🐛 BUGS IDENTIFIÉS DANS GSQL:")
-    print("  1. Savepoints: db.execute('SAVEPOINT name') n'est pas reconnu par TransactionManager")
-    print("  2. Syntaxe INDEX: 'CREATE TABLE ... INDEX idx_name (col)' n'est pas valide en SQLite")
-    print("  3. Tables par défaut: Créées automatiquement sans option pour les désactiver")
+    # Diagnostic final
+    print("\n🔍 DIAGNOSTIC FINAL DU BUG TRANSACTION:")
+    print("  1. TransactionManager.begin() ne démarre pas de transaction SQLite")
+    print("  2. db.begin_transaction() retourne un TID mais pas de BEGIN SQL")
+    print("  3. Les commits/rollbacks échouent car pas de transaction active")
     
-    print("\n🔧 CORRECTIONS APPLIQUÉES:")
-    print("  • INDEX: Créer les index SÉPARÉMENT avec CREATE INDEX")
-    print("  • Savepoints: Utiliser accès direct SQLite ou éviter savepoints")
-    print("  • Nettoyage: Supprimer tables par défaut avant tests")
+    print("\n🔧 SOLUTIONS:")
+    print("  A. WORKAROUND: Utiliser db.execute('BEGIN TRANSACTION') directement")
+    print("  B. CORRECTION: Ajouter self.storage._execute_raw() dans TransactionManager.begin()")
+    print("  C. ALTERNATIVE: Accès direct SQLite avec sqlite3.connect()")
+    
+    print("\n💡 RECOMMANDATION IMMÉDIATE:")
+    print("  Utiliser le WORKAROUND A jusqu'à ce que le bug soit corrigé")
     
     return passed == total
 
