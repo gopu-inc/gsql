@@ -136,635 +136,443 @@ gsql/
 
 GSQL v3.0.9 est une couche Python moderne au-dessus de SQLite, conçue pour simplifier l'interaction avec les bases de données tout en ajoutant des fonctionnalités avancées comme le NLP et la gestion automatique des schémas.
 
+✨ Fonctionnalités
+
+✅ Fonctionnalités Stables
+
+· SQL complet : Support de SELECT, INSERT, UPDATE, DELETE, JOIN, etc.
+· Interface interactive : Shell avec auto-complétion, historique, couleurs
+· Cache intelligent : Cache LRU avec amélioration 10-20x des performances
+· Index avancés : Support des B+Tree et Hash Index
+· Commandes spéciales : .tables, .stats, .schema, .help
+· Contraintes SQL : FOREIGN KEY, CHECK, UNIQUE, NOT NULL
+· Fonctions intégrées : 14+ fonctions mathématiques et de texte
+· Auto-récupération : Mécanisme de récupération automatique en cas d'erreur
+
+⚠️ Bugs Connus (Workarounds Disponibles)
+
+· Transactions natives : Utiliser db.execute("BEGIN/COMMIT") directement
+· Savepoints : Utiliser db.execute("SAVEPOINT/ROLLBACK TO") directement
+· DROP TABLE : Éviter sur tables par défaut (users, products, etc.)
+· INDEX dans CREATE TABLE : Créer les index séparément
+
+📦 Installation
+
+Installation via pip (recommandé)
+
+```bash
+pip install gsql
+```
+
+Installation depuis source
+
+```bash
+git clone https://github.com/gopu-inc/gsql.git
+cd gsql
+pip install -e .
+```
+
+Dépendances
+
+· Python 3.8+
+· SQLite 3.8+
+· NLTK (optionnel pour NLP)
+
+🚀 Utilisation Rapide
+
+Mode Interactif
+
+```bash
+gsql
+# ou
+python -m gsql
+```
+
+Mode Script
+
 ```python
 from gsql.database import Database
 
-# Initialisation simple
-db = Database(db_path="./data/myapp.db")
-```
-
-📊 Structure des données
-
-Tables par défaut
-
-GSQL initialise automatiquement 4 tables principales :
-
-Table Description Structure
-users Utilisateurs système (id, username, email, full_name, age, city, created_at, updated_at)
-products Catalogue produits (id, name, category, price, stock, description, created_at)
-orders Commandes (id, user_id, product_id, quantity, total, status, order_date)
-logs Logs système (id, level, message, context, created_at)
-
-Tables système
-
-· _gsql_metadata : Métadonnées GSQL
-· _gsql_schemas : Schémas de tables
-· _gsql_statistics : Statistiques d'utilisation
-· _gsql_transactions_log : Log des transactions
-
-🔧 API Principale
-
-Initialisation
-
-```python
-# Options d'initialisation
-db = Database(
-    db_path="./data/app.db",      # Chemin fichier ou ":memory:"
-    base_dir="/root/.gsql",       # Répertoire base
-    buffer_pool_size=100,         # Taille cache (KB)
-    enable_wal=True,              # Write-Ahead Logging
-    auto_recovery=True            # Récupération automatique
-)
-```
-
-Format des résultats
-
-db.execute() retourne toujours un dictionnaire :
-
-```python
-{
-    'success': True/False,
-    'execution_time': float,
-    'type': 'select'|'insert'|'update'|'create'|'delete',
-    'count': int,
-    'columns': ['col1', 'col2', ...],
-    'rows': [(val1, val2, ...), ...],  # TUPLES
-    'timestamp': 'ISO-8601'
-}
-```
-
-Helper pour convertir en dicts
-
-```python
-def rows_to_dicts(result):
-    """Convertit result['rows'] (tuples) en liste de dicts"""
-    if not result.get('success'):
-        return []
-    
-    dicts = []
-    for row_tuple in result.get('rows', []):
-        row_dict = {}
-        for i, col_name in enumerate(result.get('columns', [])):
-            row_dict[col_name] = row_tuple[i] if i < len(row_tuple) else None
-        dicts.append(row_dict)
-    
-    return dicts
-```
-
-🛠️ Intégration avec LangChain
-
-GSQL Agent pour LangChain
-
-```python
-from langchain.agents import Tool, AgentExecutor, create_react_agent
-from langchain.memory import ConversationBufferMemory
-from langchain.prompts import PromptTemplate
-from gsql.database import Database
-
-class GSQLTool:
-    """Outil GSQL pour LangChain"""
-    
-    def __init__(self, db_path="./data/chat.db"):
-        self.db = Database(db_path=db_path)
-        self._init_schema()
-    
-    def _init_schema(self):
-        """Initialise le schéma pour les conversations IA"""
-        schema = """
-        CREATE TABLE IF NOT EXISTS chat_messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id TEXT,
-            role TEXT CHECK(role IN ('user', 'assistant', 'system')),
-            content TEXT,
-            metadata TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        
-        CREATE TABLE IF NOT EXISTS chat_sessions (
-            session_id TEXT PRIMARY KEY,
-            user_id TEXT,
-            context TEXT,
-            started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        
-        CREATE INDEX idx_chat_session ON chat_messages(session_id);
-        CREATE INDEX idx_chat_timestamp ON chat_messages(created_at);
-        """
-        
-        for statement in schema.split(';'):
-            if statement.strip():
-                self.db.execute(statement)
-    
-    def execute_query(self, query: str) -> str:
-        """Exécute une requête SQL et retourne les résultats formatés"""
-        try:
-            result = self.db.execute(query)
-            
-            if not result.get('success'):
-                return f"❌ Erreur: {result}"
-            
-            if result.get('type') == 'select' and result.get('rows'):
-                # Convertir en format lisible
-                dicts = self._format_results(result)
-                return self._results_to_string(dicts)
-            
-            return f"✅ Opération {result['type']} réussie"
-            
-        except Exception as e:
-            return f"❌ Exception: {e}"
-    
-    def _format_results(self, result):
-        """Formate les résultats pour l'affichage"""
-        return rows_to_dicts(result)
-    
-    def _results_to_string(self, results, limit=10):
-        """Convertit les résultats en chaîne lisible"""
-        if not results:
-            return "Aucun résultat"
-        
-        output = []
-        for i, row in enumerate(results[:limit]):
-            row_str = ", ".join([f"{k}: {v}" for k, v in row.items()])
-            output.append(f"{i+1}. {row_str}")
-        
-        if len(results) > limit:
-            output.append(f"... et {len(results) - limit} lignes supplémentaires")
-        
-        return "\n".join(output)
-    
-    def save_conversation(self, session_id: str, role: str, content: str, metadata: dict = None):
-        """Sauvegarde un message de conversation"""
-        import json
-        
-        query = """
-            INSERT INTO chat_messages (session_id, role, content, metadata)
-            VALUES (?, ?, ?, ?)
-        """
-        
-        # Mettre à jour la session
-        self.db.execute("""
-            INSERT OR REPLACE INTO chat_sessions (session_id, last_active)
-            VALUES (?, CURRENT_TIMESTAMP)
-        """, [session_id])
-        
-        # Sauvegarder le message
-        self.db.execute(query, [
-            session_id,
-            role,
-            content,
-            json.dumps(metadata or {})
-        ])
-        
-        return {"success": True, "message": "Conversation sauvegardée"}
-    
-    def get_conversation_history(self, session_id: str, limit: int = 20):
-        """Récupère l'historique d'une conversation"""
-        result = self.db.execute("""
-            SELECT role, content, created_at
-            FROM chat_messages
-            WHERE session_id = ?
-            ORDER BY created_at DESC
-            LIMIT ?
-        """, [session_id, limit])
-        
-        if result['success']:
-            history = []
-            for row in reversed(result['rows']):  # Inverser pour ordre chronologique
-                history.append({
-                    "role": row[0],
-                    "content": row[1],
-                    "timestamp": row[2]
-                })
-            return history
-        
-        return []
-
-# Intégration LangChain
-gsql_tool = Tool(
-    name="GSQL Database",
-    func=GSQLTool().execute_query,
-    description="""
-    Utilisez cet outil pour interagir avec la base de données GSQL.
-    Formatez vos requêtes en SQL standard.
-    Exemples:
-    - "SELECT * FROM users WHERE age > 25"
-    - "INSERT INTO products (name, price) VALUES ('Laptop', 999.99)"
-    - "UPDATE orders SET status = 'completed' WHERE id = 123"
-    """
-)
-```
-
-Prompt Template pour agent GSQL
-
-```python
-GSQL_AGENT_PROMPT = PromptTemplate.from_template("""
-Vous êtes un assistant IA spécialisé dans les bases de données GSQL.
-
-Règles importantes:
-1. N'exécutez que des requêtes SQL valides
-2. Validez les données avant insertion/mise à jour
-3. Utilisez des transactions pour les opérations multiples
-4. Gérez proprement les erreurs SQL
-
-Contexte:
-{context}
-
-Historique de conversation:
-{history}
-
-Requête utilisateur: {input}
-
-Format de réponse attendu:
-- Si c'est une requête SELECT: affichez les résultats en tableau
-- Si c'est une modification: confirmez l'opération avec détails
-- En cas d'erreur: expliquez le problème et suggérez une solution
-
-Réponse:
-""")
-```
-
-📈 Patterns d'Intégration
-
-1. Application Web avec Flask
-
-```python
-from flask import Flask, jsonify, request
-from gsql.database import Database
-import os
-
-app = Flask(__name__)
-
-# Configuration
-DB_PATH = os.getenv("GSQL_DB_PATH", "./data/webapp.db")
-db = Database(db_path=DB_PATH)
-
-@app.route('/api/query', methods=['POST'])
-def execute_query():
-    """Endpoint pour exécuter des requêtes SQL"""
-    data = request.json
-    query = data.get('query')
-    params = data.get('params', [])
-    
-    try:
-        result = db.execute(query, params)
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 400
-
-@app.route('/api/data/<table>', methods=['GET'])
-def get_table_data(table):
-    """Récupère les données d'une table avec pagination"""
-    page = request.args.get('page', 1, type=int)
-    limit = request.args.get('limit', 100, type=int)
-    offset = (page - 1) * limit
-    
-    query = f"SELECT * FROM {table} LIMIT ? OFFSET ?"
-    result = db.execute(query, [limit, offset])
-    
-    return jsonify({
-        'table': table,
-        'page': page,
-        'limit': limit,
-        'data': rows_to_dicts(result),
-        'total': result.get('count', 0)
-    })
-
-if __name__ == '__main__':
-    app.run(debug=True, port=5000)
-```
-
-2. Analyse de données avec Pandas
-
-```python
-import pandas as pd
-from gsql.database import Database
-
-class GSQLDataAnalyzer:
-    """Analyseur de données GSQL avec Pandas"""
-    
-    def __init__(self, db_path):
-        self.db = Database(db_path=db_path)
-    
-    def query_to_dataframe(self, query, params=None):
-        """Exécute une requête et retourne un DataFrame"""
-        result = self.db.execute(query, params)
-        
-        if not result['success']:
-            raise Exception(f"Query failed: {result}")
-        
-        # Convertir en DataFrame
-        df = pd.DataFrame(
-            result['rows'],
-            columns=result['columns']
-        )
-        
-        return df
-    
-    def analyze_sales(self, start_date, end_date):
-        """Analyse les ventes sur une période"""
-        query = """
-            SELECT 
-                DATE(order_date) as date,
-                COUNT(*) as orders_count,
-                SUM(total) as revenue,
-                AVG(total) as avg_order_value,
-                COUNT(DISTINCT user_id) as unique_customers
-            FROM orders
-            WHERE order_date BETWEEN ? AND ?
-            GROUP BY DATE(order_date)
-            ORDER BY date
-        """
-        
-        df = self.query_to_dataframe(query, [start_date, end_date])
-        
-        # Analyses supplémentaires
-        summary = {
-            'total_orders': df['orders_count'].sum(),
-            'total_revenue': df['revenue'].sum(),
-            'avg_daily_revenue': df['revenue'].mean(),
-            'peak_day': df.loc[df['revenue'].idxmax(), 'date'] if not df.empty else None
-        }
-        
-        return df, summary
-    
-    def export_to_csv(self, table_name, output_path):
-        """Exporte une table en CSV"""
-        df = self.query_to_dataframe(f"SELECT * FROM {table_name}")
-        df.to_csv(output_path, index=False)
-        return output_path
-```
-
-3. Cache distribué avec Redis
-
-```python
-import redis
-import json
-from gsql.database import Database
-from functools import lru_cache
-
-class CachedGSQL:
-    """GSQL avec cache Redis"""
-    
-    def __init__(self, db_path, redis_url="redis://localhost:6379/0"):
-        self.db = Database(db_path=db_path)
-        self.redis = redis.from_url(redis_url)
-        self.cache_ttl = 300  # 5 minutes
-    
-    def execute_with_cache(self, query, params=None, cache_key=None):
-        """Exécute avec cache Redis"""
-        if cache_key is None:
-            cache_key = f"gsql:{hash(f'{query}{params}')}"
-        
-        # Vérifier le cache
-        cached = self.redis.get(cache_key)
-        if cached:
-            return json.loads(cached)
-        
-        # Exécuter la requête
-        result = self.db.execute(query, params)
-        
-        # Mettre en cache si c'est un SELECT réussi
-        if result.get('success') and result.get('type') == 'select':
-            self.redis.setex(
-                cache_key,
-                self.cache_ttl,
-                json.dumps(result)
-            )
-        
-        return result
-    
-    def invalidate_cache(self, pattern="gsql:*"):
-        """Invalide le cache pour un pattern"""
-        keys = self.redis.keys(pattern)
-        if keys:
-            self.redis.delete(*keys)
-        return len(keys)
-```
-
-🚨 Bonnes pratiques
-
-1. Gestion des connexions
-
-```python
-from contextlib import contextmanager
-
-@contextmanager
-def gsql_session(db_path=None):
-    """Context manager pour les sessions GSQL"""
-    db = Database(db_path=db_path or ":memory:")
-    try:
-        yield db
-    finally:
-        db.close()
-
-# Utilisation
-with gsql_session("./data/app.db") as db:
-    result = db.execute("SELECT * FROM users")
-    # La connexion se ferme automatiquement
-```
-
-2. Validation des requêtes
-
-```python
-def validate_sql_query(query):
-    """Valide une requête SQL avant exécution"""
-    forbidden_keywords = ['DROP DATABASE', 'TRUNCATE', 'ALTER SYSTEM']
-    
-    query_upper = query.upper()
-    
-    # Vérifier les mots-clés interdits
-    for keyword in forbidden_keywords:
-        if keyword in query_upper:
-            return False, f"Keyword '{keyword}' not allowed"
-    
-    # Vérifier la syntaxe basique
-    if 'SELECT' in query_upper and 'FROM' not in query_upper:
-        return False, "SELECT without FROM clause"
-    
-    return True, "Query is valid"
-```
-
-3. Logging et monitoring
-
-```python
-import logging
-from datetime import datetime
-
-class MonitoredGSQL:
-    """GSQL avec monitoring"""
-    
-    def __init__(self, db_path):
-        self.db = Database(db_path=db_path)
-        self.logger = logging.getLogger('gsql.monitor')
-        self.query_log = []
-    
-    def execute_monitored(self, query, params=None):
-        """Exécute avec monitoring"""
-        start_time = datetime.now()
-        
-        try:
-            result = self.db.execute(query, params)
-            execution_time = (datetime.now() - start_time).total_seconds()
-            
-            # Log
-            log_entry = {
-                'query': query,
-                'params': params,
-                'execution_time': execution_time,
-                'success': result.get('success'),
-                'timestamp': start_time.isoformat()
-            }
-            
-            self.query_log.append(log_entry)
-            
-            # Alert si trop lent
-            if execution_time > 1.0:  # > 1 seconde
-                self.logger.warning(f"Slow query: {query[:100]} took {execution_time:.3f}s")
-            
-            return result
-            
-        except Exception as e:
-            self.logger.error(f"Query failed: {query[:100]} - Error: {e}")
-            raise
-```
-
-📦 Déploiement
-
-Dockerfile
-
-```dockerfile
-FROM python:3.9-slim
-
-WORKDIR /app
-
-# Installer les dépendances
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copier l'application
-COPY . .
-
-# Variables d'environnement
-ENV GSQL_DB_PATH=/data/app.db
-ENV PYTHONPATH=/app
-
-# Créer le volume de données
-VOLUME /data
-
-# Exécuter l'application
-CMD ["python", "app/main.py"]
-```
-
-docker-compose.yml
-
-```yaml
-version: '3.8'
-
-services:
-  gsql-app:
-    build: .
-    ports:
-      - "8000:8000"
-    volumes:
-      - gsql-data:/data
-    environment:
-      - GSQL_DB_PATH=/data/app.db
-      - REDIS_URL=redis://redis:6379/0
-    depends_on:
-      - redis
-  
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-  
-  monitor:
-    image: grafana/grafana:latest
-    ports:
-      - "3000:3000"
-    volumes:
-      - grafana-data:/var/lib/grafana
-
-volumes:
-  gsql-data:
-  grafana-data:
-```
-
-🔍 Dépannage
-
-Problèmes courants et solutions
-
-1. "table already exists"
-   ```python
-   # Utiliser IF NOT EXISTS
-   db.execute("CREATE TABLE IF NOT EXISTS users (...)")
-   ```
-2. "no such column"
-   ```python
-   # Vérifier la structure de la table
-   result = db.execute("PRAGMA table_info(users)")
-   print(f"Colonnes: {result['rows']}")
-   ```
-3. Transactions non fonctionnelles
-   ```python
-   # Utiliser des SAVEPOINTs à la place
-   db.execute("SAVEPOINT my_transaction")
-   # ... opérations ...
-   db.execute("RELEASE SAVEPOINT my_transaction")
-   ```
-4. Performance lente
-   ```python
-   # Activer le WAL et optimiser
-   db = Database(enable_wal=True, buffer_pool_size=500)
-   db.execute("PRAGMA journal_mode = WAL")
-   db.execute("PRAGMA synchronous = NORMAL")
-   ```
-
-📊 Benchmarks
-
-```python
-import timeit
-
-def benchmark_gsql():
-    """Benchmark des performances GSQL"""
-    
-    setup = """
-from gsql.database import Database
+# Initialisation
 db = Database(db_path=":memory:")
-db.execute("CREATE TABLE test (id INTEGER, value REAL, text TEXT)")
-    """
-    
-    stmt = """
-for i in range(100):
-    db.execute(f"INSERT INTO test VALUES ({i}, {i*1.5}, 'text_{i}')")
-    """
-    
-    time = timeit.timeit(stmt, setup=setup, number=1)
-    print(f"100 INSERT: {time:.3f}s ({time/100:.4f}s par insertion)")
+
+# Créer table
+db.execute("""
+    CREATE TABLE users (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        email TEXT UNIQUE
+    )
+""")
+
+# Insérer données
+db.execute("INSERT INTO users (name, email) VALUES (?, ?)", ["Alice", "alice@example.com"])
+
+# Requêter
+result = db.execute("SELECT * FROM users", use_cache=True)
+print(f"Résultats: {result['rows']}")
+
+# Fermer
+db.close()
 ```
 
+📚 Guide Complet
+
+1. Initialisation
+
+```python
+from gsql.database import Database
+
+# Base en mémoire (recommandé pour les tests)
+db = Database(db_path=":memory:")
+
+# Base fichier avec options
+db = Database(
+    db_path="/chemin/vers/ma_base.db",
+    base_dir="~/.gsql",          # Répertoire de configuration
+    buffer_pool_size=100,        # Taille du cache
+    enable_wal=True,             # Mode WAL pour meilleures performances
+    auto_recovery=True           # Récupération automatique
+)
+```
+
+2. Commandes SQL Standards
+
+```python
+# CREATE TABLE avec contraintes
+db.execute("""
+    CREATE TABLE products (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        price REAL CHECK(price > 0),
+        category TEXT,
+        stock INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+""")
+
+# INSERT avec paramètres
+db.execute(
+    "INSERT INTO products (name, price, category) VALUES (?, ?, ?)",
+    ["Laptop", 999.99, "Electronics"]
+)
+
+# SELECT avec JOIN
+result = db.execute("""
+    SELECT p.name, p.price, c.description
+    FROM products p
+    JOIN categories c ON p.category = c.id
+    WHERE p.stock > 0
+    ORDER BY p.price DESC
+    LIMIT 10
+""")
+
+# UPDATE
+db.execute("UPDATE products SET price = price * 0.9 WHERE category = 'Electronics'")
+
+# DELETE
+db.execute("DELETE FROM products WHERE stock = 0")
+```
+
+3. Commandes Spéciales GSQL
+
+```sql
+-- Dans le shell interactif ou via execute()
+SHOW TABLES;      -- Liste toutes les tables
+DESCRIBE users;   -- Affiche le schéma d'une table
+STATS;            -- Affiche les statistiques système
+VACUUM;           -- Optimise la base de données
+HELP;             -- Affiche l'aide
+```
+
+4. Transactions (Workaround Nécessaire)
+
+```python
+# ❌ NE PAS UTILISER (bug connu)
+# db.begin_transaction()
+# db.commit_transaction(tid)
+
+# ✅ UTILISER CE WORKAROUND
+# Début transaction
+db.execute("BEGIN IMMEDIATE TRANSACTION")
+
+try:
+    # Opérations transactionnelles
+    db.execute("UPDATE accounts SET balance = balance - 100 WHERE id = 1")
+    db.execute("UPDATE accounts SET balance = balance + 100 WHERE id = 2")
+    
+    # Savepoint (workaround)
+    db.execute("SAVEPOINT before_validation")
+    
+    # Validation
+    db.execute("INSERT INTO audit_log (action) VALUES ('transfer')")
+    
+    # Commit
+    db.execute("COMMIT")
+    print("Transaction réussie")
+    
+except Exception as e:
+    # Rollback en cas d'erreur
+    db.execute("ROLLBACK")
+    print(f"Transaction échouée: {e}")
+```
+
+5. Cache et Performance
+
+```python
+# Activation du cache (défaut: True)
+result = db.execute("SELECT * FROM large_table WHERE category = ?", 
+                    params=["books"], 
+                    use_cache=True)
+
+# Performance typique:
+# - Première exécution: 100ms
+# - Cache hit: 5ms (20x amélioration)
+
+# Désactiver le cache pour requêtes uniques
+result = db.execute("DELETE FROM temp_table", use_cache=False)
+```
+
+6. Index Avancés
+
+```python
+# Création d'index (doit être séparé de CREATE TABLE)
+db.execute("CREATE INDEX idx_products_category ON products(category)")
+db.execute("CREATE INDEX idx_products_price ON products(price)")
+
+# Index composite
+db.execute("CREATE INDEX idx_products_category_price ON products(category, price)")
+
+# Vérifier les index existants
+result = db.execute("SELECT name FROM sqlite_master WHERE type='index'")
+```
+
+7. Fonctions Intégrées
+
+```python
+# Fonctions mathématiques
+result = db.execute("SELECT pow(2, 3), sqrt(16), ceil(4.3), floor(4.7)")
+
+# Fonctions texte
+result = db.execute("SELECT trim('  hello  '), substr('hello', 2, 3), instr('hello', 'll')")
+
+# Fonctions date
+result = db.execute("SELECT date(), time(), datetime(), julianday('now')")
+```
+
+🔧 Shell Interactif
+
+Le shell GSQL offre une expérience riche :
+
+```bash
+$ gsql
+GSQL Interactive Shell v3.0.9
+Type 'help' for commands, 'exit' to quit
+
+gsql> .tables
+_users     products   orders     logs
+
+gsql> SELECT * FROM users LIMIT 3;
+ id | name  | email
+----|-------|-----------------
+ 1  | Alice | alice@test.com
+ 2  | Bob   | bob@test.com
+
+gsql> .stats
+Queries executed: 42
+Cache hits: 38 (90.5%)
+Active transactions: 0
+
+gsql> .help
+Available commands:
+  .tables     - List all tables
+  .schema     - Show table schema
+  .stats      - Show database statistics
+  .vacuum     - Optimize database
+  .backup     - Create backup
+  .help       - Show this help
+  .exit/.quit - Exit shell
+```
+
+Fonctionnalités du Shell
+
+· Auto-complétion : Tables, colonnes, mots-clés SQL
+· Historique : Commandes persistantes entre sessions
+· Couleurs : Sortie colorée pour meilleure lisibilité
+· Mode multiligne : Support des requêtes multi-lignes
+· Export : Résultats formatés en tableau
+
+📊 Performance et Benchmark
+
+Résultats des Tests
+
+Opération Performance Notes
+INSERT 3,000 rows/sec En mémoire, batch de 100
+SELECT avec cache 5ms 20x plus rapide que sans cache
+JOIN complexe < 100ms 1,000 rows, 3 tables
+Index lookup < 1ms B+Tree avec 10,000 entries
+
+Optimisations Recommandées
+
+```python
+# 1. Utiliser le cache pour requêtes répétitives
+db.execute("SELECT * FROM config", use_cache=True)
+
+# 2. Créer des index sur les colonnes fréquemment interrogées
+db.execute("CREATE INDEX idx_users_email ON users(email)")
+
+# 3. Utiliser des transactions pour INSERT multiples
+db.execute("BEGIN TRANSACTION")
+for i in range(1000):
+    db.execute("INSERT INTO data VALUES (?, ?)", [i, f"value_{i}"])
+db.execute("COMMIT")
+
+# 4. Activer WAL pour meilleure concurrence
+db = Database(enable_wal=True)
+```
+
+🐛 Bugs Connus et Solutions
+
+Bug 1: Transactions Natives
+
+Problème: db.begin_transaction() ne démarre pas de transaction SQLite
+Solution:
+
+```python
+# Workaround
+db.execute("BEGIN TRANSACTION")
+# ... opérations ...
+db.execute("COMMIT")
+```
+
+Bug 2: Savepoints
+
+Problème: Savepoints créés mais non reconnus par SQLite
+Solution:
+
+```python
+# Workaround
+db.execute("SAVEPOINT sp1")
+# ... opérations ...
+db.execute("ROLLBACK TO SAVEPOINT sp1")
+```
+
+Bug 3: DROP TABLE sur Tables par Défaut
+
+Problème: DROP TABLE IF EXISTS users échoue même si table existe
+Solution: Éviter de supprimer les tables par défaut
+
+Bug 4: INDEX dans CREATE TABLE
+
+Problème: Syntaxe CREATE TABLE ... INDEX non supportée
+Solution: Créer les index séparément
+
+```python
+# ❌ Incorrect
+CREATE TABLE t (id INT, INDEX idx(id))
+
+# ✅ Correct
+CREATE TABLE t (id INT)
+CREATE INDEX idx ON t(id)
+```
+
+🔮 Améliorations Futures
+
+Court Terme (v3.1)
+
+· Correction des bugs de transaction
+· Support complet des savepoints
+· Amélioration de DROP TABLE
+· Documentation API complète
+· Tests unitaires étendus
+
+Moyen Terme (v3.5)
+
+· Support PostgreSQL en plus de SQLite
+· Réplication maître-esclave
+· Backup/restore automatisés
+· Monitoring intégré
+· Interface web admin
+
+Long Terme (v4.0)
+
+· Support du clustering
+· Sharding automatique
+· Compression des données
+· Chiffrement transparent
+· Machine Learning intégré
+
+🧪 Tests et Qualité
+
+Exécuter les Tests
+
+```bash
+# Tests unitaires
+python -m pytest tests/
+
+# Tests de performance
+python tests/performance.py
+
+# Tests de charge
+python tests/stress_test.py
+
+# Couverture de code
+coverage run -m pytest tests/
+coverage report
+```
+
+Standards de Code
+
+```bash
+# Vérification PEP8
+flake8 gsql/
+
+# Vérification types
+mypy gsql/
+
+# Tests de sécurité
+bandit -r gsql/
+```
+
+🤝 Contribution
+
+Les contributions sont les bienvenues ! Voici comment contribuer :
+
+1. Signaler un bug : Ouvrir une issue avec un cas de test reproductible
+2. Proposer une fonctionnalité : Décrire le cas d'usage et l'API proposée
+3. Soumettre un correctif : Pull request avec tests et documentation
+4. Améliorer la documentation : Corrections, traductions, exemples
+
+Structure du Projet
+
+```
+gsql/
+├── __init__.py              # Point d'entrée
+├── database.py              # Classe Database principale
+├── storage.py               # Moteur de stockage SQLite
+├── executor.py              # Exécuteur de requêtes
+├── parser.py                # Parser SQL
+├── exceptions.py            # Exceptions personnalisées
+├── index.py                 # Index B+Tree et Hash
+├── btree.py                 # Implémentation B+Tree
+├── functions/               # Fonctions utilisateur
+├── nlp/                     # Traitement langage naturel
+├── storage/                 # Modules de stockage
+├── tests/                   # Tests
+└── cli.py                   Interface en ligne de commande
+```
+
+🙏 Remerciements
+
+· SQLite : Pour le moteur de base de données robuste
+· NLTK : Pour le traitement du langage naturel
+· La communauté Python : Pour les outils et bibliothèques
+
 ---
 
-📚 Ressources
+GSQL - La puissance de SQL, la simplicité du langage naturel
 
-· Documentation officielle : python -c "import gsql; help(gsql.database.Database)"
-· Code source : https://github.com/gopu-inc/gsql
-· Exemples complets : Voir le dossier /gsql/tests/
-· Support : Issues GitHub ou communauté Discord
-
----
-
-GSQL v3.0.9 est prêt pour la production avec une API simple, des performances SQLite natives, et une intégration facile avec les écosystèmes Python modernes. 🚀
-### 3. Kubernetes
-
-Des manifestes complets (`Deployment`, `Service`, `ConfigMap`, `PVC`) sont fournis pour un déploiement sur cluster Kubernetes.
-
-### 4. Scripts d'automatisation
-Un script complet `deploy.sh` et un script de vérification de santé `health_check.py` sont inclus pour automatiser le cycle de vie de l'application.
+Dernière mise à jour : v3.0.9 - Décembre 2025
 
 ---
 
