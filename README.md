@@ -4,6 +4,7 @@
 
 > **Développé par gopu.inc | Statut : Bêta Active - En développement**
 
+[![WhatsApp](https://img.shields.io/badge/Whatsappi-chain-25D366?logo=whatsapp&logoColor=white)](https://chat.whatsapp.com/F7NGsDVYDevEISVKTqpGZ1)
 [![PyPI Version](https://img.shields.io/pypi/v/gsql?style=flat-square&logo=pypi&color=006dad)](https://pypi.org/project/gsql/)
 [![Python Versions](https://img.shields.io/pypi/pyversions/gsql?style=flat-square&logo=python&color=3776ab)](https://pypi.org/project/gsql/)
 [![Conda Version](https://img.shields.io/conda/v/gopu-inc/gsql?logo=anaconda&color=44a833&style=flat-square)](https://anaconda.org/gopu-inc/gsql)
@@ -199,6 +200,173 @@ coverage run -m pytest tests/
 coverage report
 flake8 gsql/  # Vérification du style PEP8
 ```
+GSQL - Une Interface Python Moderne pour SQLite
+
+🎯 Introduction
+
+GSQL est une surcouche Python avancée pour SQLite qui transforme l'expérience de travail avec les bases de données SQLite. Elle ajoute des fonctionnalités modernes tout en conservant la robustesse et la simplicité de SQLite.
+
+Pourquoi GSQL existe ?
+Parce que SQLite est incroyablement puissant, mais son interface en Python manque parfois de fonctionnalités modernes. GSQL comble ce vide en ajoutant :
+
+· Un shell interactif avec auto-complétion
+· Un cache intelligent pour les performances
+· Des commandes spéciales pour la gestion quotidienne
+· Une meilleure gestion des erreurs
+
+📊 Statut Actuel du Projet
+
+Version 3.9.7 (Beta Active)
+
+⚠️ Important : GSQL est en développement actif et présente encore des bugs connus. Il n'est pas recommandé pour les environnements de production critiques.
+
+Bugs Connus et Workarounds
+
+1. API Transactionnelle : db.begin_transaction() ne fonctionne pas correctement
+   · Solution : Utiliser les commandes SQL natives : db.execute("BEGIN TRANSACTION")
+2. Parsing des guillemets : Problèmes avec les caractères spéciaux dans le shell
+   · Solution : Préférer les scripts Python pour les requêtes complexes
+3. Backends expérimentaux : Les modules NLP et stockage alternatif sont instables
+   · Solution : S'en tenir au backend SQLite principal
+
+🚀 Fonctionnalités Clés
+
+✅ Fonctionnalités Stables
+
+· Shell interactif : Auto-complétion, historique, coloration syntaxique
+· Cache LRU : Améliore les performances jusqu'à 20x pour les requêtes répétitives
+· Commandes spéciales : .tables, .schema, STATS, VACUUM, HELP
+· Compatibilité totale : Utilisez vos bases SQLite existantes sans modification
+· Gestion d'erreurs avancée : Messages clairs avec suggestions
+
+🔧 Fonctionnalités Expérimentales (Beta)
+
+· Module NLP : Traduction langage naturel → SQL
+· Backends alternatifs : YAML, mémoire (non recommandés pour production)
+· Migration automatique entre backends
+
+🛠️ Architecture Technique
+
+```
+gsql/
+├── database.py          # Classe Database principale
+├── storage.py           # Abstraction du stockage SQLite
+├── executor.py          # Exécuteur et cache des requêtes
+├── cli.py               # Interface en ligne de commande
+├── parser.py            # Parseur SQL amélioré
+├── exceptions.py        # Exceptions personnalisées
+├── functions/           # Fonctions utilisateur
+├── nlp/                 # Traitement langage naturel (beta)
+└── tests/               # Suite de tests complète
+```
+
+📦 Installation Rapide
+
+```bash
+# Installation standard
+pip install gsql
+
+# Mode shell interactif
+gsql
+
+# Dans un script Python
+from gsql.database import Database
+db = Database(db_path=":memory:")
+```
+
+💡 Cas d'Utilisation
+
+Pour les Développeurs
+
+· Prototypage rapide avec base en mémoire
+· Interface CLI pour explorer les données
+· Gestion simplifiée des schémas
+
+Pour les Administrateurs
+
+· Monitoring avec commande STATS
+· Optimisation automatique avec VACUUM
+· Sauvegarde/restauration intégrées
+
+Pour les Projets en Production
+
+· Cache intelligent pour les performances
+· Gestion robuste des erreurs
+· Compatibilité descendante avec SQLite
+
+🔍 Comparaison avec SQLite Brut
+
+Fonctionnalité SQLite Brut GSQL
+Shell interactif Basique Avancé avec auto-complétion
+Cache de requêtes Manuel Automatique (LRU)
+Gestion des erreurs Messages techniques Messages clairs avec solutions
+Commandes spéciales Non Oui (.tables, STATS, etc.)
+Performance SELECT Standard Jusqu'à 20x plus rapide (cache)
+Courbe d'apprentissage Raide Progressive
+
+🚧 Limitations Actuelles
+
+1. Pas de transactions natives (utilisation des commandes SQL brutes requise)
+2. Parser limité pour les requêtes complexes dans le shell
+3. Modules NLP encore expérimentaux
+4. Documentation en cours d'amélioration
+
+🌟 Feuille de Route
+
+Court Terme (v3.10)
+
+· Correction des bugs transactionnels
+· Amélioration du parser SQL
+· Documentation complète
+
+Moyen Terme (v4.0)
+
+· Support PostgreSQL
+· Interface web d'administration
+· Réplication simple
+
+🤝 Contribuer
+
+GSQL est un projet open source qui a besoin de votre aide !
+
+Bugs prioritaires à corriger :
+
+1. API transactionnelle (begin_transaction())
+2. Parser des guillemets dans le shell
+3. Problèmes de cache après DROP TABLE
+
+Comment contribuer :
+
+```bash
+git clone https://github.com/gopu-inc/gsql.git
+cd gsql
+pip install -e .[dev]
+pytest tests/  # Exécuter les tests
+```
+
+📚 Ressources
+
+· Documentation : GitHub Wiki
+· Issues : GitHub Issues
+· Code Source : GitHub Repository
+· Package : PyPI
+
+💬 Discussion
+
+Questions fréquentes :
+
+Q : Puis-je utiliser GSQL en production ?
+R : Pas encore pour les cas critiques. Utilisez-le pour le développement et les tests.
+
+Q : Comment gérer les transactions ?
+R : Utilisez le workaround : db.execute("BEGIN TRANSACTION") au lieu de db.begin_transaction()
+
+Q : GSQL remplace-t-il SQLite ?
+R : Non, GSQL s'appuie sur SQLite et l'améliore avec des fonctionnalités supplémentaires.
+
+[![Documentation](https://img.shields.io/badge/docs-gsql-blue)](https://gopu-inc.github.io/gsql/#home)
+[![WhatsApp](https://img.shields.io/badge/WhatsApp-GOPU.inc-25D366?logo=whatsapp&logoColor=white)](https://chat.whatsapp.com/F7NGsDVYDevEISVKTqpGZ1)
+
 
 Comment contribuer ?
 
