@@ -1,4 +1,4 @@
-<img width="128" height="128" alt="GSQL Logo" src="https://github.com/user-attachments/assets/9cf47e59-c2f3-49d9-a7c2-82771d5363bd" />
+<img width="280" height="280" alt="GSQL Logo" src="https://github.com/user-attachments/assets/9cf47e59-c2f3-49d9-a7c2-82771d5363bd" />
 
 # GSQL - Une interface Python avancée pour SQLite 🔧
 
