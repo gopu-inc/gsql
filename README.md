@@ -3,8 +3,13 @@
 # GSQL - Une interface Python avancée pour SQLite 🔧
 
 > **Développé par gopu.inc | Statut : Bêta Active - En développement**
-
-[![WhatsApp](https://img.shields.io/badge/Whatsappi-chain-25D366?logo=whatsapp&logoColor=white)](https://chat.whatsapp.com/F7NGsDVYDevEISVKTqpGZ1)
+<!-- Badge animé type GitHub -->
+[![New Release](https://img.shields.io/badge/🎉_New_Release_v3.9.7-FF4081?style=for-the-badge&logo=gift&logoColor=white&labelColor=1a1a1a&color=FF4081)](https://gopu-inc.github.io)
+[![GSQL Powered](https://img.shields.io/badge/🛠️_GSQL_Powered-4169E1?style=for-the-badge&logo=database&logoColor=white&labelColor=0A2540&color=4169E1)](https://gopu-inc.github.io/gsql)
+[![Open Source](https://img.shields.io/badge/GP_Open_Source-6F42C1?style=for-the-badge&logo=opensourceinitiative&logoColor=white&labelColor=1a1a1a&color=6F42C1)](https://github.com/gopu-inc)
+[![Stars](https://img.shields.io/badge/⭐_Stars-100+-FFD700?style=for-the-badge&logo=github&logoColor=black&labelColor=1a1a1a&color=FFD700&animation=glow)](https://github.com/gopu-inc/gsql)
+[![GOPU.inc](https://img.shields.io/badge/GP_GOPU.inc-0A2540?style=for-the-badge&logo=starship&logoColor=white&labelColor=0A2540&color=FF6B35)](https://gopu-inc.github.io)
+[![WhatsApp](https://img.shields.io/badge/Whatsapp-chain-25D366?logo=whatsapp&logoColor=white)](https://chat.whatsapp.com/F7NGsDVYDevEISVKTqpGZ1)
 [![PyPI Version](https://img.shields.io/pypi/v/gsql?style=flat-square&logo=pypi&color=006dad)](https://pypi.org/project/gsql/)
 [![Python Versions](https://img.shields.io/pypi/pyversions/gsql?style=flat-square&logo=python&color=3776ab)](https://pypi.org/project/gsql/)
 [![Conda Version](https://img.shields.io/conda/v/gopu-inc/gsql?logo=anaconda&color=44a833&style=flat-square)](https://anaconda.org/gopu-inc/gsql)
