@@ -77,9 +77,9 @@ jobs:
           push: true
           tags: |
             ceoseshell/gsql:latest
-            ceoseshell/gsql:${{ steps.docker-tag.outputs.DOCKER_TAG }}
+            ceoseshell/gsql:3.9.1
             ceoseshell/gsql:3.9.2
-            ceoseshell/gsql:${{ steps.extract-version.outputs.CODE_VERSION }}
+            ceoseshell/gsql:3.9.3
           labels: |
             version=${{ steps.extract-version.outputs.CODE_VERSION }}
             build.date=${{ github.event.head_commit.timestamp }}
