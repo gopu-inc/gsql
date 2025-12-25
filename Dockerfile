@@ -1,7 +1,7 @@
 FROM python:3.9
 
-ARG VERSION=3.1.0
-LABEL version="3.1.0"
+ARG VERSION=3.1.1
+LABEL version="3.1.1"
 
 WORKDIR /app
 
@@ -38,6 +38,7 @@ USER gsqluser
 # Variables d'environnement
 ENV NLTK_DATA=/home/gsqluser/nltk_data
 
+EXPOSE 1212
 # Point d'entrée
 ENTRYPOINT ["gsql"]
 CMD ["--help"]
