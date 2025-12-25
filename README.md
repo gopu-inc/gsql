@@ -2,6 +2,8 @@
 
 > **GSQL - Système de Base de Données SQL Complet 🚀**
 > **powered by gopu.inc,**
+
+![GSQL](https://gsql-badge-service.onrender.com/badge)
 [![GSQL-Datastor](https://img.shields.io/badge/GSQL-Datastor-356fa5?style=for-the-badge)](https://github.com/gopu-inc/gsql)
 ![PyPI - Daily Downloads](https://img.shields.io/pypi/dd/gsql)
 [![Downloads](https://static.pepy.tech/personalized-badge/gsql?period=total&units=international_system&left_color=black&right_color=blue&left_text=Downloads)](https://pepy.tech/project/gsql)
