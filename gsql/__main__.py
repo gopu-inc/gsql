@@ -26,7 +26,7 @@ import shutil
 
 # ==================== IMPORTS ====================
 
-__version__ = "3.2.0"
+__version__ = "4.0.0"
 
 # Configuration avancée du logging
 class EnhancedLogger:
@@ -537,7 +537,10 @@ Type {help_cmd} for commands, {exit_cmd} to quit
     def _setup_shell(self):
         """Configure le shell"""
         # Term size detection
-        self.terminal_width = shutil.get_terminal_size().columns
+        try:
+            self.terminal_width = shutil.get_terminal_size().columns
+        except:
+            self.terminal_width = 80
         
         # Prompt personnalisé
         self._update_prompt()
@@ -938,10 +941,10 @@ Type {help_cmd} for commands, {exit_cmd} to quit
     
     def _cmd_help(self, args):
         """Affiche l'aide détaillée"""
-        help_text = f"""
-{EnhancedColors.primary("GSQL Enhanced Shell - Help", 'bold')}
+        help_text = """
+GSQL Enhanced Shell - Help
 
-{EnhancedColors.secondary("TRANSACTION COMMANDS:", 'underline')}
+TRANSACTION COMMANDS:
   BEGIN [TRANSACTION]             Start deferred transaction
   BEGIN IMMEDIATE TRANSACTION     Start with immediate lock
   BEGIN EXCLUSIVE TRANSACTION     Start with exclusive lock
@@ -951,7 +954,7 @@ Type {help_cmd} for commands, {exit_cmd} to quit
   ROLLBACK TO SAVEPOINT name      Rollback to savepoint
   RELEASE SAVEPOINT name          Release savepoint
 
-{EnhancedColors.secondary("DOT COMMANDS:", 'underline')}
+DOT COMMANDS:
   .tables [pattern]               List tables (optionally filtered)
   .schema <table>                 Show table structure
   .stats                          Detailed database statistics
@@ -969,25 +972,25 @@ Type {help_cmd} for commands, {exit_cmd} to quit
   .clear                          Clear screen
   .exit / .quit                   Exit GSQL
 
-{EnhancedColors.secondary("THEMES AVAILABLE:", 'underline')}
+THEMES AVAILABLE:
   modern, ocean, forest, retro, dark, light
 
-{EnhancedColors.secondary("EXAMPLES:", 'underline')}
+EXAMPLES:
   .export csv users.csv           # Export table to CSV
   .import data.json mytable       # Import JSON into table
   .theme ocean                    # Switch to ocean theme
   .config max_display_rows 100    # Show more rows
   .prompt "gsql[TX:%d] > "        # Custom prompt with TX count
 
-{EnhancedColors.secondary("KEYBOARD SHORTCUTS:", 'underline')}
+KEYBOARD SHORTCUTS:
   Ctrl+C        Cancel current operation
   Ctrl+D        Exit shell
   Tab           Auto-completion
   Up/Down       Navigate history
   Ctrl+R        Search history
   Ctrl+L        Clear screen
-        """
-        print(help_text.strip())
+"""
+        print(EnhancedColors.primary(help_text.strip(), 'bold'))
     
     def _cmd_exit(self, args):
         """Quitte le shell avec vérification des transactions"""
@@ -1667,26 +1670,33 @@ def main():
     
     import argparse
     
+    # Créer l'epilog sans f-string multiligne avec backslash
+    epilog_parts = [
+        "",
+        "Examples:",
+        "  gsql                    # Start enhanced interactive shell",
+        "  gsql mydb.db            # Open specific database",
+        "  gsql --theme ocean      # Start with ocean theme",
+        "  gsql --no-color         # Disable colors",
+        "  gsql --verbose          # Verbose logging",
+        "",
+        "Features:",
+        "  • Beautiful color themes (modern, ocean, forest, retro)",
+        "  • Intelligent auto-completion with context awareness",
+        "  • Real-time transaction monitoring",
+        "  • Advanced query formatting",
+        "  • Session statistics and history",
+        "  • Export/import capabilities",
+        "  • Customizable prompt and configuration",
+        ""
+    ]
+    
+    epilog = "\n".join(epilog_parts)
+    
     parser = argparse.ArgumentParser(
         description=f"GSQL v{__version__} - Enhanced Interactive Shell",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=f"""
-{EnhancedColors.primary("Examples:", 'bold')}
-  {EnhancedColors.highlight("gsql")}                    # Start enhanced interactive shell
-  {EnhancedColors.highlight("gsql mydb.db")}            # Open specific database
-  {EnhancedColors.highlight("gsql --theme ocean")}      # Start with ocean theme
-  {EnhancedColors.highlight("gsql --no-color")}         # Disable colors
-  {EnhancedColors.highlight("gsql --verbose")}          # Verbose logging
-
-{EnhancedColors.primary("Features:", 'bold')}
-  • Beautiful color themes (modern, ocean, forest, retro)
-  • Intelligent auto-completion with context awareness
-  • Real-time transaction monitoring
-  • Advanced query formatting
-  • Session statistics and history
-  • Export/import capabilities
-  • Customizable prompt and configuration
-        """
+        epilog=epilog
     )
     
     parser.add_argument(
