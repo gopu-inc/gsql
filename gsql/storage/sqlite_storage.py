@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 GSQL Storage Engine Complete - SQLite avec Buffer Pool, Transactions et Auto-Recovery
+Version corrigée - Décembre 2024
 """
 
 import os
@@ -146,44 +147,52 @@ class TransactionManager:
             tid = self.transaction_counter
             self.transaction_counter += 1
 
-            # Définir le niveau d'isolation
-            isolation_sql = {
-                "DEFERRED": "BEGIN DEFERRED TRANSACTION",
-                "IMMEDIATE": "BEGIN IMMEDIATE TRANSACTION", 
-                "EXCLUSIVE": "BEGIN EXCLUSIVE TRANSACTION"
-            }.get(isolation_level, "BEGIN")
-
             try:
+                # Définir le niveau d'isolation
+                isolation_sql = {
+                    "DEFERRED": "BEGIN DEFERRED TRANSACTION",
+                    "IMMEDIATE": "BEGIN IMMEDIATE TRANSACTION", 
+                    "EXCLUSIVE": "BEGIN EXCLUSIVE TRANSACTION"
+                }.get(isolation_level.upper(), "BEGIN")
+                
                 self.storage._execute_raw(isolation_sql)
+                
+                self.active_transactions[tid] = {
+                    'start_time': time.time(),
+                    'isolation': isolation_level,
+                    'changes': {},
+                    'savepoints': [],
+                    'state': 'ACTIVE'
+                }
+
+                logger.debug(f"Transaction {tid} started ({isolation_level})")
+                return tid
+
             except Exception as e:
+                # Réinitialiser le compteur si échec
+                self.transaction_counter -= 1
                 raise TransactionError(f"Failed to begin transaction: {e}")
-
-            self.active_transactions[tid] = {
-                'start_time': time.time(),
-                'isolation': isolation_level,
-                'changes': {},
-                'savepoints': [],
-                'state': 'ACTIVE'
-            }
-
-            logger.debug(f"Transaction {tid} started ({isolation_level})")
-            return tid
 
     def commit(self, tid: int) -> bool:
         """Valide une transaction"""
         with self.lock:
             if tid not in self.active_transactions:
-                raise TransactionError(f"Transaction {tid} not found")
+                raise TransactionError(f"Transaction {tid} not found or already finished")
 
             trans = self.active_transactions[tid]
+            
+            # Vérifier si déjà terminée
+            if trans['state'] != 'ACTIVE':
+                raise TransactionError(f"Transaction {tid} is already {trans['state']}")
 
             # Vérifier le timeout
             if time.time() - trans['start_time'] > self.transaction_timeout:
                 self.rollback(tid)
-                raise TransactionError(f"Transaction {tid} timeout")
+                raise TransactionError(f"Transaction {tid} timeout after {self.transaction_timeout}s")
 
             try:
                 self.storage._execute_raw("COMMIT")
+                trans['state'] = 'COMMITTED'
                 logger.debug(f"Transaction {tid} committed")
 
                 # Nettoyer les métadonnées de la transaction
@@ -196,7 +205,13 @@ class TransactionManager:
                 return True
 
             except Exception as e:
-                self.rollback(tid)
+                # En cas d'erreur, rollback automatique
+                try:
+                    self.storage._execute_raw("ROLLBACK")
+                except:
+                    pass
+                
+                del self.active_transactions[tid]
                 raise TransactionError(f"Commit failed: {e}")
 
     def rollback(self, tid: int, to_savepoint: str = None) -> bool:
@@ -205,12 +220,19 @@ class TransactionManager:
             if tid not in self.active_transactions:
                 raise TransactionError(f"Transaction {tid} not found")
 
+            trans = self.active_transactions[tid]
+            
             try:
                 if to_savepoint:
+                    # Vérifier que le savepoint existe
+                    if to_savepoint not in trans['savepoints']:
+                        raise TransactionError(f"Savepoint '{to_savepoint}' not found")
+                    
                     self.storage._execute_raw(f"ROLLBACK TO SAVEPOINT {to_savepoint}")
                     logger.debug(f"Transaction {tid} rolled back to {to_savepoint}")
                 else:
                     self.storage._execute_raw("ROLLBACK")
+                    trans['state'] = 'ROLLED_BACK'
                     logger.debug(f"Transaction {tid} rolled back")
 
                     # Nettoyer
@@ -219,17 +241,25 @@ class TransactionManager:
                 return True
 
             except Exception as e:
+                # En cas d'échec du rollback, marquer comme corrompue
+                trans['state'] = 'CORRUPTED'
                 raise TransactionError(f"Rollback failed: {e}")
 
     def savepoint(self, tid: int, name: str) -> bool:
         """Crée un savepoint dans la transaction"""
         with self.lock:
             if tid not in self.active_transactions:
-                return False
+                raise TransactionError(f"Transaction {tid} not found")
+
+            trans = self.active_transactions[tid]
+            
+            if trans['state'] != 'ACTIVE':
+                raise TransactionError(f"Cannot create savepoint, transaction is {trans['state']}")
 
             try:
                 self.storage._execute_raw(f"SAVEPOINT {name}")
-                self.active_transactions[tid]['savepoints'].append(name)
+                trans['savepoints'].append(name)
+                logger.debug(f"Savepoint '{name}' created in transaction {tid}")
                 return True
             except Exception as e:
                 raise TransactionError(f"Savepoint failed: {e}")
@@ -246,6 +276,7 @@ class TransactionManager:
                     'state': data['state']
                 }
                 for tid, data in self.active_transactions.items()
+                if data['state'] == 'ACTIVE'
             ]
 
 # ==================== SQLITE STORAGE WITH AUTO-RECOVERY ====================
@@ -301,7 +332,7 @@ class SQLiteStorage:
         # Cache
         self.schema_cache = {}
         self.table_cache = {}
-        self.query_cache = {}  # Cache de requêtes préparées
+        self.query_cache = {}
 
         # Initialisation
         self._initialize()
@@ -321,6 +352,24 @@ class SQLiteStorage:
 
         except Exception as e:
             logger.error(f"Initialization failed: {e}")
+            # Créer une nouvelle base si tout échoue
+            self._create_new_database()
+            raise
+
+    def _create_new_database(self):
+        """Crée une nouvelle base de données vierge"""
+        try:
+            if self.db_path.exists():
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                old_path = self.db_path.with_suffix(f".corrupted_{timestamp}.db")
+                os.rename(str(self.db_path), str(old_path))
+                logger.warning(f"Moved corrupted database to {old_path}")
+
+            self._connect()
+            logger.info("Created new database")
+            
+        except Exception as e:
+            logger.error(f"Failed to create new database: {e}")
             raise
 
     def _connect(self, retries=3):
@@ -341,7 +390,10 @@ class SQLiteStorage:
                         check_same_thread=False,
                         isolation_level=None  # Auto-commit par défaut
                     )
-
+                    
+                    # Activer les types de données étendus
+                    self.conn.execute("PRAGMA foreign_keys = ON")
+                    
                     # Configuration SQLite
                     self._configure_connection()
 
@@ -349,7 +401,7 @@ class SQLiteStorage:
                     logger.debug(f"Connected to SQLite (attempt {attempt+1})")
                     return True
 
-            except Exception as e:
+            except sqlite3.Error as e:
                 if attempt < retries - 1:
                     wait = 2 ** attempt
                     logger.warning(f"Connection failed: {e}, retrying in {wait}s")
@@ -357,7 +409,11 @@ class SQLiteStorage:
                 else:
                     logger.error(f"Failed to connect after {retries} attempts")
                     self.is_connected = False
-                    raise
+                    raise StorageError(f"Could not connect to database: {e}")
+            except Exception as e:
+                logger.error(f"Unexpected connection error: {e}")
+                self.is_connected = False
+                raise
 
     def _configure_connection(self):
         """Configure les paramètres SQLite"""
@@ -373,9 +429,11 @@ class SQLiteStorage:
         # Autres optimisations
         cursor.execute(f"PRAGMA auto_vacuum={self.config['auto_vacuum']}")
         cursor.execute(f"PRAGMA cache_size={self.config['cache_size']}")
-        cursor.execute("PRAGMA foreign_keys=ON")
         cursor.execute("PRAGMA synchronous=NORMAL")
         cursor.execute("PRAGMA temp_store=MEMORY")
+        
+        # Améliorer la compatibilité
+        cursor.execute("PRAGMA legacy_file_format = OFF")
 
         # Créer les tables système si nécessaire
         self._create_system_tables()
@@ -420,7 +478,7 @@ class SQLiteStorage:
             self.conn.commit()
         except Exception as e:
             logger.error(f"Failed to create system tables: {e}")
-            raise
+            # Ne pas lever d'exception ici, la base peut fonctionner sans
 
     def get_tables(self) -> List[Dict]:
         """Récupère la liste de toutes les tables"""
@@ -431,6 +489,7 @@ class SQLiteStorage:
                 FROM sqlite_master 
                 WHERE type IN ('table', 'view') 
                 AND name NOT LIKE 'sqlite_%'
+                AND name NOT LIKE '_gsql_%'
                 ORDER BY type, name
             """)
             
@@ -439,19 +498,20 @@ class SQLiteStorage:
                 table_name = row[0]
                 table_type = row[1]
                 
-                # Compter les lignes
+                # Compter les lignes (avec gestion d'erreur)
                 try:
-                    cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+                    cursor.execute(f"SELECT COUNT(*) FROM \"{table_name}\"")
                     row_count = cursor.fetchone()[0]
                 except:
                     row_count = 0
                 
                 # Obtenir les colonnes
+                columns = []
                 try:
-                    cursor.execute(f"PRAGMA table_info({table_name})")
+                    cursor.execute(f"PRAGMA table_info(\"{table_name}\")")
                     columns = [col[1] for col in cursor.fetchall()]
                 except:
-                    columns = []
+                    pass
                 
                 tables.append({
                     'table_name': table_name,
@@ -585,89 +645,117 @@ class SQLiteStorage:
 
     def execute(self, query: str, params: Tuple = None) -> Dict:
         """Exécute une requête SQL avec gestion d'erreurs"""
-        try:
-            # Vérifier la connexion
-            if not self.is_connected:
-                self._connect()
+        if not self.is_connected:
+            self._connect()
 
-            # Préparer les paramètres
-            if params is None:
-                params = ()
+        # Préparer les paramètres
+        if params is None:
+            params = ()
+
+        try:
+            # Nettoyer la requête
+            query = query.strip()
+            if not query:
+                return {'success': False, 'error': 'Empty query'}
 
             # Vérifier le cache de requêtes
-            query_hash = hashlib.md5(query.encode()).hexdigest()
-            if query_hash in self.query_cache:
-                cursor = self.query_cache[query_hash]
-            else:
-                cursor = self.conn.cursor()
-                self.query_cache[query_hash] = cursor
-
+            query_hash = hashlib.md5((query + str(params)).encode()).hexdigest()[:16]
+            
             # Exécuter la requête
             start_time = time.time()
-            cursor.execute(query, params)
+            cursor = self.conn.cursor()
+            
+            # CORRECTION : Éviter les paramètres incorrects
+            if params and len(params) > 0:
+                # Vérifier que params est un tuple
+                if isinstance(params, (list, dict)):
+                    params = tuple(params) if isinstance(params, list) else tuple(params.values())
+                cursor.execute(query, params)
+            else:
+                cursor.execute(query)
+                
             execution_time = time.time() - start_time
 
-            # Gérer le résultat selon le type de requête
-            query_upper = query.strip().upper()
-            result = {'success': True, 'execution_time': execution_time}
+            # Détecter le type de requête
+            query_upper = query.lstrip().upper()
+            
+            # Initialiser le résultat
+            result = {
+                'success': True, 
+                'execution_time': round(execution_time, 4),
+                'query_type': 'UNKNOWN',
+                'timestamp': datetime.now().isoformat()
+            }
 
             if query_upper.startswith("SELECT"):
                 rows = cursor.fetchall()
-                column_names = [desc[0] for desc in cursor.description]
+                column_names = [desc[0] for desc in cursor.description] if cursor.description else []
+                
+                # Convertir les rows en format utilisable
+                formatted_rows = []
+                for row in rows:
+                    if len(column_names) == len(row):
+                        formatted_rows.append(dict(zip(column_names, row)))
+                    else:
+                        formatted_rows.append(row)
                 
                 result.update({
-                    'type': 'SELECT',
+                    'type': 'select',
                     'count': len(rows),
                     'columns': column_names,
-                    'rows': rows
+                    'rows': formatted_rows
                 })
-
-                # Mettre à jour les statistiques du buffer pool
-                self.buffer_pool.put(f"query_{query_hash}", {
-                    'columns': column_names,
-                    'rows': rows,
-                    'timestamp': time.time()
-                }, priority=True)
 
             elif query_upper.startswith("INSERT"):
                 lastrowid = cursor.lastrowid
                 rowcount = cursor.rowcount
                 
                 result.update({
-                    'type': 'INSERT',
+                    'type': 'insert',
+                    'lastrowid': lastrowid,
                     'last_insert_id': lastrowid,
                     'rows_affected': rowcount
                 })
 
-                # Mettre à jour le cache de schéma
-                table = self._extract_table_name(query)
-                if table:
-                    self._invalidate_schema_cache(table)
-
             elif query_upper.startswith("UPDATE") or query_upper.startswith("DELETE"):
                 result.update({
-                    'type': 'UPDATE' if query_upper.startswith("UPDATE") else 'DELETE',
+                    'type': 'update' if query_upper.startswith("UPDATE") else 'delete',
                     'rows_affected': cursor.rowcount
                 })
 
-                # Invalider les caches concernés
-                table = self._extract_table_name(query)
-                if table:
-                    self._invalidate_schema_cache(table)
-                    self.buffer_pool.invalidate(f"table_{table}")
-
             elif query_upper.startswith("CREATE") or query_upper.startswith("DROP"):
                 result.update({
-                    'type': 'SCHEMA_CHANGE',
-                    'operation': 'CREATE' if query_upper.startswith("CREATE") else 'DROP'
+                    'type': 'create' if query_upper.startswith("CREATE") else 'drop',
+                    'rows_affected': cursor.rowcount
                 })
 
-                # Réinitialiser les caches de schéma
-                self.schema_cache.clear()
+            elif query_upper.startswith("BEGIN") or "TRANSACTION" in query_upper:
+                result.update({
+                    'type': 'transaction',
+                    'message': 'Transaction started'
+                })
+
+            elif query_upper.startswith("COMMIT"):
+                result.update({
+                    'type': 'transaction',
+                    'message': 'Transaction committed'
+                })
+
+            elif query_upper.startswith("ROLLBACK"):
+                result.update({
+                    'type': 'transaction',
+                    'message': 'Transaction rolled back'
+                })
+
+            elif query_upper.startswith("SAVEPOINT"):
+                result.update({
+                    'type': 'savepoint',
+                    'message': 'Savepoint created'
+                })
 
             else:
                 result.update({
-                    'type': 'OTHER',
+                    'type': 'other',
                     'rows_affected': cursor.rowcount
                 })
 
@@ -682,75 +770,81 @@ class SQLiteStorage:
 
         except sqlite3.Error as e:
             logger.error(f"SQL execution error: {e}")
+            self.conn.rollback()
             
-            # Tentative de récupération pour certaines erreurs
-            if "database is locked" in str(e):
-                return self._handle_locked_database(query, params)
-            elif "database disk image is malformed" in str(e):
-                self._recover_database()
-                raise StorageError("Database recovered, please retry operation")
-            
-            raise SQLExecutionError(f"SQL error: {e}")
+            # Gestion spécifique des erreurs
+            error_msg = str(e)
+            if "database is locked" in error_msg:
+                return {'success': False, 'error': 'Database is locked, please try again'}
+            elif "no such table" in error_msg:
+                return {'success': False, 'error': f'Table not found: {error_msg}'}
+            elif "no such savepoint" in error_msg:
+                return {'success': False, 'error': 'Savepoint not found or transaction ended'}
+            elif "cannot commit - no transaction is active" in error_msg:
+                return {'success': False, 'error': 'No active transaction to commit'}
+            elif "UNIQUE constraint failed" in error_msg:
+                return {'success': False, 'error': f'Duplicate entry: {error_msg}'}
+            elif "FOREIGN KEY constraint failed" in error_msg:
+                return {'success': False, 'error': f'Foreign key violation: {error_msg}'}
+            else:
+                return {'success': False, 'error': f'SQL error: {error_msg}'}
 
         except Exception as e:
             logger.error(f"Unexpected error: {e}")
-            raise
+            self.conn.rollback()
+            return {'success': False, 'error': f'Unexpected error: {e}'}
 
     def _extract_table_name(self, query: str) -> Optional[str]:
         """Extrait le nom de table d'une requête SQL"""
-        # Regex simplifiée pour extraire les noms de tables
-        patterns = [
-            r"FROM\s+(\w+)",
-            r"INSERT\s+INTO\s+(\w+)",
-            r"UPDATE\s+(\w+)",
-            r"DELETE\s+FROM\s+(\w+)",
-            r"CREATE\s+TABLE\s+(\w+)",
-            r"DROP\s+TABLE\s+(\w+)"
-        ]
-
-        query_upper = query.upper()
-        for pattern in patterns:
-            match = re.search(pattern, query_upper, re.IGNORECASE)
-            if match:
-                return match.group(1)
-
-        return None
-
-    def _invalidate_schema_cache(self, table: str):
-        """Invalide le cache pour une table spécifique"""
-        if table in self.schema_cache:
-            del self.schema_cache[table]
-        if table in self.table_cache:
-            del self.table_cache[table]
+        try:
+            query_upper = query.upper().strip()
+            
+            # Patterns simplifiés
+            patterns = [
+                (r"FROM\s+(\w+)", 1),
+                (r"INSERT\s+INTO\s+(\w+)", 1),
+                (r"UPDATE\s+(\w+)", 1),
+                (r"DELETE\s+FROM\s+(\w+)", 1),
+                (r"CREATE\s+TABLE\s+(\w+)", 1),
+                (r"DROP\s+TABLE\s+(\w+)", 1)
+            ]
+            
+            for pattern, group in patterns:
+                match = re.search(pattern, query_upper, re.IGNORECASE)
+                if match:
+                    return match.group(group)
+                    
+            return None
+        except:
+            return None
 
     def _update_statistics(self, query_type: str, execution_time: float):
         """Met à jour les statistiques d'exécution"""
         try:
             cursor = self.conn.cursor()
             
-            # Incrémenter le compteur pour ce type de requête
+            # Extraire le type de base
+            base_type = query_type.split()[0] if query_type else "OTHER"
+            
+            # Incrémenter le compteur
             cursor.execute(
-                """INSERT INTO _gsql_statistics (metric, value) 
-                   VALUES (?, 1)
-                   ON CONFLICT(metric) DO UPDATE SET 
-                   value = value + 1,
-                   updated_at = CURRENT_TIMESTAMP""",
-                (f"query_count_{query_type.split()[0]}",)
+                """INSERT OR IGNORE INTO _gsql_statistics (metric, value) 
+                   VALUES (?, 0)""",
+                (f"query_count_{base_type}",)
             )
-
-            # Mettre à jour le temps d'exécution moyen
+            
             cursor.execute(
-                """INSERT INTO _gsql_statistics (metric, value) 
-                   VALUES (?, ?)
-                   ON CONFLICT(metric) DO UPDATE SET 
-                   value = (value + ?) / 2,
-                   updated_at = CURRENT_TIMESTAMP""",
-                (f"avg_time_{query_type.split()[0]}", execution_time, execution_time)
+                """UPDATE _gsql_statistics 
+                   SET value = value + 1,
+                       updated_at = CURRENT_TIMESTAMP
+                   WHERE metric = ?""",
+                (f"query_count_{base_type}",)
             )
 
             self.conn.commit()
         except Exception as e:
-            logger.warning(f"Failed to update statistics: {e}")
+            # Ne pas lever d'exception pour les statistiques
+            logger.debug(f"Failed to update statistics: {e}")
 
     def _handle_locked_database(self, query: str, params: Tuple) -> Dict:
         """Gère les erreurs de verrouillage de base de données"""
@@ -775,7 +869,7 @@ class SQLiteStorage:
             except Exception as e:
                 if retry == 2:
                     logger.error(f"Database still locked after retries: {e}")
-                    raise StorageError("Database is locked, please try again later")
+                    return {'success': False, 'error': 'Database is locked, please try again later'}
 
         return {'success': False, 'error': 'Database locked'}
 
@@ -787,28 +881,91 @@ class SQLiteStorage:
         cursor = self.conn.cursor()
         cursor.execute(sql)
 
-    def _build_insert_sql(self, table: str, data: Dict) -> Tuple[str, List]:
-        """Construit une requête INSERT à partir d'un dictionnaire"""
-        if not data:
-            raise SQLExecutionError("No data provided for INSERT")
+    def get_table_schema(self, table: str) -> Dict:
+        """Récupère le schéma d'une table - VERSION CORRIGÉE"""
+        try:
+            # Vérifier si en cache
+            cache_key = f"schema_{table}"
+            if cache_key in self.schema_cache:
+                return self.schema_cache[cache_key]
 
-        columns = []
-        placeholders = []
-        values = []
-
-        for column, value in data.items():
-            columns.append(column)
-            placeholders.append("?")
+            cursor = self.conn.cursor()
             
-            # CORRECTION DU BUG: Échapper les guillemets doubles dans la f-string
-            if isinstance(value, str):
-                escaped_value = value.replace("'", "''")
-                values.append(f"'{escaped_value}'")
-            else:
-                values.append(value)
+            # Récupérer les informations de la table
+            cursor.execute(f"PRAGMA table_info(\"{table}\")")
+            columns_data = cursor.fetchall()
+            
+            if not columns_data:
+                return None  # Table n'existe pas
+            
+            # Construire le schéma au bon format
+            columns = []
+            for col in columns_data:
+                column_info = {
+                    'field': col[1],  # Nom de la colonne
+                    'type': col[2],   # Type de données
+                    'null': col[3] == 0,  # NOT NULL si 1
+                    'key': 'PRI' if col[5] > 0 else '',  # Clé primaire
+                    'default': col[4],  # Valeur par défaut
+                    'extra': 'AUTOINCREMENT' if col[5] == 1 and col[2].upper() == 'INTEGER' else ''
+                }
+                columns.append(column_info)
+            
+            # Récupérer les indexes
+            indexes = []
+            try:
+                cursor.execute(f"PRAGMA index_list(\"{table}\")")
+                index_list = cursor.fetchall()
+                for idx in index_list:
+                    if idx[0].startswith('sqlite_autoindex'):
+                        continue  # Ignorer les indexes auto
+                    indexes.append({
+                        'name': idx[1],
+                        'unique': idx[2] == 1
+                    })
+            except:
+                pass
+            
+            # Récupérer les clés étrangères
+            foreign_keys = []
+            try:
+                cursor.execute(f"PRAGMA foreign_key_list(\"{table}\")")
+                fk_list = cursor.fetchall()
+                for fk in fk_list:
+                    foreign_keys.append({
+                        'from': fk[3],  # Colonne source
+                        'table': fk[2],  # Table cible
+                        'to': fk[4],     # Colonne cible
+                        'on_update': fk[5],
+                        'on_delete': fk[6]
+                    })
+            except:
+                pass
+            
+            schema = {
+                'table': table,
+                'columns': columns,  # LISTE, pas dict - CORRECTION ICI
+                'indexes': indexes,
+                'foreign_keys': foreign_keys,
+                'row_count': self._get_table_row_count(table)
+            }
+            
+            # Mettre en cache
+            self.schema_cache[cache_key] = schema
+            return schema
+            
+        except Exception as e:
+            logger.error(f"Failed to get schema for {table}: {e}")
+            return None
 
-        sql = f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({', '.join(placeholders)})"
-        return sql, values
+    def _get_table_row_count(self, table: str) -> int:
+        """Récupère le nombre de lignes d'une table"""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(f'SELECT COUNT(*) FROM "{table}"')
+            return cursor.fetchone()[0]
+        except:
+            return 0
 
     def begin_transaction(self, isolation_level: str = "DEFERRED") -> int:
         """Démarre une transaction"""
@@ -826,39 +983,6 @@ class SQLiteStorage:
         """Crée un savepoint"""
         return self.transaction_manager.savepoint(tid, name)
 
-    def get_table_schema(self, table: str) -> Dict:
-        """Récupère le schéma d'une table"""
-        if table in self.schema_cache:
-            return self.schema_cache[table]
-
-        try:
-            cursor = self.conn.cursor()
-            cursor.execute(f"PRAGMA table_info({table})")
-            columns = cursor.fetchall()
-
-            schema = {
-                'table_name': table,
-                'columns': [
-                    {
-                        'name': col[1],
-                        'type': col[2],
-                        'not_null': bool(col[3]),
-                        'default_value': col[4],
-                        'primary_key': bool(col[5])
-                    }
-                    for col in columns
-                ],
-                'primary_keys': [col[1] for col in columns if col[5] > 0],
-                'timestamp': time.time()
-            }
-
-            self.schema_cache[table] = schema
-            return schema
-
-        except Exception as e:
-            logger.error(f"Failed to get schema for {table}: {e}")
-            raise
-
     def backup(self, backup_name: str = None) -> str:
         """Crée une sauvegarde de la base de données"""
         if backup_name is None:
@@ -868,16 +992,26 @@ class SQLiteStorage:
         backup_path = self.backup_dir / backup_name
 
         try:
-            # Utiliser la sauvegarde SQLite
-            backup_conn = sqlite3.connect(str(backup_path))
-            self.conn.backup(backup_conn)
-            backup_conn.close()
-
+            # Fermer la connexion courante
+            self.conn.close()
+            
+            # Copier le fichier
+            import shutil
+            shutil.copy2(str(self.db_path), str(backup_path))
+            
+            # Rouvrir la connexion
+            self._connect()
+            
             logger.info(f"Backup created: {backup_path}")
             return str(backup_path)
 
         except Exception as e:
             logger.error(f"Backup failed: {e}")
+            # Réessayer de se connecter
+            try:
+                self._connect()
+            except:
+                pass
             raise StorageError(f"Backup failed: {e}")
 
     def vacuum(self):
@@ -886,10 +1020,16 @@ class SQLiteStorage:
             cursor = self.conn.cursor()
             cursor.execute("VACUUM")
             self.conn.commit()
+            
+            # Nettoyer les caches
+            self.buffer_pool.invalidate()
+            self.schema_cache.clear()
+            
             logger.info("Database vacuum completed")
+            return True
         except Exception as e:
             logger.error(f"Vacuum failed: {e}")
-            raise
+            return False
 
     def get_stats(self) -> Dict:
         """Récupère les statistiques du stockage"""
@@ -897,34 +1037,50 @@ class SQLiteStorage:
             cursor = self.conn.cursor()
 
             # Statistiques de base de données
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-            tables = cursor.fetchall()
+            cursor.execute("""
+                SELECT COUNT(*) 
+                FROM sqlite_master 
+                WHERE type='table' 
+                AND name NOT LIKE 'sqlite_%'
+            """)
+            table_count = cursor.fetchone()[0]
 
-            cursor.execute("PRAGMA page_count")
-            page_count = cursor.fetchone()[0]
-
-            cursor.execute("PRAGMA page_size")
-            page_size = cursor.fetchone()[0]
+            try:
+                cursor.execute("PRAGMA page_count")
+                page_count = cursor.fetchone()[0]
+                
+                cursor.execute("PRAGMA page_size")
+                page_size = cursor.fetchone()[0]
+                
+                size_bytes = page_count * page_size
+            except:
+                size_bytes = 0
 
             # Statistiques personnalisées
-            cursor.execute("SELECT metric, value FROM _gsql_statistics")
-            stats_rows = cursor.fetchall()
-            custom_stats = {row[0]: row[1] for row in stats_rows}
+            custom_stats = {}
+            try:
+                cursor.execute("SELECT metric, value FROM _gsql_statistics")
+                stats_rows = cursor.fetchall()
+                custom_stats = {row[0]: row[1] for row in stats_rows}
+            except:
+                pass
 
             return {
                 'database': {
                     'path': str(self.db_path),
-                    'tables': len(tables),
-                    'size_mb': round((page_count * page_size) / (1024 * 1024), 2),
-                    'connection_status': self.is_connected
+                    'tables': table_count,
+                    'size_bytes': size_bytes,
+                    'size_mb': round(size_bytes / (1024 * 1024), 2),
+                    'connection_status': self.is_connected,
+                    'recovery_mode': self.recovery_mode
                 },
                 'performance': {
                     'buffer_pool': self.buffer_pool.get_stats(),
-                    'query_cache_size': len(self.query_cache),
-                    'schema_cache_size': len(self.schema_cache)
+                    'schema_cache_size': len(self.schema_cache),
+                    'table_cache_size': len(self.table_cache)
                 },
                 'transactions': {
-                    'active': self.transaction_manager.get_active_transactions(),
+                    'active': len(self.transaction_manager.get_active_transactions()),
                     'total_started': self.transaction_manager.transaction_counter
                 },
                 'statistics': custom_stats
@@ -941,20 +1097,25 @@ class SQLiteStorage:
         """Ferme la connexion à la base de données"""
         try:
             with self.connection_lock:
-                if self.conn:
-                    # Sauvegarder avant de fermer si demandé
-                    if self.recovery_flag.exists():
-                        self.backup("pre_close_backup.db")
-                        self.recovery_flag.unlink()
+                # Fermer les transactions actives
+                active_tx = self.transaction_manager.get_active_transactions()
+                if active_tx:
+                    logger.warning(f"Closing storage with {len(active_tx)} active transactions")
+                    # Rollback automatique
+                    try:
+                        self._execute_raw("ROLLBACK")
+                    except:
+                        pass
 
+                if self.conn:
                     self.conn.close()
                     self.conn = None
                     self.is_connected = False
                     
                     # Vider les caches
                     self.buffer_pool.invalidate()
-                    self.query_cache.clear()
                     self.schema_cache.clear()
+                    self.table_cache.clear()
 
                 logger.info("Storage closed")
                 
