@@ -1,25 +1,16 @@
-MIT LICENSE
+MIT License
 
-Copyright (c) 2025 Gopu Inc
+Copyright (c) 2025 Gopu Inc. and Contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
-in the Software **only under the following conditions**:
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-1.  REDISTRIBUTION AS ORIGINAL PROJECT: Any public redistribution, hosting,
-    or publication of this Software, in whole or in part, **MUST** be done
-    through a public "fork" or "branch" of the original repository located at
-    `https://github.com/gopu-inc/gsql`. The connection to the original source
-    must remain publicly visible and traceable.
-
-2.  ATTRIBUTION: All copies or substantial portions of the Software must
-    include a clear and conspicuous attribution to the original author and
-    source repository, in the following form:
-    "Based on gSQL by Gopu Inc (https://github.com/gopu-inc/gsql)."
-
-3.  SAME LICENSE: Any distribution of the Software must be under the terms
-    of this GOPU LICENSE. You may not offer or impose any different or
-    additional terms.
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
