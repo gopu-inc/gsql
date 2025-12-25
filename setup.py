@@ -212,7 +212,6 @@ def get_requirements() -> List[str]:
             'colorama>=0.4.4',
             'prompt-toolkit>=3.0.0',
             'rich>=13.0.0',
-            'pandas>=1.3.0',
             'numpy>=1.21.0',
             'nltk>=3.6.0',
             'spacy>=3.5.0',
