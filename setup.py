@@ -208,16 +208,15 @@ def get_requirements() -> List[str]:
     if not requirements:
         # Dépendances par défaut
         requirements = [
-            'click>=8.0.0',
-            'colorama>=0.4.4',
-            'prompt-toolkit>=3.0.0',
-            'rich>=13.0.0',
-            'numpy>=1.21.0',
-            'nltk>=3.6.0',
-            'spacy>=3.5.0',
-            'psutil>=5.9.0',
-            'typing-extensions>=4.7.0',
-            'cryptography>=41.0.0',
+            'click',
+            'colorama',
+            'prompt-toolkit',
+            'rich',
+            'nltk',
+            'spacy',
+            'psutil',
+            'typing-extensions',
+            'cryptography',
         ]
     
     return requirements
