@@ -1,1529 +1,422 @@
+
 <!DOCTYPE html>
 <html lang="fr" data-bs-theme="light">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, viewport-fit=cover">
-    <title>GSQL Database - Mobile Optimized</title>
+    <title>GSQL Database - Une interface Python pour SQLite</title>
     
-    <!-- PWA Meta Tags -->
     <meta name="theme-color" content="#4a6fa5">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="description" content="GSQL : une surcouche Python puissante et étendue pour SQLite, ajoutant un shell interactif, un cache intelligent et des outils de productivité.">
     
-    <!-- Favicon -->
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1024 1024'><rect width='1024' height='1024' fill='%234a6fa5'/><text x='512' y='540' font-family='Arial' font-size='400' text-anchor='middle' fill='white'>G</text></svg>">
-    
-    <!-- CDN Libraries -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
     
     <style>
-        /* ===== VARIABLES SYSTEM ===== */
+        /* Styles CSS optimisés */
         :root {
-            /* Couleurs système iOS/Android */
-            --ios-blue: #007AFF;
-            --ios-gray-1: #8E8E93;
-            --ios-gray-2: #AEAEB2;
-            --ios-gray-3: #C7C7CC;
-            --ios-gray-4: #D1D1D6;
-            --ios-gray-5: #E5E5EA;
-            --ios-gray-6: #F2F2F7;
-            
-            /* Material Design Colors */
             --md-primary: #4a6fa5;
-            --md-secondary: #166088;
-            --md-accent: #4fc3a1;
             --md-surface: #FFFFFF;
             --md-background: #F8F9FA;
-            --md-error: #FF3B30;
-            --md-success: #34C759;
-            --md-warning: #FF9500;
-            --md-info: #5AC8FA;
-            
-            /* Tailles responsive */
-            --safe-area-top: env(safe-area-inset-top, 0px);
-            --safe-area-bottom: env(safe-area-inset-bottom, 0px);
-            --safe-area-left: env(safe-area-inset-left, 0px);
-            --safe-area-right: env(safe-area-inset-right, 0px);
-            
-            /* Espacements mobiles */
-            --space-xs: 0.25rem;
-            --space-sm: 0.5rem;
-            --space-md: 1rem;
-            --space-lg: 1.5rem;
-            --space-xl: 2rem;
-            --space-2xl: 3rem;
-            
-            /* Typographie responsive */
-            --text-xs: 0.75rem;
-            --text-sm: 0.875rem;
-            --text-base: 1rem;
-            --text-lg: 1.125rem;
-            --text-xl: 1.25rem;
-            --text-2xl: 1.5rem;
-            --text-3xl: 1.875rem;
-            --text-4xl: 2.25rem;
-            
-            /* Ombres mobiles */
-            --shadow-sm: 0 1px 3px rgba(0,0,0,0.12);
-            --shadow-md: 0 4px 6px rgba(0,0,0,0.1);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.15);
-            --shadow-xl: 0 20px 40px rgba(0,0,0,0.2);
-            
-            /* Animations */
-            --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
-            --transition-base: 300ms cubic-bezier(0.4, 0, 0.2, 1);
-            --transition-slow: 500ms cubic-bezier(0.4, 0, 0.2, 1);
-            
-            /* Bordures */
-            --radius-sm: 8px;
-            --radius-md: 12px;
-            --radius-lg: 16px;
-            --radius-xl: 24px;
-            --radius-full: 9999px;
         }
-        
-        /* Dark Mode Variables */
-        @media (prefers-color-scheme: dark) {
-            :root {
-                --md-surface: #1C1C1E;
-                --md-background: #000000;
-                --ios-gray-6: #1C1C1E;
-                --ios-gray-5: #2C2C2E;
-                --ios-gray-4: #3A3A3C;
-            }
-        }
-        
-        /* ===== BASE STYLES ===== */
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-            -webkit-tap-highlight-color: transparent;
-        }
-        
-        html {
-            font-size: 16px;
-            scroll-behavior: smooth;
-            -webkit-text-size-adjust: 100%;
-            text-size-adjust: 100%;
-        }
-        
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background-color: var(--md-background);
-            color: var(--ios-gray-1);
-            line-height: 1.5;
-            font-weight: 400;
-            min-height: 100vh;
-            min-height: -webkit-fill-available;
-            padding: 0;
-            margin: 0;
-            overflow-x: hidden;
-            position: relative;
+            color: #333;
+            padding-top: 60px;
         }
-        
-        /* ===== TYPOGRAPHY MOBILE ===== */
-        h1, h2, h3, h4, h5, h6 {
-            font-weight: 700;
-            color: var(--md-primary);
-            line-height: 1.2;
-            letter-spacing: -0.02em;
-        }
-        
-        h1 {
-            font-size: var(--text-3xl);
-            font-weight: 800;
-        }
-        
-        h2 {
-            font-size: var(--text-2xl);
-            margin-bottom: var(--space-lg);
-        }
-        
-        h3 {
-            font-size: var(--text-xl);
-        }
-        
-        p {
-            margin-bottom: var(--space-md);
-            font-size: var(--text-base);
-        }
-        
-        .lead {
-            font-size: var(--text-lg);
-            font-weight: 400;
-            color: var(--ios-gray-2);
-        }
-        
-        small, .small {
-            font-size: var(--text-sm);
-            color: var(--ios-gray-3);
-        }
-        
-        /* ===== NAVBAR MOBILE FIRST ===== */
-        .navbar-mobile {
-            background: var(--md-surface);
-            backdrop-filter: blur(20px);
-            -webkit-backdrop-filter: blur(20px);
-            border-bottom: 1px solid rgba(0,0,0,0.1);
-            padding: var(--space-sm) var(--space-md);
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            z-index: 1000;
-            height: 60px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-        }
-        
-        .navbar-mobile.scrolled {
-            box-shadow: var(--shadow-md);
-            background: rgba(var(--md-surface-rgb), 0.9);
-        }
-        
-        .navbar-brand-mobile {
-            display: flex;
-            align-items: center;
-            text-decoration: none;
-        }
-        
-        .nav-logo {
-            width: 40px;
-            height: 40px;
-            border-radius: var(--radius-md);
-            margin-right: var(--space-sm);
-            border: 2px solid var(--md-primary);
-            background: var(--md-primary);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            font-weight: 800;
-            font-size: 1.2rem;
-        }
-        
-        .brand-text {
-            font-size: var(--text-lg);
-            font-weight: 700;
-            color: var(--md-primary);
-        }
-        
-        /* Menu Hamburger */
-        .menu-toggle {
-            width: 44px;
-            height: 44px;
-            border-radius: var(--radius-full);
-            background: var(--ios-gray-6);
-            border: none;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-            transition: var(--transition-base);
-            touch-action: manipulation;
-        }
-        
-        .menu-toggle:active {
-            transform: scale(0.95);
-            background: var(--ios-gray-5);
-        }
-        
-        .menu-toggle i {
-            font-size: 1.2rem;
-            color: var(--md-primary);
-        }
-        
-        /* Navigation Slide-in */
-        .nav-overlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0,0,0,0.5);
-            z-index: 999;
-            opacity: 0;
-            visibility: hidden;
-            transition: var(--transition-base);
-        }
-        
-        .nav-overlay.active {
-            opacity: 1;
-            visibility: visible;
-        }
-        
-        .nav-sidebar {
-            position: fixed;
-            top: 0;
-            right: -100%;
-            width: 85%;
-            max-width: 300px;
-            height: 100vh;
-            background: var(--md-surface);
-            z-index: 1000;
-            padding: var(--space-xl) var(--space-lg);
-            transition: var(--transition-base);
-            overflow-y: auto;
-            box-shadow: var(--shadow-xl);
-        }
-        
-        .nav-sidebar.active {
-            right: 0;
-        }
-        
-        .nav-links-mobile {
-            list-style: none;
-            margin-top: var(--space-xl);
-        }
-        
-        .nav-links-mobile li {
-            margin-bottom: var(--space-sm);
-        }
-        
-        .nav-links-mobile a {
-            display: flex;
-            align-items: center;
-            padding: var(--space-md);
-            border-radius: var(--radius-md);
-            color: var(--ios-gray-1);
-            text-decoration: none;
-            font-weight: 500;
-            transition: var(--transition-fast);
-        }
-        
-        .nav-links-mobile a:active {
-            background: var(--ios-gray-6);
-            transform: translateX(-4px);
-        }
-        
-        .nav-links-mobile a i {
-            width: 24px;
-            margin-right: var(--space-md);
-            font-size: 1.1rem;
-        }
-        
-        /* ===== HERO SECTION MOBILE ===== */
-        .hero-mobile {
-            padding: calc(60px + var(--space-xl)) var(--space-md) var(--space-2xl);
-            background: linear-gradient(135deg, var(--md-primary) 0%, var(--md-secondary) 100%);
-            color: white;
-            position: relative;
-            overflow: hidden;
-            margin-bottom: var(--space-xl);
-        }
-        
-        .hero-content {
-            position: relative;
-            z-index: 2;
-        }
-        
-        .hero-logo-mobile {
-            width: 120px;
-            height: 120px;
-            border-radius: var(--radius-xl);
-            margin: 0 auto var(--space-lg);
-            background: white;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 3rem;
-            font-weight: 800;
-            color: var(--md-primary);
-            box-shadow: var(--shadow-lg);
-            animation: float 3s ease-in-out infinite;
-        }
-        
-        @keyframes float {
-            0%, 100% { transform: translateY(0) rotate(0deg); }
-            50% { transform: translateY(-10px) rotate(2deg); }
-        }
-        
-        .hero-title-mobile {
-            font-size: var(--text-3xl);
-            text-align: center;
-            margin-bottom: var(--space-md);
-            background: linear-gradient(to right, #ffffff, #a8c6ff);
-            -webkit-background-clip: text;
-            background-clip: text;
-            color: transparent;
-        }
-        
-        .hero-buttons {
-            display: flex;
-            flex-direction: column;
-            gap: var(--space-sm);
-            margin-top: var(--space-xl);
-        }
-        
-        .btn-mobile {
-            padding: var(--space-md) var(--space-lg);
-            border-radius: var(--radius-full);
-            font-weight: 600;
-            font-size: var(--text-base);
-            text-decoration: none;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: var(--space-sm);
-            transition: var(--transition-fast);
-            border: 2px solid transparent;
-            text-align: center;
-            touch-action: manipulation;
-        }
-        
-        .btn-mobile:active {
-            transform: scale(0.98);
-        }
-        
-        .btn-mobile-primary {
-            background: white;
-            color: var(--md-primary);
-        }
-        
-        .btn-mobile-outline {
-            background: transparent;
-            color: white;
-            border-color: rgba(255,255,255,0.3);
-        }
-        
-        /* ===== STATS GRID MOBILE ===== */
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: var(--space-sm);
-            margin: var(--space-lg) 0;
-        }
-        
-        .stat-card {
-            background: rgba(255,255,255,0.1);
-            backdrop-filter: blur(10px);
-            border-radius: var(--radius-md);
-            padding: var(--space-md);
-            text-align: center;
-            border: 1px solid rgba(255,255,255,0.2);
-        }
-        
-        .stat-number {
-            font-size: var(--text-2xl);
-            font-weight: 800;
-            color: white;
-            display: block;
-            line-height: 1;
-        }
-        
-        .stat-label {
-            font-size: var(--text-xs);
-            color: rgba(255,255,255,0.8);
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            margin-top: var(--space-xs);
-        }
-        
-        /* ===== FEATURES CARDS MOBILE ===== */
-        .features-grid {
-            display: grid;
-            grid-template-columns: 1fr;
-            gap: var(--space-md);
-            margin: var(--space-xl) 0;
-        }
-        
-        @media (min-width: 768px) {
-            .features-grid {
-                grid-template-columns: repeat(2, 1fr);
-            }
-        }
-        
-        .feature-card-mobile {
-            background: var(--md-surface);
-            border-radius: var(--radius-lg);
-            padding: var(--space-lg);
-            transition: var(--transition-base);
-            border: 1px solid var(--ios-gray-5);
-            position: relative;
-            overflow: hidden;
-        }
-        
-        .feature-card-mobile:active {
-            transform: translateY(-2px);
-            box-shadow: var(--shadow-md);
-        }
-        
-        .feature-card-mobile::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 4px;
-            height: 100%;
-            background: linear-gradient(to bottom, var(--md-primary), var(--md-accent));
-        }
-        
-        .feature-icon {
-            font-size: 2rem;
-            margin-bottom: var(--space-md);
-            color: var(--md-primary);
-        }
-        
-        .feature-badge {
-            display: inline-block;
-            padding: var(--space-xs) var(--space-sm);
-            background: var(--ios-gray-6);
-            color: var(--ios-gray-2);
-            border-radius: var(--radius-full);
-            font-size: var(--text-xs);
-            font-weight: 600;
-            margin-top: var(--space-sm);
-        }
-        
-        /* ===== BADGES SECTION MOBILE ===== */
-        .badges-container {
-            background: var(--md-surface);
-            border-radius: var(--radius-lg);
-            padding: var(--space-lg);
-            margin: var(--space-xl) 0;
-            border: 1px solid var(--ios-gray-5);
-        }
-        
-        .badges-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: var(--space-md);
-            margin: var(--space-lg) 0;
-        }
-        
-        .badge-card {
-            background: var(--ios-gray-6);
-            border-radius: var(--radius-md);
-            padding: var(--space-md);
-            border: 1px solid var(--ios-gray-5);
-            transition: var(--transition-fast);
-        }
-        
-        .badge-card:active {
-            background: var(--ios-gray-5);
-        }
-        
-        .badge-preview {
-            display: flex;
-            justify-content: center;
-            margin-bottom: var(--space-md);
-        }
-        
-        .badge-code-wrapper {
-            position: relative;
-            background: #1a1a1a;
-            border-radius: var(--radius-sm);
-            padding: var(--space-md);
-            margin-top: var(--space-sm);
-            overflow: hidden;
-        }
-        
-        .badge-code {
-            color: white;
-            font-family: 'Courier New', monospace;
-            font-size: var(--text-sm);
-            word-break: break-all;
-        }
-        
-        .copy-btn {
-            position: absolute;
-            top: var(--space-sm);
-            right: var(--space-sm);
-            background: var(--md-accent);
-            color: white;
-            border: none;
-            padding: var(--space-xs) var(--space-sm);
-            border-radius: var(--radius-sm);
-            font-size: var(--text-xs);
-            font-weight: 600;
-            cursor: pointer;
-            transition: var(--transition-fast);
-        }
-        
-        .copy-btn:active {
-            background: var(--md-secondary);
-        }
-        
-        /* ===== DOCUMENTATION TABS MOBILE ===== */
-        .docs-container {
-            margin: var(--space-xl) 0;
-        }
-        
-        .mobile-tabs {
-            display: flex;
-            overflow-x: auto;
-            gap: var(--space-xs);
-            padding: var(--space-sm) var(--space-md);
-            background: var(--md-surface);
-            border-radius: var(--radius-lg);
-            margin-bottom: var(--space-md);
-            -webkit-overflow-scrolling: touch;
-            scrollbar-width: none;
-        }
-        
-        .mobile-tabs::-webkit-scrollbar {
-            display: none;
-        }
-        
-        .tab-btn {
-            padding: var(--space-sm) var(--space-md);
-            background: var(--ios-gray-6);
-            border: none;
-            border-radius: var(--radius-full);
-            font-size: var(--text-sm);
-            font-weight: 500;
-            color: var(--ios-gray-2);
-            white-space: nowrap;
-            cursor: pointer;
-            transition: var(--transition-fast);
-            flex-shrink: 0;
-        }
-        
-        .tab-btn.active {
-            background: var(--md-primary);
-            color: white;
-        }
-        
-        .tab-btn:active:not(.active) {
-            background: var(--ios-gray-5);
-        }
-        
-        .tab-content {
-            display: none;
-            animation: fadeIn 0.3s ease;
-        }
-        
-        .tab-content.active {
-            display: block;
-        }
-        
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        /* ===== CODE BLOCKS MOBILE ===== */
-        .code-block-mobile {
-            background: #1a1a1a;
-            border-radius: var(--radius-md);
-            overflow: hidden;
-            margin: var(--space-md) 0;
-            position: relative;
-        }
-        
-        .code-header-mobile {
-            background: #2d2d2d;
-            padding: var(--space-sm) var(--space-md);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            border-bottom: 1px solid #444;
-        }
-        
-        .code-language {
-            color: var(--md-accent);
-            font-size: var(--text-sm);
-            font-weight: 600;
-        }
-        
-        .code-copy-btn {
-            background: transparent;
-            border: none;
-            color: var(--ios-gray-3);
-            font-size: var(--text-sm);
-            display: flex;
-            align-items: center;
-            gap: var(--space-xs);
-            cursor: pointer;
-        }
-        
-        pre[class*="language-"] {
-            margin: 0;
-            padding: var(--space-md);
-            overflow-x: auto;
-            -webkit-overflow-scrolling: touch;
-            font-size: var(--text-sm);
-            line-height: 1.4;
-        }
-        
-        /* ===== ACCORDION MOBILE ===== */
-        .accordion-mobile {
-            margin: var(--space-lg) 0;
-        }
-        
-        .accordion-item {
-            background: var(--md-surface);
-            border: 1px solid var(--ios-gray-5);
-            border-radius: var(--radius-md);
-            margin-bottom: var(--space-sm);
-            overflow: hidden;
-        }
-        
-        .accordion-header {
-            padding: var(--space-md);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            cursor: pointer;
-            user-select: none;
-        }
-        
-        .accordion-header:active {
-            background: var(--ios-gray-6);
-        }
-        
-        .accordion-icon {
-            transition: transform var(--transition-base);
-        }
-        
-        .accordion-icon.active {
-            transform: rotate(180deg);
-        }
-        
-        .accordion-content {
-            padding: 0 var(--space-md);
-            max-height: 0;
-            overflow: hidden;
-            transition: max-height var(--transition-base);
-        }
-        
-        .accordion-content.active {
-            padding: var(--space-md);
-            max-height: 1000px;
-        }
-        
-        /* ===== FLOATING ACTION BUTTONS ===== */
-        .fab-container {
-            position: fixed;
-            bottom: calc(var(--safe-area-bottom) + var(--space-lg));
-            right: var(--space-lg);
-            z-index: 900;
-            display: flex;
-            flex-direction: column;
-            gap: var(--space-sm);
-            align-items: flex-end;
-        }
-        
-        .fab-main {
-            width: 56px;
-            height: 56px;
-            border-radius: var(--radius-full);
-            background: var(--md-primary);
-            color: white;
-            border: none;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.2rem;
-            box-shadow: var(--shadow-lg);
-            cursor: pointer;
-            transition: var(--transition-base);
-            touch-action: manipulation;
-        }
-        
-        .fab-main:active {
-            transform: scale(0.9);
-            box-shadow: var(--shadow-md);
-        }
-        
-        .fab-menu {
-            display: flex;
-            flex-direction: column;
-            gap: var(--space-sm);
-            margin-bottom: var(--space-sm);
-            transform: scale(0);
-            transform-origin: bottom right;
-            transition: transform var(--transition-base);
-        }
-        
-        .fab-menu.active {
-            transform: scale(1);
-        }
-        
-        .fab-item {
-            width: 48px;
-            height: 48px;
-            border-radius: var(--radius-full);
-            background: var(--md-surface);
-            color: var(--md-primary);
-            border: 1px solid var(--ios-gray-5);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1rem;
-            cursor: pointer;
-            transition: var(--transition-fast);
-            box-shadow: var(--shadow-sm);
-        }
-        
-        .fab-item:active {
-            background: var(--ios-gray-6);
-            transform: scale(0.95);
-        }
-        
-        /* ===== FOOTER MOBILE ===== */
-        .footer-mobile {
-            background: var(--md-surface);
-            padding: var(--space-xl) var(--space-md);
-            margin-top: var(--space-2xl);
-            border-top: 1px solid var(--ios-gray-5);
-        }
-        
-        .footer-grid {
-            display: grid;
-            grid-template-columns: 1fr;
-            gap: var(--space-xl);
-        }
-        
-        @media (min-width: 768px) {
-            .footer-grid {
-                grid-template-columns: repeat(3, 1fr);
-            }
-        }
-        
-        .footer-section h5 {
-            font-size: var(--text-lg);
-            margin-bottom: var(--space-md);
-        }
-        
-        .footer-links {
-            list-style: none;
-        }
-        
-        .footer-links li {
-            margin-bottom: var(--space-sm);
-        }
-        
-        .footer-links a {
-            color: var(--ios-gray-2);
-            text-decoration: none;
-            font-size: var(--text-base);
-            transition: var(--transition-fast);
-            display: inline-block;
-        }
-        
-        .footer-links a:active {
-            color: var(--md-primary);
-            transform: translateX(4px);
-        }
-        
-        .footer-badges {
-            display: flex;
-            flex-wrap: wrap;
-            gap: var(--space-sm);
-            margin-top: var(--space-md);
-        }
-        
-        /* ===== UTILITY CLASSES ===== */
-        .container-mobile {
-            width: 100%;
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 0 var(--space-md);
-        }
-        
         .section {
-            padding: var(--space-xl) 0;
+            padding: 2rem 0;
         }
-        
-        .text-center {
-            text-align: center;
+        .status-beta {
+            background: linear-gradient(135deg, #ff9500, #ffcc00);
+            color: white;
+            padding: 0.5rem 1rem;
+            border-radius: 50px;
+            font-weight: bold;
+            display: inline-block;
+            margin-bottom: 1rem;
+            font-size: 0.9rem;
         }
-        
-        .mb-1 { margin-bottom: var(--space-xs); }
-        .mb-2 { margin-bottom: var(--space-sm); }
-        .mb-3 { margin-bottom: var(--space-md); }
-        .mb-4 { margin-bottom: var(--space-lg); }
-        .mb-5 { margin-bottom: var(--space-xl); }
-        
-        .mt-1 { margin-top: var(--space-xs); }
-        .mt-2 { margin-top: var(--space-sm); }
-        .mt-3 { margin-top: var(--space-md); }
-        .mt-4 { margin-top: var(--space-lg); }
-        .mt-5 { margin-top: var(--space-xl); }
-        
-        /* ===== DARK MODE OVERRIDES ===== */
-        @media (prefers-color-scheme: dark) {
-            .feature-card-mobile,
-            .badges-container,
-            .accordion-item {
-                background: #2C2C2E;
-                border-color: #3A3A3C;
-            }
-            
-            .badge-card {
-                background: #3A3A3C;
-                border-color: #48484A;
-            }
-            
-            .tab-btn:not(.active) {
-                background: #3A3A3C;
-            }
+        .code-block {
+            background: #1a1a1a;
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 1.5rem 0;
         }
-        
-        /* ===== TOUCH OPTIMIZATIONS ===== */
-        @media (hover: none) and (pointer: coarse) {
-            .btn-mobile,
-            .menu-toggle,
-            .tab-btn,
-            .copy-btn,
-            .fab-main,
-            .fab-item {
-                min-height: 44px;
-                min-width: 44px;
-            }
-            
-            .nav-links-mobile a {
-                min-height: 44px;
-            }
-            
-            .accordion-header {
-                min-height: 44px;
-            }
+        .code-header {
+            background: #2d2d2d;
+            padding: 0.75rem 1rem;
+            color: #ccc;
+            font-size: 0.9rem;
         }
-        
-        /* ===== ANIMATIONS ===== */
-        .fade-in {
-            opacity: 0;
-            animation: fadeInUp 0.6s ease forwards;
+        .alert-transparent {
+            background: rgba(74, 111, 165, 0.1);
+            border-left: 4px solid var(--md-primary);
         }
-        
-        @keyframes fadeInUp {
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
+        .feature-icon {
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+            color: var(--md-primary);
         }
-        
-        .delay-1 { animation-delay: 0.1s; }
-        .delay-2 { animation-delay: 0.2s; }
-        .delay-3 { animation-delay: 0.3s; }
-        .delay-4 { animation-delay: 0.4s; }
     </style>
 </head>
 <body>
-    <!-- Navigation Mobile -->
-    <nav class="navbar-mobile" id="navbar">
-        <a href="#" class="navbar-brand-mobile">
-            <div class="nav-logo">G</div>
-            <span class="brand-text">GSQL</span>
-        </a>
-        
-        <button class="menu-toggle" id="menuToggle">
-            <i class="fas fa-bars"></i>
-        </button>
+    <nav class="navbar navbar-expand-lg navbar-light bg-white fixed-top shadow-sm">
+        <div class="container">
+            <a class="navbar-brand fw-bold" href="#">
+                <span style="color: var(--md-primary);">G</span>SQL
+            </a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav ms-auto">
+                    <li class="nav-item"><a class="nav-link" href="#home">Accueil</a></li>
+                    <li class="nav-item"><a class="nav-link" href="#etat">État</a></li>
+                    <li class="nav-item"><a class="nav-link" href="#utilisation">Utilisation</a></li>
+                    <li class="nav-item"><a class="nav-link" href="#faq">FAQ</a></li>
+                    <li class="nav-item"><a class="nav-link" href="https://github.com/gopu-inc/gsql" target="_blank">GitHub</a></li>
+                </ul>
+            </div>
+        </div>
     </nav>
-    
-    <!-- Navigation Overlay & Sidebar -->
-    <div class="nav-overlay" id="navOverlay"></div>
-    <div class="nav-sidebar" id="navSidebar">
-        <div class="text-center mb-5">
-            <div class="nav-logo" style="margin: 0 auto 1rem;">G</div>
-            <h4 class="brand-text">GSQL Database</h4>
-        </div>
-        
-        <ul class="nav-links-mobile">
-            <li><a href="#home"><i class="fas fa-home"></i> Accueil</a></li>
-            <li><a href="#features"><i class="fas fa-star"></i> Fonctionnalités</a></li>
-            <li><a href="#badges"><i class="fas fa-shield-alt"></i> Badges</a></li>
-            <li><a href="#docs"><i class="fas fa-book"></i> Documentation</a></li>
-            <li><a href="#api"><i class="fas fa-code"></i> API</a></li>
-            <li><a href="https://github.com/gopu-inc/gsql" target="_blank"><i class="fab fa-github"></i> GitHub</a></li>
-        </ul>
-    </div>
-    
-    <!-- Hero Section -->
-    <section class="hero-mobile" id="home">
-        <div class="container-mobile">
-            <div class="hero-content">
-                <div class="hero-logo-mobile">G</div>
-                <h1 class="hero-title-mobile">GSQL Database</h1>
-                <p class="lead text-center">Base de données moderne avec NLP intégré et stockage flexible, optimisée pour mobile.</p>
-                
-                <!-- Stats Grid -->
-                <div class="stats-grid">
-                    <div class="stat-card">
-                        <span class="stat-number" id="versionStat">1.0.0</span>
-                        <span class="stat-label">Version</span>
-                    </div>
-                    <div class="stat-card">
-                        <span class="stat-number" id="modulesStat">12</span>
-                        <span class="stat-label">Modules</span>
-                    </div>
-                    <div class="stat-card">
-                        <span class="stat-number" id="speedStat">99.9%</span>
-                        <span class="stat-label">Uptime</span>
-                    </div>
-                </div>
-                
-                <!-- Action Buttons -->
-                <div class="hero-buttons">
-                    <a href="#docs" class="btn-mobile btn-mobile-primary">
-                        <i class="fas fa-play-circle"></i> Démarrer
-                    </a>
-                    <a href="https://github.com/gopu-inc/gsql" class="btn-mobile btn-mobile-outline" target="_blank">
-                        <i class="fab fa-github"></i> Voir sur GitHub
+
+    <main class="container">
+        <!-- Section Hero -->
+        <section id="home" class="section">
+            <div class="text-center mb-5">
+                <span class="status-beta">BÊTA ACTIVE - EN DÉVELOPPEMENT</span>
+                <h1 class="display-5 fw-bold mb-3" style="color: var(--md-primary);">GSQL Database</h1>
+                <p class="lead mx-auto" style="max-width: 700px;">
+                    <strong>GSQL est une surcouche Python puissante et étendue pour SQLite.</strong><br>
+                    Il ajoute un shell interactif, un cache intelligent, des commandes spéciales et des outils de productivité à la robustesse de SQLite.
+                </p>
+                <div class="mt-4">
+                    <a href="#utilisation" class="btn btn-lg btn-primary me-2">Démarrer</a>
+                    <a href="https://github.com/gopu-inc/gsql" target="_blank" class="btn btn-lg btn-outline-primary">
+                        <i class="fab fa-github"></i> Code Source
                     </a>
                 </div>
             </div>
-        </div>
-    </section>
-    
-    <!-- Main Content Container -->
-    <main class="container-mobile">
-        <!-- Features Section -->
-        <section class="section" id="features">
-            <h2 class="text-center mb-4">Fonctionnalités Principales</h2>
-            
-            <div class="features-grid">
-                <!-- Feature 1 -->
-                <div class="feature-card-mobile fade-in">
-                    <div class="feature-icon">
-                        <i class="fas fa-database"></i>
-                    </div>
-                    <h3>SQL Complet</h3>
-                    <p>Support complet de la syntaxe SQL standard avec extensions avancées pour les requêtes complexes.</p>
-                    <span class="feature-badge">ANSI SQL 2016</span>
-                </div>
-                
-                <!-- Feature 2 -->
-                <div class="feature-card-mobile fade-in delay-1">
-                    <div class="feature-icon">
-                        <i class="fas fa-brain"></i>
-                    </div>
-                    <h3>NLP Intégré</h3>
-                    <p>Traduction automatique des requêtes en langage naturel vers SQL optimisé avec support multi-langue.</p>
-                    <span class="feature-badge">AI Powered</span>
-                </div>
-                
-                <!-- Feature 3 -->
-                <div class="feature-card-mobile fade-in delay-2">
-                    <div class="feature-icon">
-                        <i class="fas fa-layer-group"></i>
-                    </div>
-                    <h3>Stockage Flexible</h3>
-                    <p>Support YAML, JSON et binaire avec migration transparente entre formats et compression intégrée.</p>
-                    <span class="feature-badge">Multi-format</span>
-                </div>
-                
-                <!-- Feature 4 -->
-                <div class="feature-card-mobile fade-in delay-3">
-                    <div class="feature-icon">
-                        <i class="fas fa-rocket"></i>
-                    </div>
-                    <h3>Haute Performance</h3>
-                    <p>Indexation B-Tree avancée, cache intelligent et optimisation des requêtes pour des résultats ultra-rapides.</p>
-                    <span class="feature-badge">Optimized</span>
-                </div>
+            <!-- Badges -->
+            <div class="text-center my-4">
+                [![PyPI Version](https://img.shields.io/pypi/v/gsql?style=flat-square&logo=pypi&color=006dad)](https://pypi.org/project/gsql/)
+                [![Conda Version](https://img.shields.io/conda/v/gopu-inc/gsql?logo=anaconda&color=44a833&style=flat-square)](https://anaconda.org/gopu-inc/gsql)
+                [![Downloads](https://static.pepy.tech/personalized-badge/gsql?period=total&units=international_system&left_color=black&right_color=blue&left_text=Downloads)](https://pepy.tech/project/gsql)
+                [![License](https://img.shields.io/github/license/gopu-inc/gsql?style=flat-square&logo=opensourceinitiative&color=6cc24a)](LICENSE)
             </div>
         </section>
-        
-        <!-- Badges Section -->
-        <section class="section" id="badges">
-            <div class="badges-container">
-                <h2 class="text-center mb-4">Badges Officiels</h2>
-                <p class="text-center mb-4">Intégrez ces badges dans vos projets mobiles et desktop</p>
-                
-                <div class="badges-grid">
-                    <!-- Badge 1 -->
-                    <div class="badge-card">
-                        <div class="badge-preview">
-                            <img src="https://img.shields.io/badge/GSQL-Database-4a6fa5?style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTAyNCIgaGVpZ2h0PSIxMDI0IiB2aWV3Qm94PSIwIDAgMTAyNCAxMDI0IiBmaWxsPSJub25lIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxyZWN0IHdpZHRoPSIxMDI0IiBoZWlnaHQ9IjEwMjQiIGZpbGw9IiM0YTZmYTUiLz48dGV4dCB4PSI1MTIiIHk9IjU0MCIgZm9udC1mYW1pbHk9IkFyaWFsIiBmb250LXNpemU9IjQwMCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZmlsbD0id2hpdGUiPkc8L3RleHQ+PC9zdmc+&logoColor=white" 
-                                 alt="GSQL Database" style="height: 28px;">
-                        </div>
-                        <h4 class="text-center mb-2">Badge Principal</h4>
-                        <p class="small text-center mb-3">Montrez votre utilisation de GSQL</p>
-                        <div class="badge-code-wrapper">
-                            <code class="badge-code">[![GSQL Database](URL)](https://github.com/gopu-inc/gsql)</code>
-                            <button class="copy-btn">Copier</button>
+
+        <!-- État Transparent du Projet -->
+        <section id="etat" class="section">
+            <h2 class="mb-4"><i class="fas fa-info-circle text-primary me-2"></i>État du Projet & Transparence</h2>
+            <div class="row">
+                <div class="col-md-8">
+                    <div class="alert alert-transparent" role="alert">
+                        <h5 class="alert-heading">Important à Savoir Avant d'Utiliser GSQL</h5>
+                        <p class="mb-0">GSQL est en développement actif. Il n'est <strong>pas encore recommandé pour une utilisation en production critique</strong>. La communauté travaille à le stabiliser.</p>
+                    </div>
+                </div>
+            </div>
+            <div class="row mt-4">
+                <div class="col-md-6 mb-3">
+                    <div class="card h-100 border-success">
+                        <div class="card-body">
+                            <h5 class="card-title text-success"><i class="fas fa-check-circle me-2"></i>Ce qui est Stable</h5>
+                            <ul class="mb-0">
+                                <li><strong>Shell Interactif</strong> avec auto-complétion et historique.</li>
+                                <li><strong>Cache Intelligent (LRU)</strong> pour des requêtes plus rapides.</li>
+                                <li><strong>Commandes Spéciales</strong> (<code>.tables</code>, <code>STATS</code>, <code>VACUUM</code>).</li>
+                                <li><strong>Toutes les fonctionnalités SQLite</strong> via <code>db.execute()</code>.</li>
+                            </ul>
                         </div>
                     </div>
-                    
-                    <!-- Badge 2 -->
-                    <div class="badge-card">
-                        <div class="badge-preview">
-                            <img src="https://img.shields.io/badge/GSQL-NLP_Enabled-4fc3a1?style=for-the-badge&logo=ai&logoColor=white" 
-                                 alt="NLP Enabled" style="height: 28px;">
-                        </div>
-                        <h4 class="text-center mb-2">NLP Enabled</h4>
-                        <p class="small text-center mb-3">Support du traitement du langage naturel</p>
-                        <div class="badge-code-wrapper">
-                            <code class="badge-code">[![NLP Enabled](URL)](https://github.com/gopu-inc/gsql)</code>
-                            <button class="copy-btn">Copier</button>
+                </div>
+                <div class="col-md-6 mb-3">
+                    <div class="card h-100 border-warning">
+                        <div class="card-body">
+                            <h5 class="card-title text-warning"><i class="fas fa-exclamation-triangle me-2"></i>Bugs & Limitations Connus</h5>
+                            <ul class="mb-0">
+                                <li><strong>API Transactionnelle</strong> : <code>db.begin_transaction()</code> a des bugs. <em>Workaround : utilisez les commandes SQL brutes.</em></li>
+                                <li><strong>Parsing des guillemets</strong> : peut être fragile dans le shell.</li>
+                                <li><strong>Modules NLP & Stockage alternatif</strong> : expérimentaux et instables.</li>
+                            </ul>
                         </div>
                     </div>
                 </div>
             </div>
         </section>
-        
-        <!-- Documentation Tabs -->
-        <section class="section" id="docs">
-            <h2 class="text-center mb-4">Documentation</h2>
-            
-            <div class="mobile-tabs" id="docTabs">
-                <button class="tab-btn active" data-tab="database">Database</button>
-                <button class="tab-btn" data-tab="parser">Parser</button>
-                <button class="tab-btn" data-tab="storage">Storage</button>
-                <button class="tab-btn" data-tab="nlp">NLP</button>
-            </div>
-            
-            <!-- Database Tab -->
-            <div class="tab-content active" id="database-content">
-                <h3>Module Database</h3>
-                <p>Gestion des connexions, transactions et opérations principales.</p>
-                
-                <div class="code-block-mobile">
-                    <div class="code-header-mobile">
-                        <span>Exemple d'utilisation</span>
-                        <span class="code-language">Python</span>
+
+        <!-- Utilisation & Intégration -->
+        <section id="utilisation" class="section">
+            <h2 class="mb-4"><i class="fas fa-rocket text-primary me-2"></i>Installation & Utilisation Rapide</h2>
+            <p>Voici comment installer et <strong>intégrer GSQL correctement</strong> dans vos projets.</p>
+
+            <div class="row mt-4">
+                <div class="col-lg-4 mb-4">
+                    <div class="text-center p-4 h-100 border rounded bg-white">
+                        <div class="feature-icon"><i class="fas fa-terminal"></i></div>
+                        <h5>1. Shell Interactif</h5>
+                        <p>Le moyen le plus simple de tester GSQL.</p>
+                        <div class="code-block">
+                            <div class="code-header">Terminal</div>
+                            <pre><code class="language-bash"># Installez GSQL
+pip install gsql
+
+# Lancez le shell
+gsql
+# gsql> .tables
+# gsql> SELECT * FROM sqlite_master;</code></pre>
+                        </div>
                     </div>
-                    <pre><code class="language-python">from gsql.database import Database
-
-# Création d'une instance
-db = Database("myapp", storage_type="yaml")
-
-# Exécution de requête
-results = db.execute("""
-    SELECT * FROM users 
-    WHERE age > ? AND status = ?
-""", [18, "active"])
-
-print(f"{len(results)} utilisateurs trouvés")</code></pre>
+                </div>
+                <div class="col-lg-4 mb-4">
+                    <div class="text-center p-4 h-100 border rounded bg-white">
+                        <div class="feature-icon"><i class="fas fa-code"></i></div>
+                        <h5>2. Dans un Script Python</h5>
+                        <p>Intégration basique avec SQLite.</p>
+                        <div class="code-block">
+                            <div class="code-header">script.py</div>
+                            <pre><code class="language-python">from gsql.database import Database
+# Initialisation
+db = Database(db_path=":memory:")
+# Exécuter une requête
+result = db.execute("""
+    CREATE TABLE users (id INT, name TEXT)
+""")
+print("Table créée")</code></pre>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-4 mb-4">
+                    <div class="text-center p-4 h-100 border rounded bg-white">
+                        <div class="feature-icon"><i class="fas fa-exchange-alt"></i></div>
+                        <h5>3. Transactions (Workaround)</h5>
+                        <p>Utilisez les commandes SQL natives.</p>
+                        <div class="code-block">
+                            <div class="code-header">transaction.py</div>
+<pre><code class="language-python"># ⚠️ WORKAROUND pour le bug des transactions
+# N'utilisez PAS db.begin_transaction()
+db.execute("BEGIN IMMEDIATE TRANSACTION")
+try:
+    db.execute("UPDATE compte SET solde = solde - 100")
+    db.execute("COMMIT") # Valider
+except Exception as e:
+    db.execute("ROLLBACK") # Annuler
+    print(f"Erreur : {e}")</code></pre>
+                        </div>
+                    </div>
                 </div>
             </div>
-            
-            <!-- Parser Tab -->
-            <div class="tab-content" id="parser-content">
-                <h3>Module Parser</h3>
-                <p>Analyse syntaxique SQL et validation des requêtes.</p>
-                
-                <div class="code-block-mobile">
-                    <div class="code-header-mobile">
-                        <span>Exemple de parsing</span>
-                        <span class="code-language">Python</span>
-                    </div>
-                    <pre><code class="language-python">from gsql.parser import SQLParser
 
-parser = SQLParser()
-ast = parser.parse("SELECT * FROM users")
+            <h4 class="mt-5 mb-3">Exemple Complet d'Intégration</h4>
+            <p>Un exemple concret d'utilisation de GSQL pour gérer une base de données simple.</p>
+            <div class="code-block">
+                <div class="code-header">exemple_complet.py</div>
+                <pre><code class="language-python">"""
+Exemple d'intégration de GSQL avec les bonnes pratiques.
+"""
+from gsql.database import Database
 
-if ast.validate():
-    print("Requête valide")
-    print(f"Tables: {ast.get_tables()}")</code></pre>
-                </div>
+def main():
+    # 1. INITIALISATION
+    # Pour un fichier : db_path="ma_base.db"
+    db = Database(db_path=":memory:", enable_wal=True)
+
+    # 2. CRÉATION DU SCHÉMA
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS produits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nom TEXT NOT NULL,
+            prix REAL CHECK(prix >= 0),
+            stock INTEGER DEFAULT 0
+        )
+    """)
+
+    # 3. INSERTION DE DONNÉES (toujours avec paramètres)
+    produits_a_ajouter = [
+        ("Laptop", 999.99, 10),
+        ("Souris", 29.99, 50),
+    ]
+    for nom, prix, stock in produits_a_ajouter:
+        db.execute(
+            "INSERT INTO produits (nom, prix, stock) VALUES (?, ?, ?)",
+            [nom, prix, stock]
+        )
+
+    # 4. REQUÊTAGE AVEC CACHE (pour les SELECT répétitifs)
+    result = db.execute(
+        "SELECT * FROM produits WHERE stock > ?",
+        params=[0],
+        use_cache=True # ✅ Active le cache
+    )
+    print(f"{result['count']} produit(s) en stock.")
+
+    # 5. UTILISATION D'UNE COMMANDE SPÉCIALE GSQL
+    stats = db.execute("STATS")
+    print(f"Cache hit ratio: {stats.get('database', {}).get('cache_hit_ratio', 0):.1%}")
+
+    # 6. FERMETURE PROPRE
+    db.close()
+
+if __name__ == "__main__":
+    main()</code></pre>
             </div>
-            
-            <!-- Storage Tab -->
-            <div class="tab-content" id="storage-content">
-                <h3>Module Storage</h3>
-                <p>Système de stockage persistant multi-format.</p>
-                
-                <div class="code-block-mobile">
-                    <div class="code-header-mobile">
-                        <span>Exemple de stockage</span>
-                        <span class="code-language">Python</span>
+        </section>
+
+        <!-- FAQ Complète -->
+        <section id="faq" class="section">
+            <h2 class="mb-4"><i class="fas fa-question-circle text-primary me-2"></i>FAQ Complète & Dépannage</h2>
+            <p>Réponses aux questions les plus fréquentes sur l'installation, l'utilisation et le dépannage de GSQL.</p>
+
+            <div class="accordion" id="faqAccordion">
+                <!-- FAQ 1 -->
+                <div class="accordion-item">
+                    <h3 class="accordion-header">
+                        <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#faq1">
+                            <strong>Q1 :</strong> L'installation avec <code>pip install gsql</code> échoue. Que faire ?
+                        </button>
+                    </h3>
+                    <div id="faq1" class="accordion-collapse collapse show" data-bs-parent="#faqAccordion">
+                        <div class="accordion-body">
+                            <p>Assurez-vous d'avoir une version récente de <code>pip</code> et de <code>setuptools</code> :</p>
+                            <pre><code class="language-bash">python -m pip install --upgrade pip setuptools wheel
+# Réessayez ensuite
+pip install gsql</code></pre>
+                            <p class="mt-2 mb-0"><strong>Problème spécifique à Windows ?</strong> Vous pourriez avoir besoin des <a href="https://visualstudio.microsoft.com/visual-cpp-build-tools/" target="_blank">Outils de génération C++ de Microsoft</a> pour compiler certaines dépendances.</p>
+                        </div>
                     </div>
-                    <pre><code class="language-python">from gsql.storage import StorageEngine
-
-storage = StorageEngine(backend="yaml")
-storage.save("data.yml", {"users": [...]})
-
-data = storage.load("data.yml")
-print(f"Données chargées: {len(data['users'])}")</code></pre>
                 </div>
-            </div>
-            
-            <!-- NLP Tab -->
-            <div class="tab-content" id="nlp-content">
-                <h3>Module NLP</h3>
-                <p>Traitement du langage naturel pour requêtes.</p>
-                
-                <div class="code-block-mobile">
-                    <div class="code-header-mobile">
-                        <span>Exemple NLP</span>
-                        <span class="code-language">Python</span>
+                <!-- FAQ 2 -->
+                <div class="accordion-item">
+                    <h3 class="accordion-header">
+                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#faq2">
+                            <strong>Q2 :</strong> <code>db.begin_transaction()</code> ne marche pas. Comment gérer les transactions ?
+                        </button>
+                    </h3>
+                    <div id="faq2" class="accordion-collapse collapse" data-bs-parent="#faqAccordion">
+                        <div class="accordion-body">
+                            <p>C'est un <strong>bug connu</strong>. L'API transactionnelle native de GSQL est actuellement défectueuse.</p>
+                            <p><strong>Solution (Workaround) :</strong> Utilisez <strong>directement les commandes SQL de transaction</strong> via la méthode <code>db.execute()</code>.</p>
+                            <div class="code-block">
+                                <pre><code class="language-python"># ❌ NE PAS FAIRE (buggé)
+# tid = db.begin_transaction()
+# db.commit_transaction(tid)
+
+# ✅ À FAIRE (workaround fonctionnel)
+db.execute("BEGIN IMMEDIATE TRANSACTION")
+try:
+    # Vos opérations SQL...
+    db.execute("UPDATE table1 SET col = 'val'")
+    db.execute("INSERT INTO table2 VALUES (1, 2)")
+    db.execute("COMMIT") # Validation
+except Exception as e:
+    db.execute("ROLLBACK") # Annulation en cas d'erreur
+    print(f"Transaction annulée : {e}")</code></pre>
+                            </div>
+                        </div>
                     </div>
-                    <pre><code class="language-python">from gsql.nlp.translator import NLTranslator
+                </div>
+                <!-- FAQ 3 -->
+                <div class="accordion-item">
+                    <h3 class="accordion-header">
+                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#faq3">
+                            <strong>Q3 :</strong> Le shell interactif plante ou ne parse pas correctement ma requête.
+                        </button>
+                    </h3>
+                    <div id="faq3" class="accordion-collapse collapse" data-bs-parent="#faqAccordion">
+                        <div class="accordion-body">
+                            <p>Le parser du shell peut être fragile avec certains caractères (guillemets imbriqués, caractères spéciaux).</p>
+                            <p><strong>Solutions :</strong></p>
+                            <ul>
+                                <li><strong>Évitez les guillemets complexes</strong> dans le shell pour l'instant. Utilisez un script Python pour les requêtes élaborées.</li>
+                                <li>Écrivez votre requête SQL dans un fichier <code>.sql</code> et utilisez la redirection : <code>gsql < ma_requete.sql</code> (si supporté).</li>
+                                <li>Assurez-vous que votre requête est syntaxiquement valide pour SQLite.</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+                <!-- FAQ 4 -->
+                <div class="accordion-item">
+                    <h3 class="accordion-header">
+                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#faq4">
+                            <strong>Q4 :</strong> Puis-je utiliser GSQL avec mon fichier de base de données SQLite existant ?
+                        </button>
+                    </h3>
+                    <div id="faq4" class="accordion-collapse collapse" data-bs-parent="#faqAccordion">
+                        <div class="accordion-body">
+                            <p><strong>Oui, absolument.</strong> C'est l'un des points forts de GSQL.</p>
+                            <p>Il suffit de pointer le paramètre <code>db_path</code> vers votre fichier <code>.db</code> existant lors de la création de l'instance <code>Database</code>.</p>
+                            <div class="code-block">
+                                <pre><code class="language-python">from gsql.database import Database
 
-translator = NLTranslator(language="fr")
-sql = translator.translate("Affiche les produits populaires")
+# Ouvrez votre base SQLite existante
+db = Database(db_path="/chemin/vers/votre/base_de_donnees.db")
 
-print(f"SQL généré: {sql}")
-print(f"Confiance: {translator.get_confidence():.1%}")</code></pre>
+# Utilisez GSQL pour interagir avec elle
+result = db.execute("SELECT * FROM votre_table")
+# ...</code></pre>
+                            </div>
+                            <p class="mb-0"><strong>Note :</strong> GSQL ne modifiera pas la structure de votre fichier. Il utilise simplement SQLite comme moteur de stockage.</p>
+                        </div>
+                    </div>
+                </div>
+                <!-- FAQ 5 -->
+                <div class="accordion-item">
+                    <h3 class="accordion-header">
+                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#faq5">
+                            <strong>Q5 :</strong> Comment contribuer au projet GSQL ?
+                        </button>
+                    </h3>
+                    <div id="faq5" class="accordion-collapse collapse" data-bs-parent="#faqAccordion">
+                        <div class="accordion-body">
+                            <p>Les contributions sont les bienvenues ! Voici comment procéder :</p>
+                            <ol>
+                                <li><strong>Signaler un bug</strong> : Sur <a href="https://github.com/gopu-inc/gsql/issues" target="_blank">GitHub Issues</a>, décrivez le problème avec un <strong>exemple de code minimal reproductible</strong>, la version de GSQL et de Python.</li>
+                                <li><strong>Proposer une amélioration</strong> : Ouvrez une "issue" pour discuter de la nouvelle fonctionnalité avant de coder.</li>
+                                <li><strong>Soumettre un correctif</strong> :
+                                    <pre><code class="language-bash"># 1. Forkez le dépôt sur GitHub
+# 2. Clonez votre fork
+git clone https://github.com/votre-username/gsql.git
+# 3. Créez une branche
+git checkout -b fix/nom-du-correctif
+# 4. Codez, testez, poussez
+# 5. Ouvrez une Pull Request</code></pre>
+                                </li>
+                            </ol>
+                            <p><strong>Priorités actuelles :</strong> Corriger l'API des transactions, stabiliser le parser du shell, améliorer la documentation.</p>
+                        </div>
+                    </div>
                 </div>
             </div>
         </section>
-        
-        <!-- API Accordion -->
-        <section class="section" id="api">
-            <h2 class="text-center mb-4">Référence API</h2>
-            
-            <div class="accordion-mobile">
-                <!-- Endpoint 1 -->
-                <div class="accordion-item">
-                    <div class="accordion-header">
-                        <span class="text-primary fw-bold">POST /api/database/create</span>
-                        <i class="fas fa-chevron-down accordion-icon"></i>
-                    </div>
-                    <div class="accordion-content">
-                        <p>Crée une nouvelle base de données GSQL.</p>
-                        <div class="code-block-mobile mb-3">
-                            <pre><code class="language-json">{
-  "name": "string",
-  "storage_type": "yaml|json|binary"
-}</code></pre>
-                        </div>
-                    </div>
-                </div>
-                
-                <!-- Endpoint 2 -->
-                <div class="accordion-item">
-                    <div class="accordion-header">
-                        <span class="text-primary fw-bold">GET /api/database/{name}/query</span>
-                        <i class="fas fa-chevron-down accordion-icon"></i>
-                    </div>
-                    <div class="accordion-content">
-                        <p>Exécute une requête SQL.</p>
-                        <div class="code-block-mobile mb-3">
-                            <pre><code class="language-json">{
-  "q": "SELECT * FROM users",
-  "format": "json"
-}</code></pre>
-                        </div>
-                    </div>
-                </div>
-                
-                <!-- Endpoint 3 -->
-                <div class="accordion-item">
-                    <div class="accordion-header">
-                        <span class="text-primary fw-bold">POST /api/nlp/translate</span>
-                        <i class="fas fa-chevron-down accordion-icon"></i>
-                    </div>
-                    <div class="accordion-content">
-                        <p>Traduit le langage naturel en SQL.</p>
-                        <div class="code-block-mobile mb-3">
-                            <pre><code class="language-json">{
-  "text": "Affiche les utilisateurs actifs",
-  "language": "fr"
-}</code></pre>
-                        </div>
-                    </div>
-                </div>
+
+        <!-- Ressources & Conclusion -->
+        <section class="section">
+            <div class="text-center p-5 border-top">
+                <h3 class="mb-3">Prêt à essayer GSQL ?</h3>
+                <p class="mb-4">Rejoignez la communauté et contribuez à façonner l'avenir de cet outil.</p>
+                <a href="https://github.com/gopu-inc/gsql" target="_blank" class="btn btn-primary btn-lg me-2">
+                    <i class="fab fa-github"></i> Voir sur GitHub
+                </a>
+                <a href="#utilisation" class="btn btn-outline-primary btn-lg">Voir les Exemples de Code</a>
+                <p class="small text-muted mt-4">GSQL Database © 2024 Gopu Inc. | Interface Python moderne pour SQLite.</p>
             </div>
         </section>
     </main>
-    
-    <!-- Footer -->
-    <footer class="footer-mobile">
-        <div class="container-mobile">
-            <div class="footer-grid">
-                <!-- Column 1 -->
-                <div class="footer-section">
-                    <h5>GSQL Database</h5>
-                    <p class="small">Un système de base de données moderne avec des fonctionnalités avancées, optimisé pour les appareils mobiles.</p>
-                    <div class="footer-badges">
-                        <img src="https://img.shields.io/badge/mobile-optimized-blue?style=flat-square" alt="Mobile" style="height: 20px;">
-                        <img src="https://img.shields.io/badge/responsive-design-success?style=flat-square" alt="Responsive" style="height: 20px;">
-                    </div>
-                </div>
-                
-                <!-- Column 2 -->
-                <div class="footer-section">
-                    <h5>Navigation</h5>
-                    <ul class="footer-links">
-                        <li><a href="#home">Accueil</a></li>
-                        <li><a href="#features">Fonctionnalités</a></li>
-                        <li><a href="#badges">Badges</a></li>
-                        <li><a href="#docs">Documentation</a></li>
-                        <li><a href="#api">API</a></li>
-                    </ul>
-                </div>
-                
-                <!-- Column 3 -->
-                <div class="footer-section">
-                    <h5>Ressources</h5>
-                    <ul class="footer-links">
-                        <li><a href="https://github.com/gopu-inc/gsql" target="_blank">GitHub</a></li>
-                        <li><a href="#">Documentation</a></li>
-                        <li><a href="#">Exemples</a></li>
-                        <li><a href="#">Support</a></li>
-                    </ul>
-                </div>
-            </div>
-            
-            <div class="text-center mt-5 pt-4 border-top">
-                <p class="small">&copy; 2024 GSQL Database. Optimisé pour mobile.</p>
-            </div>
-        </div>
-    </footer>
-    
-    <!-- Floating Action Buttons -->
-    <div class="fab-container">
-        <div class="fab-menu" id="fabMenu">
-            <button class="fab-item" onclick="scrollToTop()">
-                <i class="fas fa-arrow-up"></i>
-            </button>
-            <button class="fab-item" onclick="toggleTheme()">
-                <i class="fas fa-moon"></i>
-            </button>
-            <button class="fab-item" onclick="window.open('https://github.com/gopu-inc/gsql', '_blank')">
-                <i class="fab fa-github"></i>
-            </button>
-        </div>
-        <button class="fab-main" id="fabMain">
-            <i class="fas fa-plus"></i>
-        </button>
-    </div>
-    
-    <!-- JavaScript Libraries -->
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-python.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-json.min.js"></script>
-    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-bash.min.js"></script>
     <script>
-        // ===== MOBILE NAVIGATION =====
-        const menuToggle = document.getElementById('menuToggle');
-        const navOverlay = document.getElementById('navOverlay');
-        const navSidebar = document.getElementById('navSidebar');
-        
-        function toggleNav() {
-            navOverlay.classList.toggle('active');
-            navSidebar.classList.toggle('active');
-            document.body.style.overflow = navSidebar.classList.contains('active') ? 'hidden' : '';
-        }
-        
-        menuToggle.addEventListener('click', toggleNav);
-        navOverlay.addEventListener('click', toggleNav);
-        
-        // Close nav when clicking links
-        document.querySelectorAll('.nav-links-mobile a').forEach(link => {
-            link.addEventListener('click', toggleNav);
-        });
-        
-        // ===== FLOATING ACTION BUTTON =====
-        const fabMain = document.getElementById('fabMain');
-        const fabMenu = document.getElementById('fabMenu');
-        let fabOpen = false;
-        
-        fabMain.addEventListener('click', () => {
-            fabOpen = !fabOpen;
-            fabMenu.classList.toggle('active', fabOpen);
-            fabMain.innerHTML = fabOpen ? '<i class="fas fa-times"></i>' : '<i class="fas fa-plus"></i>';
-        });
-        
-        // Close FAB when clicking outside
-        document.addEventListener('click', (e) => {
-            if (!fabMain.contains(e.target) && !fabMenu.contains(e.target)) {
-                fabOpen = false;
-                fabMenu.classList.remove('active');
-                fabMain.innerHTML = '<i class="fas fa-plus"></i>';
-            }
-        });
-        
-        // ===== TAB SYSTEM =====
-        const tabButtons = document.querySelectorAll('.tab-btn');
-        const tabContents = document.querySelectorAll('.tab-content');
-        
-        tabButtons.forEach(button => {
-            button.addEventListener('click', () => {
-                // Remove active class from all
-                tabButtons.forEach(btn => btn.classList.remove('active'));
-                tabContents.forEach(content => content.classList.remove('active'));
-                
-                // Add active class to clicked
-                button.classList.add('active');
-                const tabId = button.getAttribute('data-tab');
-                document.getElementById(`${tabId}-content`).classList.add('active');
-            });
-        });
-        
-        // ===== ACCORDION =====
-        const accordionHeaders = document.querySelectorAll('.accordion-header');
-        
-        accordionHeaders.forEach(header => {
-            header.addEventListener('click', () => {
-                const content = header.nextElementSibling;
-                const icon = header.querySelector('.accordion-icon');
-                
-                // Toggle current
-                content.classList.toggle('active');
-                icon.classList.toggle('active');
-                
-                // Close others
-                accordionHeaders.forEach(otherHeader => {
-                    if (otherHeader !== header) {
-                        const otherContent = otherHeader.nextElementSibling;
-                        const otherIcon = otherHeader.querySelector('.accordion-icon');
-                        otherContent.classList.remove('active');
-                        otherIcon.classList.remove('active');
-                    }
-                });
-            });
-        });
-        
-        // ===== COPY FUNCTIONALITY =====
-        document.querySelectorAll('.copy-btn').forEach(button => {
-            button.addEventListener('click', async function() {
-                const code = this.previousElementSibling.textContent;
-                const originalText = this.textContent;
-                
-                try {
-                    await navigator.clipboard.writeText(code);
-                    this.textContent = '✓ Copié';
-                    this.style.background = 'var(--md-success)';
-                    
-                    setTimeout(() => {
-                        this.textContent = originalText;
-                        this.style.background = '';
-                    }, 2000);
-                } catch (err) {
-                    this.textContent = 'Erreur';
-                    this.style.background = 'var(--md-error)';
-                    setTimeout(() => {
-                        this.textContent = originalText;
-                        this.style.background = '';
-                    }, 2000);
-                }
-            });
-        });
-        
-        // ===== THEME TOGGLE =====
-        function toggleTheme() {
-            const isDark = document.body.classList.toggle('dark-theme');
-            localStorage.setItem('theme', isDark ? 'dark' : 'light');
-            
-            // Update meta theme-color
-            const metaThemeColor = document.querySelector('meta[name="theme-color"]');
-            metaThemeColor.setAttribute('content', isDark ? '#1C1C1E' : '#4a6fa5');
-        }
-        
-        // Load saved theme
-        const savedTheme = localStorage.getItem('theme') || 
-                          (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-        if (savedTheme === 'dark') {
-            document.body.classList.add('dark-theme');
-        }
-        
-        // ===== SCROLL ANIMATIONS =====
-        function animateStats() {
-            const stats = document.querySelectorAll('.stat-number');
-            stats.forEach(stat => {
-                const target = stat.textContent;
-                let current = 0;
-                const increment = parseFloat(target) / 30;
-                
-                const timer = setInterval(() => {
-                    current += increment;
-                    if (current >= parseFloat(target)) {
-                        stat.textContent = target;
-                        clearInterval(timer);
-                    } else {
-                        stat.textContent = current.toFixed(1);
-                    }
-                }, 50);
-            });
-        }
-        
-        // Intersection Observer for animations
-        const observer = new IntersectionObserver((entries) => {
-            entries.forEach(entry => {
-                if (entry.isIntersecting) {
-                    entry.target.classList.add('fade-in');
-                    
-                    // Animate stats when hero is visible
-                    if (entry.target.id === 'home') {
-                        animateStats();
-                    }
-                }
-            });
-        }, { threshold: 0.1 });
-        
-        // Observe sections
-        document.querySelectorAll('.section').forEach(section => {
-            observer.observe(section);
-        });
-        
-        // ===== SCROLL TO TOP =====
-        function scrollToTop() {
-            window.scrollTo({
-                top: 0,
-                behavior: 'smooth'
-            });
-        }
-        
-        // ===== NAVBAR SCROLL EFFECT =====
-        window.addEventListener('scroll', () => {
-            const navbar = document.getElementById('navbar');
-            if (window.scrollY > 50) {
-                navbar.classList.add('scrolled');
-            } else {
-                navbar.classList.remove('scrolled');
-            }
-        });
-        
-        // ===== TOUCH GESTURES =====
-        let touchStartY = 0;
-        
-        document.addEventListener('touchstart', (e) => {
-            touchStartY = e.touches[0].clientY;
-        }, { passive: true });
-        
-        // ===== INITIALIZE PRISM =====
-        document.addEventListener('DOMContentLoaded', () => {
+        // Highlight tous les blocs de code au chargement
+        document.addEventListener('DOMContentLoaded', (event) => {
             Prism.highlightAll();
-            
-            // Smooth scroll for anchor links
-            document.querySelectorAll('a[href^="#"]').forEach(anchor => {
-                anchor.addEventListener('click', function(e) {
-                    if (this.getAttribute('href') !== '#') {
-                        e.preventDefault();
-                        const target = document.querySelector(this.getAttribute('href'));
-                        if (target) {
-                            target.scrollIntoView({
-                                behavior: 'smooth',
-                                block: 'start'
-                            });
-                        }
-                    }
-                });
-            });
         });
-        
-        // ===== PWA INSTALL PROMPT =====
-        let deferredPrompt;
-        
-        window.addEventListener('beforeinstallprompt', (e) => {
-            e.preventDefault();
-            deferredPrompt = e;
-            
-            // Show install button (optional)
-            const installBtn = document.createElement('button');
-            installBtn.textContent = 'Installer l\'app';
-            installBtn.className = 'btn-mobile btn-mobile-primary';
-            installBtn.style.marginTop = '1rem';
-            
-            installBtn.addEventListener('click', async () => {
-                if (deferredPrompt) {
-                    deferredPrompt.prompt();
-                    const { outcome } = await deferredPrompt.userChoice;
-                    console.log(`User response: ${outcome}`);
-                    deferredPrompt = null;
-                }
-            });
-            
-            document.querySelector('.hero-buttons').appendChild(installBtn);
-        });
-        
-        // ===== SERVICE WORKER (optional) =====
-        if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('/sw.js').catch(console.error);
-        }
     </script>
 </body>
 </html>
