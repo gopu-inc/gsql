@@ -3,7 +3,6 @@ click
 colorama
 prompt-toolkit
 rich
-pandas
 numpy
 nltk
 psutil
