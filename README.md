@@ -3,6 +3,8 @@
 > **GSQL - Système de Base de Données SQL Complet 🚀**
 > **powered by gopu.inc,**
 [![GSQL-Datastor](https://img.shields.io/badge/GSQL-Datastor-356fa5?style=for-the-badge)](https://github.com/gopu-inc/gsql)
+![PyPI - Daily Downloads](https://img.shields.io/pypi/dd/gsql)
+[![Downloads](https://static.pepy.tech/personalized-badge/gsql?period=total&units=international_system&left_color=black&right_color=blue&left_text=Downloads)](https://pepy.tech/project/gsql)
 [![PyPI](https://img.shields.io/pypi/v/gsql?style=flat-square&logo=pypi&color=006dad)](https://pypi.org/project/gsql/)
 [![Python](https://img.shields.io/pypi/pyversions/gsql?style=flat-square&logo=python&color=3776ab)](https://pypi.org/project/gsql/)
 [![Conda Version](https://img.shields.io/conda/v/gopu-inc/gsql?logo=anaconda&color=44a833&style=flat-square)](https://anaconda.org/gopu-inc/gsql)
