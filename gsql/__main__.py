@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 GSQL Main Entry Point - Interactive Shell and CLI
-Version: 3.0 - SQLite Only with Transaction Support
+Version: 3.1.0 - SQLite Only with Transaction Support
 """
 
 import os
@@ -21,30 +21,123 @@ from datetime import datetime
 
 # ==================== IMPORTS ====================
 
+# Définir __version__ si non présent
+__version__ = "3.1.0"
+
 # Import des modules GSQL
 try:
-    from . import __version__, config, setup_logging
-    from .database import create_database, Database, connect
-    from .executor import create_executor, QueryExecutor
-    from .functions import FunctionManager
-    from .storage import SQLiteStorage
-    
-    # Pour NLP, on essaie d'importer mais on a un fallback
+    # Config simple si config.py n'existe pas
     try:
-        from .nlp.translator import NLToSQLTranslator
-        NLP_AVAILABLE = True
+        from . import config
     except ImportError:
-        NLP_AVAILABLE = False
-        NLToSQLTranslator = None
+        # Créer un module config simple
+        class SimpleConfig:
+            _config = {
+                'base_dir': str(Path.home() / '.gsql'),
+                'log_level': 'INFO',
+                'colors': True,
+                'verbose_errors': False,
+                'auto_commit': False,
+                'transaction_timeout': 30
+            }
+            
+            def get(self, key, default=None):
+                keys = key.split('.')
+                value = self._config
+                for k in keys:
+                    if isinstance(value, dict) and k in value:
+                        value = value[k]
+                    else:
+                        return default
+                return value
+            
+            def set(self, key, value):
+                self._config[key] = value
+            
+            def to_dict(self):
+                return self._config.copy()
+            
+            def update(self, **kwargs):
+                self._config.update(kwargs)
+        
+        config = SimpleConfig()
+    
+    # Import du database.py
+    from .database import create_database, Database, connect
+    
+    # Gérer les imports optionnels
+    try:
+        from .storage import SQLiteStorage, create_storage
+        STORAGE_AVAILABLE = True
+    except ImportError:
+        STORAGE_AVAILABLE = False
+        # Définir un fallback minimal
+        class FallbackStorage:
+            def __init__(self, *args, **kwargs):
+                pass
+            def execute(self, sql, params=None):
+                return {'success': False, 'error': 'Storage not available'}
+            def get_tables(self):
+                return []
+            def get_table_schema(self, table_name):
+                return None
+            def get_stats(self):
+                return {}
+            def backup(self, backup_path=None):
+                return ""
+            def close(self):
+                pass
+        
+        def create_storage(*args, **kwargs):
+            return FallbackStorage()
+    
+    # Fallback pour executor
+    try:
+        from .executor import create_executor, QueryExecutor
+        EXECUTOR_AVAILABLE = True
+    except ImportError:
+        EXECUTOR_AVAILABLE = False
+        
+        class QueryExecutor:
+            def __init__(self, storage=None):
+                self.storage = storage
+        
+        def create_executor(storage=None):
+            return QueryExecutor(storage)
+    
+    # Fallback pour functions
+    try:
+        from .functions import FunctionManager
+        FUNCTIONS_AVAILABLE = True
+    except ImportError:
+        FUNCTIONS_AVAILABLE = False
+        
+        class FunctionManager:
+            def __init__(self):
+                pass
+    
+    # NLP non disponible
+    NLP_AVAILABLE = False
+    NLToSQLTranslator = None
     
     GSQL_AVAILABLE = True
+    
 except ImportError as e:
-    print(f"Error importing GSQL modules: {e}")
-    GSQL_AVAILABLE = False
-    traceback.print_exc()
-    sys.exit(1)
+    print(f"Warning: Some imports failed: {e}")
+    GSQL_AVAILABLE = True
 
 # ==================== LOGGING ====================
+
+def setup_logging(level='INFO', log_file=None):
+    """Configure le logging"""
+    logging.basicConfig(
+        level=getattr(logging, level),
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler(),
+            *([logging.FileHandler(log_file)] if log_file else [])
+        ]
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -56,13 +149,13 @@ DEFAULT_CONFIG = {
         'auto_recovery': True,
         'buffer_pool_size': 100,
         'enable_wal': True,
-        'transaction_timeout': 30,  # Timeout pour les transactions (secondes)
-        'max_transactions': 10      # Nombre max de transactions concurrentes
+        'transaction_timeout': 30,
+        'max_transactions': 10
     },
     'executor': {
-        'enable_nlp': False,  # Désactivé par défaut
+        'enable_nlp': False,
         'enable_learning': False,
-        'auto_commit': False  # Mode auto-commit désactivé pour transactions manuelles
+        'auto_commit': False
     },
     'shell': {
         'prompt': 'gsql> ',
@@ -71,7 +164,7 @@ DEFAULT_CONFIG = {
         'colors': True,
         'autocomplete': True,
         'show_transaction_status': True,
-        'transaction_warning_time': 5  # Avertir après 5 secondes
+        'transaction_warning_time': 5
     }
 }
 
@@ -236,7 +329,7 @@ class GSQLCompleter:
         self.table_names = []
         self.column_names = {}
         
-        if database and database.storage:
+        if database and hasattr(database, 'storage'):
             self._refresh_schema()
     
     def _refresh_schema(self):
@@ -336,7 +429,7 @@ class GSQLCompleter:
 class GSQLShell(cmd.Cmd):
     """Shell interactif GSQL avec support complet des transactions"""
     
-    intro = Colors.info("GSQL Interactive Shell v3.0") + "\n" + Colors.dim("Type 'help' for commands, 'exit' to quit")
+    intro = Colors.info("GSQL Interactive Shell v3.1.0") + "\n" + Colors.dim("Type 'help' for commands, 'exit' to quit")
     prompt = Colors.info('gsql> ')
     ruler = Colors.dim('─')
     
@@ -346,27 +439,25 @@ class GSQLShell(cmd.Cmd):
         self.db = gsql_app.db if gsql_app else None
         self.executor = gsql_app.executor if gsql_app else None
         self.completer = gsql_app.completer if gsql_app else None
-        self.show_tx_status = config.get('shell', {}).get('show_transaction_status', True)
-        self.tx_warning_time = config.get('shell', {}).get('transaction_warning_time', 5)
+        self.show_tx_status = True
+        self.tx_warning_time = 5
         self.current_tx_id = None
         self.tx_start_time = None
-        self.auto_commit = config.get('executor', {}).get('auto_commit', False)
+        self.auto_commit = False
         
         # Configuration du prompt
         self._update_prompt()
         
         # Configuration de l'historique
-        self.history_file = Path(config.get('base_dir')) / config.get('shell', {}).get('history_file', '.gsql_history')
+        self.history_file = Path.home() / ".gsql" / ".gsql_history"
+        self.history_file.parent.mkdir(exist_ok=True, parents=True)
         self._setup_history()
         
         # Configuration de l'auto-complétion
-        if config.get('shell', {}).get('autocomplete', True) and self.completer:
+        if self.completer:
             readline.set_completer(self.completer.complete)
             readline.parse_and_bind("tab: complete")
             readline.set_completer_delims(' \t\n`~!@#$%^&*()-=+[{]}\\|;:\'",<>/?')
-        
-        # Démarrer le monitoring des transactions
-        self._start_tx_monitoring()
     
     def _update_prompt(self):
         """Met à jour le prompt avec l'état des transactions"""
@@ -374,7 +465,9 @@ class GSQLShell(cmd.Cmd):
             self.prompt = Colors.info('gsql> ')
             return
         
-        active_tx = len(self.db.active_transactions)
+        active_tx = 0
+        if hasattr(self.db, 'active_transactions'):
+            active_tx = len(self.db.active_transactions)
         
         if active_tx > 0:
             # Afficher le nombre de transactions actives
@@ -397,15 +490,10 @@ class GSQLShell(cmd.Cmd):
             pass
         
         # Limiter la taille de l'historique
-        readline.set_history_length(config.get('shell', {}).get('max_history', 1000))
+        readline.set_history_length(1000)
         
         # Enregistrer l'historique à la sortie
         atexit.register(readline.write_history_file, str(self.history_file))
-    
-    def _start_tx_monitoring(self):
-        """Démarre le monitoring des transactions"""
-        # Cette fonction serait appelée périodiquement dans une vraie implémentation
-        pass
     
     # ==================== COMMAND HANDLING ====================
     
@@ -594,7 +682,7 @@ class GSQLShell(cmd.Cmd):
                 ['INSERT', 'UPDATE', 'DELETE', 'CREATE', 'DROP', 'ALTER']
             )
             
-            if is_write_operation and not self.db.active_transactions and not self.auto_commit:
+            if is_write_operation and not hasattr(self.db, 'active_transactions') and not self.auto_commit:
                 print(Colors.warning("⚠ No active transaction. Use BEGIN TRANSACTION or enable auto-commit."))
                 print(Colors.dim("Add 'BEGIN TRANSACTION;' before your write operations."))
                 return
@@ -612,8 +700,6 @@ class GSQLShell(cmd.Cmd):
             
         except Exception as e:
             print(Colors.error(f"Error: {e}"))
-            if config.get('verbose_errors', True):
-                traceback.print_exc()
     
     def _display_result(self, result: Dict, execution_time: float):
         """Affiche le résultat d'une requête avec support transactions"""
@@ -659,7 +745,9 @@ class GSQLShell(cmd.Cmd):
                 
                 # Afficher les données (limité à 50 lignes)
                 for i, row in enumerate(rows[:50]):
-                    if isinstance(row, (list, tuple)):
+                    if isinstance(row, dict):
+                        values = [str(v) if v is not None else Colors.dim("NULL") for v in row.values()]
+                    elif isinstance(row, (list, tuple)):
                         values = [str(v) if v is not None else Colors.dim("NULL") for v in row]
                     else:
                         values = [str(row)]
@@ -693,7 +781,7 @@ class GSQLShell(cmd.Cmd):
             print(Colors.dim(f"Rows affected: {rows_affected}"))
             
             # Afficher un warning si pas dans une transaction
-            if not self.db.active_transactions and not self.auto_commit:
+            if hasattr(self.db, 'active_transactions') and not self.db.active_transactions and not self.auto_commit:
                 print(Colors.warning("⚠ Warning: Insert not in transaction (auto-commit disabled)"))
         
         elif query_type == 'update' or query_type == 'delete':
@@ -702,7 +790,7 @@ class GSQLShell(cmd.Cmd):
             print(Colors.dim(f"Rows affected: {rows_affected}"))
             
             # Afficher un warning si pas dans une transaction
-            if not self.db.active_transactions and not self.auto_commit:
+            if hasattr(self.db, 'active_transactions') and not self.db.active_transactions and not self.auto_commit:
                 print(Colors.warning("⚠ Warning: Operation not in transaction (auto-commit disabled)"))
         
         elif query_type == 'show_tables':
@@ -743,11 +831,11 @@ class GSQLShell(cmd.Cmd):
                 tx_color = Colors.RED if active_tx > 0 else Colors.GREEN
                 print(f"  Active transactions: {tx_color}{active_tx}{Colors.RESET}")
             
-            if 'transactions' in stats:
-                print(f"  Total transactions: {stats['transactions']}")
+            if 'transactions_total' in stats:
+                print(f"  Total transactions: {stats['transactions_total']}")
             
             for key, value in stats.items():
-                if key not in ['active_transactions', 'transactions']:
+                if key not in ['active_transactions', 'transactions_total']:
                     if isinstance(value, dict):
                         print(f"  {key}:")
                         for k, v in value.items():
@@ -780,7 +868,7 @@ class GSQLShell(cmd.Cmd):
     def do_help(self, arg: str):
         """Affiche l'aide"""
         help_text = f"""
-{Colors.highlight("GSQL v3.0 - Complete Transaction Support")}
+{Colors.highlight("GSQL v3.1.0 - Complete Transaction Support")}
 
 {Colors.underline("TRANSACTION COMMANDS (FULL SUPPORT):")}
   BEGIN TRANSACTION              - Start deferred transaction
@@ -844,7 +932,9 @@ class GSQLShell(cmd.Cmd):
             print(Colors.error("No database connection"))
             return
         
-        active_tx = len(self.db.active_transactions)
+        active_tx = 0
+        if hasattr(self.db, 'active_transactions'):
+            active_tx = len(self.db.active_transactions)
         
         if active_tx == 0:
             print(Colors.info("No active transactions"))
@@ -914,17 +1004,19 @@ class GSQLShell(cmd.Cmd):
     def do_exit(self, arg: str):
         """Quitte le shell GSQL"""
         # Vérifier les transactions actives
-        if self.db and len(self.db.active_transactions) > 0:
-            print(Colors.warning(f"⚠ Warning: {len(self.db.active_transactions)} active transaction(s)"))
-            response = input("Rollback all transactions? (y/N): ").strip().lower()
-            if response in ['y', 'yes']:
-                # Rollback toutes les transactions
-                for tid in list(self.db.active_transactions.keys()):
-                    try:
-                        self.db.execute("ROLLBACK")
-                    except:
-                        pass
-                print(Colors.tx_rollback("All transactions rolled back"))
+        if self.db and hasattr(self.db, 'active_transactions'):
+            active_tx = len(self.db.active_transactions)
+            if active_tx > 0:
+                print(Colors.warning(f"⚠ Warning: {active_tx} active transaction(s)"))
+                response = input("Rollback all transactions? (y/N): ").strip().lower()
+                if response in ['y', 'yes']:
+                    # Rollback toutes les transactions
+                    for tid in list(self.db.active_transactions.keys()):
+                        try:
+                            self.db.execute("ROLLBACK")
+                        except:
+                            pass
+                    print(Colors.tx_rollback("All transactions rolled back"))
         
         print(Colors.info("Goodbye!"))
         return True
@@ -984,75 +1076,6 @@ class GSQLShell(cmd.Cmd):
                     print(Colors.error("Failed to rollback"))
         
         self._update_prompt()
-    
-    # ==================== SQL SYNTAX HIGHLIGHTING ====================
-    
-    def _colorize_sql(self, sql: str) -> str:
-        """Colorise la syntaxe SQL avec support transactions"""
-        if not config.get('colors', True):
-            return sql
-        
-        # Mots-clés SQL (simplifié)
-        keywords = [
-            # Commandes transactionnelles
-            'BEGIN', 'TRANSACTION', 'COMMIT', 'ROLLBACK', 'SAVEPOINT',
-            'RELEASE', 'IMMEDIATE', 'EXCLUSIVE', 'DEFERRED',
-            
-            # Autres mots-clés SQL
-            'SELECT', 'FROM', 'WHERE', 'INSERT', 'INTO', 'VALUES',
-            'UPDATE', 'SET', 'DELETE', 'CREATE', 'TABLE', 'DROP',
-            'ALTER', 'ADD', 'COLUMN', 'PRIMARY', 'KEY', 'FOREIGN',
-            'REFERENCES', 'UNIQUE', 'NOT', 'NULL', 'DEFAULT',
-            'CHECK', 'INDEX', 'VIEW', 'TRIGGER', 'EXPLAIN', 'ANALYZE',
-            'VACUUM', 'BACKUP', 'SHOW', 'DESCRIBE', 'HELP',
-            'AND', 'OR', 'LIKE', 'IN', 'BETWEEN', 'IS',
-            'ORDER', 'BY', 'GROUP', 'HAVING', 'LIMIT', 'OFFSET',
-            'JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER', 'ON', 'AS',
-            'UNION', 'INTERSECT', 'EXCEPT', 'DISTINCT', 'ALL',
-            'CASE', 'WHEN', 'THEN', 'ELSE', 'END'
-        ]
-        
-        # Coloriser les mots-clés transactionnels différemment
-        tx_keywords = ['BEGIN', 'COMMIT', 'ROLLBACK', 'SAVEPOINT', 'RELEASE']
-        
-        sql_colored = sql
-        
-        # D'abord les mots-clés transactionnels
-        for keyword in tx_keywords:
-            pattern = rf'\b{keyword}\b'
-            sql_colored = re.sub(
-                pattern, 
-                Colors.tx_start(keyword) if keyword == 'BEGIN' else
-                Colors.tx_commit(keyword) if keyword == 'COMMIT' else
-                Colors.tx_rollback(keyword) if keyword == 'ROLLBACK' else
-                Colors.tx_savepoint(keyword),
-                sql_colored, 
-                flags=re.IGNORECASE
-            )
-        
-        # Puis les autres mots-clés
-        for keyword in [k for k in keywords if k not in tx_keywords]:
-            pattern = rf'\b{keyword}\b'
-            sql_colored = re.sub(
-                pattern, 
-                Colors.sql_keyword(keyword), 
-                sql_colored, 
-                flags=re.IGNORECASE
-            )
-        
-        # Coloriser les chaînes (simplifié)
-        sql_colored = re.sub(r"'[^']*'", lambda m: Colors.sql_string(m.group(0)), sql_colored)
-        sql_colored = re.sub(r'"[^"]*"', lambda m: Colors.sql_string(m.group(0)), sql_colored)
-        
-        # Coloriser les nombres
-        sql_colored = re.sub(r'\b\d+\b', lambda m: Colors.sql_number(m.group(0)), sql_colored)
-        sql_colored = re.sub(r'\b\d+\.\d+\b', lambda m: Colors.sql_number(m.group(0)), sql_colored)
-        
-        # Coloriser les commentaires
-        sql_colored = re.sub(r'--.*$', lambda m: Colors.sql_comment(m.group(0)), sql_colored, flags=re.MULTILINE)
-        sql_colored = re.sub(r'/\*.*?\*/', lambda m: Colors.sql_comment(m.group(0)), sql_colored, flags=re.DOTALL)
-        
-        return sql_colored
 
 # ==================== MAIN GSQL APPLICATION ====================
 
@@ -1110,19 +1133,18 @@ class GSQLApp:
             # Initialiser les autres composants
             self.function_manager = FunctionManager()
             
-            # Gestion du NLP - avec fallback si non disponible
+            # Gestion du NLP
             if NLP_AVAILABLE and NLToSQLTranslator:
                 self.nlp_translator = NLToSQLTranslator()
             else:
                 self.nlp_translator = None
-                if self.config['executor'].get('enable_nlp', False):
-                    print(Colors.warning("NLP features not available. Install NLTK for NLP support."))
             
             # Configurer l'auto-complétion
             self.completer = GSQLCompleter(self.db)
             
             print(Colors.success("✓ GSQL ready with full transaction support!"))
-            print(Colors.dim(f"Database: {self.db.storage.db_path}"))
+            if hasattr(self.db, 'storage') and hasattr(self.db.storage, 'db_path'):
+                print(Colors.dim(f"Database: {self.db.storage.db_path}"))
             print(Colors.dim(f"Buffer pool: {self.config['database']['buffer_pool_size']} pages"))
             print(Colors.dim(f"WAL mode: {'enabled' if self.config['database']['enable_wal'] else 'disabled'}"))
             print(Colors.dim(f"Type 'help' for commands\n"))
@@ -1191,7 +1213,13 @@ class GSQLApp:
                         print("─" * (len(columns) * 10))
                         # Afficher les données
                         for row in rows:
-                            print(" | ".join(str(v) if v is not None else "NULL" for v in row))
+                            if isinstance(row, dict):
+                                values = [str(v) if v is not None else "NULL" for v in row.values()]
+                            elif isinstance(row, (list, tuple)):
+                                values = [str(v) if v is not None else "NULL" for v in row]
+                            else:
+                                values = [str(row)]
+                            print(" | ".join(values))
                         print(f"\n{len(rows)} row(s) returned")
                     else:
                         print("No rows returned")
@@ -1201,9 +1229,10 @@ class GSQLApp:
                     print(f"\nTime: {result['execution_time']:.3f}s")
                 
                 # Afficher les transactions actives
-                active_tx = len(self.db.active_transactions)
-                if active_tx > 0:
-                    print(Colors.tx_active(f"\nActive transactions: {active_tx}"))
+                if hasattr(self.db, 'active_transactions'):
+                    active_tx = len(self.db.active_transactions)
+                    if active_tx > 0:
+                        print(Colors.tx_active(f"\nActive transactions: {active_tx}"))
                 
                 return result
             else:
@@ -1238,13 +1267,14 @@ class GSQLApp:
             print(f"Script execution completed: {Colors.success(str(success_count))}/{total_count} queries successful")
             
             # Afficher les transactions actives
-            active_tx = len(self.db.active_transactions)
-            if active_tx > 0:
-                print(Colors.warning(f"⚠ Warning: {active_tx} transaction(s) still active"))
-                response = input("Rollback all transactions? (y/N): ").strip().lower()
-                if response in ['y', 'yes']:
-                    self.db.execute("ROLLBACK")
-                    print(Colors.tx_rollback("All transactions rolled back"))
+            if hasattr(self.db, 'active_transactions'):
+                active_tx = len(self.db.active_transactions)
+                if active_tx > 0:
+                    print(Colors.warning(f"⚠ Warning: {active_tx} transaction(s) still active"))
+                    response = input("Rollback all transactions? (y/N): ").strip().lower()
+                    if response in ['y', 'yes']:
+                        self.db.execute("ROLLBACK")
+                        print(Colors.tx_rollback("All transactions rolled back"))
             
             return results
             
@@ -1259,9 +1289,11 @@ class GSQLApp:
         try:
             if self.db:
                 # Vérifier les transactions actives
-                active_tx = len(self.db.active_transactions)
-                if active_tx > 0:
-                    print(Colors.warning(f"⚠ Closing database with {active_tx} active transaction(s)"))
+                active_tx = 0
+                if hasattr(self.db, 'active_transactions'):
+                    active_tx = len(self.db.active_transactions)
+                    if active_tx > 0:
+                        print(Colors.warning(f"⚠ Closing database with {active_tx} active transaction(s)"))
                 
                 self.db.close()
                 print(Colors.dim("Database closed"))
@@ -1358,20 +1390,22 @@ def main():
     
     # Configurer les couleurs
     if args.no_color:
-        config.set('colors', False)
+        # Désactiver les couleurs
+        for attr in dir(Colors):
+            if not attr.startswith('_') and attr.isupper():
+                setattr(Colors, attr, '')
     
     # Configurer le verbose
     if args.verbose:
-        config.set('log_level', 'DEBUG')
-        config.set('verbose_errors', True)
+        setup_logging(level='DEBUG')
     
     # Configurer le timeout des transactions
     if args.tx_timeout:
-        config.set('transaction_timeout', args.tx_timeout)
+        DEFAULT_CONFIG['database']['transaction_timeout'] = args.tx_timeout
     
     # Configurer auto-commit
     if args.auto_commit:
-        config.set('auto_commit', True)
+        DEFAULT_CONFIG['executor']['auto_commit'] = True
     
     # Créer l'application
     app = GSQLApp()
@@ -1382,7 +1416,8 @@ def main():
         app.run_query(args.execute, args.database)
     elif args.file:
         # Mode fichier
-        app.run_query(open(args.file, 'r').read(), args.database)
+        with open(args.file, 'r') as f:
+            app.run_query(f.read(), args.database)
     elif args.script:
         # Mode script avec monitoring
         app.run_script(args.script, args.database)
