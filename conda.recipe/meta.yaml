@@ -1,6 +1,6 @@
 package:
   name: gsql
-  version: 3.1.1  # Directement ici
+  version: 3.1.1
 
 source:
   path: ..
@@ -27,3 +27,7 @@ about:
   home: https://github.com/gopu-inc/gsql
   license: MIT
   summary: Complete SQL Database System in Python with AI Integration
+  # 🛠️ Ligne importante : Charge le contenu du README.md
+  description: load_file_data('README.md')
+  # 🛠️ Ligne importante : Indique le format (markdown ou texte simple)
+  description_content_type: text/markdown
