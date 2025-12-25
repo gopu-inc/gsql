@@ -27,233 +27,191 @@ about:
   home: https://github.com/gopu-inc/gsql
   license: MIT
   summary: Complete SQL Database System in Python with AI Integration
-  # 🛠️ Ligne importante : Charge le contenu du README.md
-  description: <img width="128" height="128" alt="GSQL Logo" src="https://github.com/user-attachments/assets/9cf47e59-c2f3-49d9-a7c2-82771d5363bd" />
+  description: |
+    <img width="128" height="128" alt="GSQL Logo" src="https://github.com/user-attachments/assets/9cf47e59-c2f3-49d9-a7c2-82771d5363bd" />
 
-# GSQL - Une interface Python avancée pour SQLite 🔧
+    > **Développé par gopu.inc | Statut : Bêta Active - En développement**
 
-> **Développé par gopu.inc | Statut : Bêta Active - En développement**
+    [![PyPI Version](https://img.shields.io/pypi/v/gsql?style=flat-square&logo=pypi&color=006dad)](https://pypi.org/project/gsql/)
+    [![Python Versions](https://img.shields.io/pypi/pyversions/gsql?style=flat-square&logo=python&color=3776ab)](https://pypi.org/project/gsql/)
+    [![Conda Version](https://img.shields.io/conda/v/gopu-inc/gsql?logo=anaconda&color=44a833&style=flat-square)](https://anaconda.org/gopu-inc/gsql)
+    [![Downloads](https://static.pepy.tech/personalized-badge/gsql?period=total&units=international_system&left_color=black&right_color=blue&left_text=PyPI%20Downloads)](https://pepy.tech/project/gsql)
+    [![Docker Pulls](https://img.shields.io/docker/pulls/ceoseshell/gsql?style=flat-square&logo=docker&color=2496ed)](https://hub.docker.com/r/ceoseshell/gsql)
+    [![License](https://img.shields.io/github/license/gopu-inc/gsql?style=flat-square&logo=opensourceinitiative&color=6cc24a)](LICENSE)
 
-[![PyPI Version](https://img.shields.io/pypi/v/gsql?style=flat-square&logo=pypi&color=006dad)](https://pypi.org/project/gsql/)
-[![Python Versions](https://img.shields.io/pypi/pyversions/gsql?style=flat-square&logo=python&color=3776ab)](https://pypi.org/project/gsql/)
-[![Conda Version](https://img.shields.io/conda/v/gopu-inc/gsql?logo=anaconda&color=44a833&style=flat-square)](https://anaconda.org/gopu-inc/gsql)
-[![Downloads](https://static.pepy.tech/personalized-badge/gsql?period=total&units=international_system&left_color=black&right_color=blue&left_text=PyPI%20Downloads)](https://pepy.tech/project/gsql)
-[![Docker Pulls](https://img.shields.io/docker/pulls/ceoseshell/gsql?style=flat-square&logo=docker&color=2496ed)](https://hub.docker.com/r/ceoseshell/gsql)
-[![License](https://img.shields.io/github/license/gopu-inc/gsql?style=flat-square&logo=opensourceinitiative&color=6cc24a)](LICENSE)
+    **GSQL est un projet en développement actif (version bêta).** Il n'est pas encore prêt pour une utilisation en production critique.
 
-## 🚨 État du Projet & Transparence
+    **Ce que GSQL est VRAIMENT :**
+    - ✅ **Une surcouche Python puissante pour SQLite** avec un shell interactif, un cache et des outils de productivité.
+    - ✅ Un projet open-source qui évolue rapidement grâce à la communauté.
 
-**GSQL est un projet en développement actif (version bêta).** Il n'est pas encore prêt pour une utilisation en production critique.
+    **Bugs & Limitations Actuelles (à connaître avant d'utiliser) :**
+    - 🔸 **Transactions** : L'API transactionnelle native (`db.begin_transaction()`) a des bugs. **Il faut utiliser les commandes SQL brutes `BEGIN`/`COMMIT`** (un workaround est fourni ci-dessous).
+    - 🔸 **Guillemets** : Certains caractères dans les chaînes peuvent causer des problèmes de parsing dans le shell interactif.
+    - 🔸 **Fonctionnalités expérimentales** : Les modules NLP (`gsql.nlp`) et les backends de stockage alternatifs (YAML, mémoire) sont en prototype et non stabilisés.
 
-**Ce que GSQL est VRAIMENT :**
-- ✅ **Une surcouche Python puissante pour SQLite** avec un shell interactif, un cache et des outils de productivité.
-- ✅ Un projet open-source qui évolue rapidement grâce à la communauté.
+    **Notre philosophie :** Apporter la productivité du Python et la clarté d'une interface moderne à la robustesse de SQLite.
 
-**Bugs & Limitations Actuelles (à connaître avant d'utiliser) :**
-- 🔸 **Transactions** : L'API transactionnelle native (`db.begin_transaction()`) a des bugs. **Il faut utiliser les commandes SQL brutes `BEGIN`/`COMMIT`** (un workaround est fourni ci-dessous).
-- 🔸 **Guillemets** : Certains caractères dans les chaînes peuvent causer des problèmes de parsing dans le shell interactif.
-- 🔸 **Fonctionnalités expérimentales** : Les modules NLP (`gsql.nlp`) et les backends de stockage alternatifs (YAML, mémoire) sont en prototype et non stabilisés.
+    ```bash
+    pip install gsql
+    ```
 
-**Notre philosophie :** Apporter la productivité du Python et la clarté d'une interface moderne à la robustesse de SQLite.
+    Via Conda (à partir du canal gopu-inc)
 
----
+    ```bash
+    conda install -c gopu-inc gsql
+    ```
 
-## 📦 Installation Rapide
+    Depuis les sources (pour les contributeurs)
 
-### Via pip (recommandé pour tester)
-```bash
-pip install gsql
-```
+    ```bash
+    git clone https://github.com/gopu-inc/gsql.git
+    cd gsql
+    pip install -e .
+    ```
 
-Via Conda (à partir du canal gopu-inc)
+    Avec Docker
 
-```bash
-conda install -c gopu-inc gsql
-```
+    ```bash
+    docker pull ceoseshell/gsql:latest
+    docker run -it ceoseshell/gsql --help
+    ```
 
-Depuis les sources (pour les contributeurs)
+    🚀 Utilisation en 30 secondes
 
-```bash
-git clone https://github.com/gopu-inc/gsql.git
-cd gsql
-pip install -e .
-```
+    1. Lancer le Shell Interactif (CLI)
 
-Avec Docker
+    C'est le moyen le plus simple de découvrir GSQL.
 
-```bash
-docker pull ceoseshell/gsql:latest
-docker run -it ceoseshell/gsql --help
-```
+    ```bash
+    gsql
+    ```
 
----
+    2. Utilisation dans un Script Python
 
-🚀 Utilisation en 30 secondes
+    Voici comment intégrer GSQL correctement dans votre code aujourd'hui.
 
-1. Lancer le Shell Interactif (CLI)
+    ```python
+    from gsql.database import Database
 
-C'est le moyen le plus simple de découvrir GSQL.
+    db = Database(db_path=":memory:", enable_wal=True, auto_recovery=True)
 
-```bash
-gsql
-# > Bienvenue dans le shell GSQL. Tapez 'help' pour les commandes.
-# gsql> .tables
-# gsql> SELECT * FROM sqlite_master;
-```
+    db.execute("""
+        CREATE IF NOT EXISTS EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            email TEXT
+        )
+    """)
 
-2. Utilisation dans un Script Python
-
-Voici comment intégrer GSQL correctement dans votre code aujourd'hui.
-
-```python
-from gsql.database import Database
-
-# 1. INITIALISATION : Créez une instance de la base de données.
-#    Pour les tests, utilisez ':memory:'. Pour un fichier, donnez un chemin.
-db = Database(db_path=":memory:", enable_wal=True, auto_recovery=True)
-
-# 2. EXÉCUTION DE REQUÊTES : Utilisez la méthode .execute()
-# Créer une table
-db.execute("""
-    CREATE IF NOT EXISTS EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT UNIQUE NOT NULL,
-        email TEXT
+    db.execute(
+        "INSERT INTO users (username, email) VALUES (?, ?)",
+        ["jdoe", "john.doe@example.com"]
     )
-""")
 
-# Insérer des données (toujours avec des paramètres pour la sécurité)
-db.execute(
-    "INSERT INTO users (username, email) VALUES (?, ?)",
-    ["jdoe", "john.doe@example.com"]
-)
+    result = db.execute("SELECT * FROM users", use_cache=True)
+    print(f"Trouvé {result['count']} utilisateur(s).")
+    for row in result['rows']:
+        print(f"- {row['id']}: {row['username']}")
 
-# Sélectionner des données
-result = db.execute("SELECT * FROM users", use_cache=True)
-print(f"Trouvé {result['count']} utilisateur(s).")
-for row in result['rows']:
-    print(f"- {row['id']}: {row['username']}")
+    try:
+        db.execute("BEGIN IMMEDIATE TRANSACTION")
 
-# 3. GESTION DES TRANSACTIONS : UTILISEZ CE WORKAROUND
-# ⚠️ N'utilisez PAS db.begin_transaction(). Utilisez les commandes SQL directes.
-try:
-    # Début de la transaction
-    db.execute("BEGIN IMMEDIATE TRANSACTION")
+        db.execute("UPDATE accounts SET balance = balance - 100 WHERE id = 1")
+        db.execute("UPDATE accounts SET balance = balance + 100 WHERE id = 2")
 
-    # Vos opérations atomiques
-    db.execute("UPDATE accounts SET balance = balance - 100 WHERE id = 1")
-    db.execute("UPDATE accounts SET balance = balance + 100 WHERE id = 2")
+        db.execute("COMMIT")
+        print("Virement effectué avec succès.")
 
-    # Si tout est bon, validez
-    db.execute("COMMIT")
-    print("Virement effectué avec succès.")
+    except Exception as e:
+        db.execute("ROLLBACK")
+        print(f"Échec du virement : {e}")
 
-except Exception as e:
-    # En cas d'erreur, annulez tout
-    db.execute("ROLLBACK")
-    print(f"Échec du virement : {e}")
+    stats = db.execute("STATS")  # Récupère des statistiques d'utilisation
+    print(stats.get('message'))
 
-# 4. UTILISER LES COMMANDES SPÉCIALES GSQL
-# Ces commandes fonctionnent à la fois dans le shell ET via .execute().
-stats = db.execute("STATS")  # Récupère des statistiques d'utilisation
-print(stats.get('message'))
+    db.close()
+    ```
 
-# 5. FERMETURE PROPRE
-db.close()
-```
+    🛠️ Fonctionnalités Stables et Prêtes à l'Emploi
 
----
+    ✅ Fonctionnalités Principales Totalement Opérationnelles
 
-🛠️ Fonctionnalités Stables et Prêtes à l'Emploi
+    · Shell Interactif : Auto-complétion, historique, coloration syntaxique, affichage tabulaire.
+    · Cache Intelligent (LRU) : Accélère les requêtes SELECT répétitives jusqu'à 20x.
+    · Commande Spéciales Intégrées :
+      ```sql
+      .tables                 -- Liste les tables
+      .schema <table>         -- Montre la structure d'une table
+      STATS;                  -- Affiche les stats de performance et de cache
+      VACUUM;                 -- Optimise la base de données
+      HELP;                   -- Affiche l'aide
+      ```
+    · Support SQL Complet : Tout ce que SQLite supporte (SELECT, INSERT, JOIN, etc.) passe par GSQL.
+    · Gestion des Erreurs : Messages d'erreur détaillés avec suivi de pile.
 
-✅ Fonctionnalités Principales Totalement Opérationnelles
+    🔧 Fonctionnalités en Développement/Expérimentales
 
-· Shell Interactif : Auto-complétion, historique, coloration syntaxique, affichage tabulaire.
-· Cache Intelligent (LRU) : Accélère les requêtes SELECT répétitives jusqu'à 20x.
-· Commande Spéciales Intégrées :
-  ```sql
-  .tables                 -- Liste les tables
-  .schema <table>         -- Montre la structure d'une table
-  STATS;                  -- Affiche les stats de performance et de cache
-  VACUUM;                 -- Optimise la base de données
-  HELP;                   -- Affiche l'aide
-  ```
-· Support SQL Complet : Tout ce que SQLite supporte (SELECT, INSERT, JOIN, etc.) passe par GSQL.
-· Gestion des Erreurs : Messages d'erreur détaillés avec suivi de pile.
+    · Module NLP (gsql.nlp) : Traduction du langage naturel en SQL. Instable.
+    · Autres Backends : Stockage YAML ou en mémoire. Non recommandé pour les données importantes.
 
-🔧 Fonctionnalités en Développement/Expérimentales
+    📁 Structure du Projet (Pour Contributeurs)
 
-· Module NLP (gsql.nlp) : Traduction du langage naturel en SQL. Instable.
-· Autres Backends : Stockage YAML ou en mémoire. Non recommandé pour les données importantes.
+    ```
+    gsql/
+    ├── gsql/
+    │   ├── __init__.py              # Point d'entrée principal
+    │   ├── database.py              # CLASSE PRINCIPALE `Database`
+    │   ├── storage.py               # Abstraction du stockage (SQLite)
+    │   ├── executor.py              # Exécuteur et cache des requêtes
+    │   ├── cli.py                   # Interface du Shell Interactif
+    │   └── exceptions.py            # Exceptions personnalisées
+    ├── tests/                       # Suite de tests
+    ├── meta.yaml                    # Recette de construction Conda
+    ├── setup.py                     # Configuration pour pip
+    ├── Dockerfile                   # Configuration pour le conteneur
+    └── README.md                    # Ce fichier
+    ```
 
----
+    Classe Principale : gsql.database.Database
+    Point d'Entrée CLI : gsql.cli.main() (accessible via la commande gsql)
 
-📁 Structure du Projet (Pour Contributeurs)
+    🧪 Exécuter les Tests et Contribuer
 
-```
-gsql/
-├── gsql/
-│   ├── __init__.py              # Point d'entrée principal
-│   ├── database.py              # CLASSE PRINCIPALE `Database`
-│   ├── storage.py               # Abstraction du stockage (SQLite)
-│   ├── executor.py              # Exécuteur et cache des requêtes
-│   ├── cli.py                   # Interface du Shell Interactif
-│   └── exceptions.py            # Exceptions personnalisées
-├── tests/                       # Suite de tests
-├── meta.yaml                    # Recette de construction Conda
-├── setup.py                     # Configuration pour pip
-├── Dockerfile                   # Configuration pour le conteneur
-└── README.md                    # Ce fichier
-```
+    Nous avons besoin de votre aide pour stabiliser le projet !
 
-Classe Principale : gsql.database.Database
-Point d'Entrée CLI : gsql.cli.main() (accessible via la commande gsql)
+    ```bash
+    git clone https://github.com/gopu-inc/gsql.git
+    cd gsql
+    pip install -e .[dev]  # Installe les dépendances de test
 
----
+    pytest tests/ -v
 
-🧪 Exécuter les Tests et Contribuer
+    coverage run -m pytest tests/
+    coverage report
+    flake8 gsql/  # Vérification du style PEP8
+    ```
 
-Nous avons besoin de votre aide pour stabiliser le projet !
+    Comment contribuer ?
 
-```bash
-# 1. Clonez et installez en mode développement
-git clone https://github.com/gopu-inc/gsql.git
-cd gsql
-pip install -e .[dev]  # Installe les dépendances de test
+    1. Signaler un bug : Ouvrez une issue sur GitHub en décrivant précisément le problème, la version de GSQL, et un exemple de code minimal pour le reproduire.
+    2. Proposer une amélioration : Discutez-en d'abord dans une issue.
+    3. Soumettre une correction (PR) : Fork, branche, code, tests, pull request.
 
-# 2. Exécutez la suite de tests existante
-pytest tests/ -v
+    ❓ FAQ & Dépannage
 
-# 3. Vérifiez la couverture de code et le style
-coverage run -m pytest tests/
-coverage report
-flake8 gsql/  # Vérification du style PEP8
-```
+    Q : db.begin_transaction() ne marche pas, que faire ?
+    R : C'est un bug connu. Utilisez toujours db.execute("BEGIN TRANSACTION") et db.execute("COMMIT") ou db.execute("ROLLBACK"). Voir l'exemple de code plus haut.
 
-Comment contribuer ?
+    Q : Le shell plante avec une erreur de parsing ?
+    R : Évitez les guillemets complexes ou les caractères spéciaux dans les chaînes en mode interactif pour l'instant. Utilisez un script Python pour les requêtes complexes.
 
-1. Signaler un bug : Ouvrez une issue sur GitHub en décrivant précisément le problème, la version de GSQL, et un exemple de code minimal pour le reproduire.
-2. Proposer une amélioration : Discutez-en d'abord dans une issue.
-3. Soumettre une correction (PR) : Fork, branche, code, tests, pull request.
+    Q : Comment migrer de SQLite brut vers GSQL ?
+    R : Pointez simplement le paramètre db_path vers votre fichier .db SQLite existant. GSQL le lira directement.
 
----
+    📄 Licence
 
-❓ FAQ & Dépannage
+    Ce projet est publié sous la licence MIT. Voir le fichier LICENSE pour plus de détails.
 
-Q : db.begin_transaction() ne marche pas, que faire ?
-R : C'est un bug connu. Utilisez toujours db.execute("BEGIN TRANSACTION") et db.execute("COMMIT") ou db.execute("ROLLBACK"). Voir l'exemple de code plus haut.
-
-Q : Le shell plante avec une erreur de parsing ?
-R : Évitez les guillemets complexes ou les caractères spéciaux dans les chaînes en mode interactif pour l'instant. Utilisez un script Python pour les requêtes complexes.
-
-Q : Comment migrer de SQLite brut vers GSQL ?
-R : Pointez simplement le paramètre db_path vers votre fichier .db SQLite existant. GSQL le lira directement.
-
----
-
-📄 Licence
-
-Ce projet est publié sous la licence MIT. Voir le fichier LICENSE pour plus de détails.
-
-GSQL © 2025 Gopu Inc. | Apportons une interface moderne à SQLite.  # 🛠️ Ligne importante : Indique le format (markdown ou texte simple)
+    GSQL © 2025 Gopu Inc. | Apportons une interface moderne à SQLite.
   description_content_type: text/markdown
