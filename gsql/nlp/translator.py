@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime
 import hashlib
-import pickle
+import logging
 
 # Import NLTK avec fallback
 try:
@@ -20,13 +20,12 @@ try:
     from nltk.corpus import stopwords
     from nltk.stem import WordNetLemmatizer
     from nltk import pos_tag
-    from nltk.chunk import ne_chunk
-    from nltk.tree import Tree
     
     NLTK_AVAILABLE = True
 except ImportError:
     NLTK_AVAILABLE = False
-    print("NLTK non disponible - certaines fonctionnalités NLP seront limitées")
+
+logger = logging.getLogger(__name__)
 
 
 class NLPattern:
@@ -142,46 +141,8 @@ class DatabaseContext:
             conn.close()
             
         except Exception as e:
-            print(f"Erreur lors du chargement du schéma: {e}")
-    def ensure_patterns_file(patterns_path: str = None) -> str:
-    """
-    Ensure patterns file exists, create default if not
+            logger.error(f"Erreur lors du chargement du schéma: {e}")
     
-    Returns:
-        str: Path to patterns file
-    """
-    if patterns_path is None:
-        # Default path
-        default_dir = Path.home() / '.gsql' / 'nlp'
-        default_dir.mkdir(exist_ok=True, parents=True)
-        patterns_path = str(default_dir / 'patterns.json')
-    
-    path = Path(patterns_path)
-    
-    if not path.exists():
-        # Create default patterns
-        default_patterns = {
-            "patterns": {
-                # ... [INSÉRER ICI LES PATTERNS PAR DÉFAUT COMPLETS] ...
-            },
-            "synonyms": {
-                # ... [INSÉRER ICI LES SYNONYMES] ...
-            },
-            "metadata": {
-                "created": datetime.now().isoformat(),
-                "version": "1.0",
-                "description": "Auto-generated NLP patterns for GSQL"
-            }
-        }
-        
-        try:
-            with open(path, 'w', encoding='utf-8') as f:
-                json.dump(default_patterns, f, ensure_ascii=False, indent=2)
-            logger.info(f"Created default NLP patterns file: {path}")
-        except Exception as e:
-            logger.error(f"Failed to create patterns file: {e}")
-    
-    return patterns_path
     def suggest_columns(self, table: str, context: str = "") -> List[str]:
         """Suggère des colonnes basées sur le contexte"""
         if table not in self.schema:
@@ -229,6 +190,231 @@ class DatabaseContext:
         return best_match
 
 
+def ensure_patterns_file(patterns_path: str = None) -> str:
+    """
+    Ensure patterns file exists, create default if not
+    
+    Returns:
+        str: Path to patterns file
+    """
+    if patterns_path is None:
+        # Default path
+        default_dir = Path.home() / '.gsql' / 'nlp'
+        default_dir.mkdir(exist_ok=True, parents=True)
+        patterns_path = str(default_dir / 'patterns.json')
+    
+    path = Path(patterns_path)
+    
+    if not path.exists():
+        # Create default patterns
+        default_patterns = {
+            "patterns": {
+                "select": [
+                    {
+                        "nl_pattern": "show tables",
+                        "sql_template": "SHOW TABLES",
+                        "examples": ["montre les tables", "liste les tables", "affiche les tables"],
+                        "confidence": 0.95,
+                        "usage_count": 0,
+                        "last_used": None
+                    },
+                    {
+                        "nl_pattern": "show columns from {table}",
+                        "sql_template": "DESCRIBE {table}",
+                        "examples": ["montre les colonnes de {table}", "décris {table}", "structure de {table}"],
+                        "confidence": 0.85,
+                        "usage_count": 0,
+                        "last_used": None
+                    },
+                    {
+                        "nl_pattern": "select all from {table}",
+                        "sql_template": "SELECT * FROM {table}",
+                        "examples": ["tous les {table}", "tout de {table}", "affiche {table}"],
+                        "confidence": 0.9,
+                        "usage_count": 0,
+                        "last_used": None
+                    },
+                    {
+                        "nl_pattern": "select {columns} from {table}",
+                        "sql_template": "SELECT {columns} FROM {table}",
+                        "examples": ["montre {columns} de {table}", "donne {columns} depuis {table}"],
+                        "confidence": 0.8,
+                        "usage_count": 0,
+                        "last_used": None
+                    },
+                    {
+                        "nl_pattern": "count {table}",
+                        "sql_template": "SELECT COUNT(*) FROM {table}",
+                        "examples": ["combien de {table}", "nombre de {table}", "total {table}"],
+                        "confidence": 0.85,
+                        "usage_count": 0,
+                        "last_used": None
+                    },
+                    {
+                        "nl_pattern": "select from {table} where {condition}",
+                        "sql_template": "SELECT * FROM {table} WHERE {condition}",
+                        "examples": ["{table} où {condition}", "trouve {table} avec {condition}"],
+                        "confidence": 0.7,
+                        "usage_count": 0,
+                        "last_used": None
+                    }
+                ],
+                "insert": [
+                    {
+                        "nl_pattern": "insert into {table} values {values}",
+                        "sql_template": "INSERT INTO {table} VALUES ({values})",
+                        "examples": ["ajoute à {table} valeurs {values}", "nouveau dans {table} {values}"],
+                        "confidence": 0.75,
+                        "usage_count": 0,
+                        "last_used": None
+                    },
+                    {
+                        "nl_pattern": "add {values} to {table}",
+                        "sql_template": "INSERT INTO {table} VALUES ({values})",
+                        "examples": ["ajoute {values} dans {table}", "insère {values} dans {table}"],
+                        "confidence": 0.7,
+                        "usage_count": 0,
+                        "last_used": None
+                    }
+                ],
+                "update": [
+                    {
+                        "nl_pattern": "update {table} set {set_clause} where {condition}",
+                        "sql_template": "UPDATE {table} SET {set_clause} WHERE {condition}",
+                        "examples": ["modifie {table} mettre {set_clause} où {condition}"],
+                        "confidence": 0.6,
+                        "usage_count": 0,
+                        "last_used": None
+                    }
+                ],
+                "delete": [
+                    {
+                        "nl_pattern": "delete from {table} where {condition}",
+                        "sql_template": "DELETE FROM {table} WHERE {condition}",
+                        "examples": ["supprime de {table} où {condition}", "enlève {table} avec {condition}"],
+                        "confidence": 0.65,
+                        "usage_count": 0,
+                        "last_used": None
+                    }
+                ],
+                "aggregation": [
+                    {
+                        "nl_pattern": "average {column} from {table}",
+                        "sql_template": "SELECT AVG({column}) FROM {table}",
+                        "examples": ["moyenne de {column} dans {table}", "moyenne {column} {table}"],
+                        "confidence": 0.8,
+                        "usage_count": 0,
+                        "last_used": None
+                    },
+                    {
+                        "nl_pattern": "sum {column} from {table}",
+                        "sql_template": "SELECT SUM({column}) FROM {table}",
+                        "examples": ["total de {column} dans {table}", "somme {column} {table}"],
+                        "confidence": 0.8,
+                        "usage_count": 0,
+                        "last_used": None
+                    },
+                    {
+                        "nl_pattern": "max {column} from {table}",
+                        "sql_template": "SELECT MAX({column}) FROM {table}",
+                        "examples": ["maximum de {column} dans {table}", "plus grand {column} {table}"],
+                        "confidence": 0.8,
+                        "usage_count": 0,
+                        "last_used": None
+                    },
+                    {
+                        "nl_pattern": "min {column} from {table}",
+                        "sql_template": "SELECT MIN({column}) FROM {table}",
+                        "examples": ["minimum de {column} dans {table}", "plus petit {column} {table}"],
+                        "confidence": 0.8,
+                        "usage_count": 0,
+                        "last_used": None
+                    }
+                ],
+                "show": [
+                    {
+                        "nl_pattern": "show functions",
+                        "sql_template": "SHOW FUNCTIONS",
+                        "examples": ["montre les fonctions", "liste les fonctions", "fonctions disponibles"],
+                        "confidence": 0.9,
+                        "usage_count": 0,
+                        "last_used": None
+                    }
+                ],
+                "utility": [
+                    {
+                        "nl_pattern": "help",
+                        "sql_template": "HELP",
+                        "examples": ["aide", "comment utiliser", "commandes disponibles"],
+                        "confidence": 0.95,
+                        "usage_count": 0,
+                        "last_used": None
+                    },
+                    {
+                        "nl_pattern": "stats",
+                        "sql_template": "STATS",
+                        "examples": ["statistiques", "info base de données", "état de la base"],
+                        "confidence": 0.9,
+                        "usage_count": 0,
+                        "last_used": None
+                    },
+                    {
+                        "nl_pattern": "backup",
+                        "sql_template": "BACKUP",
+                        "examples": ["sauvegarde", "créer une sauvegarde", "backup base de données"],
+                        "confidence": 0.85,
+                        "usage_count": 0,
+                        "last_used": None
+                    },
+                    {
+                        "nl_pattern": "vacuum",
+                        "sql_template": "VACUUM",
+                        "examples": ["optimiser", "nettoyer la base", "compacter la base"],
+                        "confidence": 0.8,
+                        "usage_count": 0,
+                        "last_used": None
+                    }
+                ]
+            },
+            "synonyms": {
+                "show": ["montre", "affiche", "liste", "donne", "voir", "afficher", "lister"],
+                "select": ["choisir", "sélectionner", "extraire", "obtenir", "prendre"],
+                "insert": ["ajouter", "insérer", "créer", "nouveau", "ajoute", "insère"],
+                "update": ["modifier", "changer", "mettre à jour", "éditer", "actualiser"],
+                "delete": ["supprimer", "effacer", "enlever", "retirer", "ôter"],
+                "count": ["compter", "dénombrer", "total", "nombre", "combien"],
+                "average": ["moyenne", "moyen", "moy"],
+                "sum": ["somme", "total", "addition"],
+                "max": ["maximum", "plus grand", "plus haut", "maximal"],
+                "min": ["minimum", "plus petit", "plus bas", "minimal"],
+                "where": ["où", "dans lequel", "pour lequel", "quand", "lorsque"],
+                "order_by": ["trier par", "ordonner par", "classer par", "organiser par"],
+                "group_by": ["grouper par", "regrouper par", "agréger par"],
+                "limit": ["limiter à", "seulement", "premier", "dernier", "top"],
+                "join": ["joindre", "combiner", "relier", "lier", "connecter"],
+                "from": ["de", "depuis", "provenant de", "issu de"],
+                "table": ["table", "tableau", "liste", "ensemble", "collection"]
+            },
+            "metadata": {
+                "created": datetime.now().isoformat(),
+                "version": "1.0",
+                "language": "fr",
+                "description": "Default NLP patterns for GSQL",
+                "total_patterns": 20
+            }
+        }
+        
+        try:
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(default_patterns, f, ensure_ascii=False, indent=2)
+            
+            logger.info(f"Created default NLP patterns file: {path}")
+        except Exception as e:
+            logger.error(f"Failed to create patterns file: {e}")
+    
+    return patterns_path
+
+
 class NLToSQLTranslator:
     """Traducteur avancé de langage naturel vers SQL"""
     
@@ -247,8 +433,11 @@ class NLToSQLTranslator:
         
         # Charger les patterns personnalisés
         self.patterns_file = patterns_file
-        if patterns_file and Path(patterns_file).exists():
-            self.load_patterns(patterns_file)
+        if patterns_file:
+            self.patterns_file = ensure_patterns_file(patterns_file)
+            self.load_patterns(self.patterns_file)
+        else:
+            self.patterns_file = ensure_patterns_file()
         
         # Cache pour les traductions fréquentes
         self.translation_cache: Dict[str, Tuple[str, float]] = {}
@@ -268,9 +457,7 @@ class NLToSQLTranslator:
                 ('punkt', 'tokenizers/punkt'),
                 ('stopwords', 'corpora/stopwords'),
                 ('wordnet', 'corpora/wordnet'),
-                ('averaged_perceptron_tagger', 'taggers/averaged_perceptron_tagger'),
-                ('maxent_ne_chunker', 'chunkers/maxent_ne_chunker_tab'),
-                ('words', 'corpora/words')
+                ('averaged_perceptron_tagger', 'taggers/averaged_perceptron_tagger')
             ]
             
             for package, path in nltk_data:
@@ -283,7 +470,7 @@ class NLToSQLTranslator:
             self.stop_words = set(stopwords.words('english')).union(set(stopwords.words('french')))
             
         except Exception as e:
-            print(f"NLTK initialization warning: {e}")
+            logger.warning(f"NLTK initialization warning: {e}")
             self.nltk_available = False
     
     def _load_synonyms(self) -> Dict[str, List[str]]:
@@ -556,7 +743,7 @@ class NLToSQLTranslator:
         # Par défaut, chercher une table basée sur le contexte
         suggested_table = self.db_context.get_table_for_context(words)
         if suggested_table:
-            return f"SELECT * FROM {suggestied_table}", 0.4
+            return f"SELECT * FROM {suggested_table}", 0.4
         
         return "HELP", 0.1
     
@@ -736,7 +923,7 @@ class NLToSQLTranslator:
             return True
             
         except Exception as e:
-            print(f"Erreur lors de l'apprentissage: {e}")
+            logger.error(f"Erreur lors de l'apprentissage: {e}")
             return False
     
     def _detect_query_type(self, sql: str) -> str:
@@ -783,7 +970,7 @@ class NLToSQLTranslator:
             return True
             
         except Exception as e:
-            print(f"Erreur lors du chargement des patterns: {e}")
+            logger.error(f"Erreur lors du chargement des patterns: {e}")
             return False
     
     def save_patterns(self, filepath: str) -> bool:
@@ -810,7 +997,7 @@ class NLToSQLTranslator:
             return True
             
         except Exception as e:
-            print(f"Erreur lors de la sauvegarde des patterns: {e}")
+            logger.error(f"Erreur lors de la sauvegarde des patterns: {e}")
             return False
     
     def get_statistics(self) -> Dict[str, Any]:
@@ -843,12 +1030,6 @@ class NLToSQLTranslator:
 # Fonctions utilitaires
 def create_translator(db_path: Optional[str] = None, patterns_path: Optional[str] = None) -> NLToSQLTranslator:
     """Créer un traducteur avec les paramètres donnés"""
-    if patterns_path is None:
-        # Chemin par défaut
-        default_path = Path.home() / '.gsql' / 'nlp_patterns.json'
-        patterns_path = str(default_path)
-        default_path.parent.mkdir(exist_ok=True)
-    
     return NLToSQLTranslator(patterns_path, db_path)
 
 
