@@ -1,9 +1,8 @@
-__version__ = "4.0.0"
+#!/usr/bin/env python3
+"""
+Functions package for GSQL
+"""
 
-import gsql.functions.user_functions
+from .user_functions import FunctionManager
 
-all = [
-    'FunctionManager',
-    'FunctionError',
-    'UserFunctionRegistry',
-]
+__all__ = ['FunctionManager']
