@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-GSQL Storage Engine Complete - SQLite avec Buffer Pool et Transactions ACID
-Version: 3.2.0 - Transactions Complètes et Stables
+GSQL Storage Engine Complete - SQLite avec Buffer Pool et Transactions
+Version: 3.1.0 - Transactions Fixées
 """
 
 import os
@@ -14,11 +14,9 @@ import pickle
 import hashlib
 from pathlib import Path
 from datetime import datetime
-from collections import OrderedDict, defaultdict
-from typing import Dict, List, Any, Optional, Tuple, Union, Set
+from collections import OrderedDict
+from typing import Dict, List, Any, Optional, Tuple, Union
 import re
-import traceback
-import shutil
 
 from .exceptions import (
     SQLExecutionError, TransactionError, BufferPoolError,
@@ -125,52 +123,10 @@ class BufferPool:
             self.invalidate()
 
 
-# ==================== BASE STORAGE CLASS ====================
-
-class Storage:
-    """Classe de base pour le stockage"""
-    
-    def __init__(self, db_path=None, **kwargs):
-        self.db_path = db_path
-        self.connection = None
-        self.base_dir = Path(kwargs.get('base_dir', '/root/.gsql'))
-        self.buffer_pool = BufferPool(max_pages=kwargs.get('buffer_pool_size', 100))
-        
-    def open(self):
-        """Ouvre la connexion au stockage"""
-        raise NotImplementedError
-        
-    def close(self):
-        """Ferme la connexion"""
-        raise NotImplementedError
-        
-    def is_new_database(self):
-        """Vérifie si la base de données est nouvelle"""
-        raise NotImplementedError
-        
-    def get_connection(self):
-        """Retourne la connexion"""
-        return self.connection
-        
-    def configure_pragmas(self, pragmas):
-        """Configure les pragmas SQLite"""
-        if not self.connection:
-            return
-        
-        try:
-            cursor = self.connection.cursor()
-            for pragma, value in pragmas.items():
-                cursor.execute(f"PRAGMA {pragma} = {value}")
-            self.connection.commit()
-            logger.debug(f"SQLite pragmas configured: {pragmas}")
-        except Exception as e:
-            logger.warning(f"Could not configure SQLite pragmas: {e}")
-
-
-# ==================== TRANSACTION MANAGER CORRIGÉ ====================
+# ==================== TRANSACTION MANAGER ====================
 
 class TransactionManager:
-    """Gestionnaire de transactions SQLite corrigé et stable"""
+    """Gestionnaire de transactions SQLite"""
     
     def __init__(self, storage):
         self.storage = storage
@@ -178,180 +134,67 @@ class TransactionManager:
         self.transaction_counter = 0
         self.lock = threading.RLock()
         self.transaction_timeout = 30
-        
-        # Pour le débogage et le suivi
-        self.transaction_log = []
     
-    def begin(self, isolation_level: str = "DEFERRED") -> Dict:
-        """Démarre une nouvelle transaction - VERSION CORRIGÉE"""
+    def begin(self, isolation_level: str = "DEFERRED") -> int:
+        """Démarre une nouvelle transaction"""
         with self.lock:
             tid = self.transaction_counter
             self.transaction_counter += 1
             
             try:
-                # Créer un nouveau curseur pour cette transaction
-                cursor = self.storage.connection.cursor()
+                # Vérifier qu'on n'est pas déjà dans une transaction
+                cursor = self.storage.conn.cursor()
+                cursor.execute("SAVEPOINT gsql_tx_check")
+                cursor.execute("RELEASE SAVEPOINT gsql_tx_check")
                 
                 # Déterminer le type de transaction
-                sql = "BEGIN "
                 if isolation_level.upper() == "IMMEDIATE":
-                    sql += "IMMEDIATE "
+                    cursor.execute("BEGIN IMMEDIATE TRANSACTION")
                 elif isolation_level.upper() == "EXCLUSIVE":
-                    sql += "EXCLUSIVE "
+                    cursor.execute("BEGIN EXCLUSIVE TRANSACTION")
                 else:
-                    sql += "DEFERRED "
-                sql += "TRANSACTION"
+                    cursor.execute("BEGIN DEFERRED TRANSACTION")
                 
-                cursor.execute(sql)
-                
-                # Stocker les informations de la transaction
                 self.active_transactions[tid] = {
                     'start_time': time.time(),
                     'isolation': isolation_level,
                     'savepoints': [],
                     'state': 'ACTIVE',
-                    'cursor': cursor,
-                    'operations': 0
+                    'cursor': cursor
                 }
                 
-                # Journaliser
-                self.transaction_log.append({
-                    'time': datetime.now().isoformat(),
-                    'tid': tid,
-                    'action': 'BEGIN',
-                    'isolation': isolation_level
-                })
-                
                 logger.info(f"Transaction {tid} started ({isolation_level})")
-                return {'success': True, 'tid': tid, 'message': f'Transaction {tid} started'}
+                return tid
                 
             except Exception as e:
                 self.transaction_counter -= 1
-                error_msg = f"Failed to begin transaction: {e}"
-                logger.error(error_msg)
-                return {'success': False, 'error': error_msg}
+                raise TransactionError(f"Failed to begin transaction: {e}")
     
-    def _execute_in_transaction(self, tid: int, sql: str, params: Tuple = None) -> Dict:
-        """Exécute une requête dans le contexte d'une transaction spécifique"""
-        if tid not in self.active_transactions:
-            return {'success': False, 'error': f'Transaction {tid} not found'}
-        
-        trans = self.active_transactions[tid]
-        
-        if trans['state'] != 'ACTIVE':
-            return {'success': False, 'error': f'Transaction {tid} is {trans["state"]}'}
-        
-        try:
-            cursor = trans['cursor']
-            
-            # Exécuter la requête
-            if params:
-                cursor.execute(sql, params)
-            else:
-                cursor.execute(sql)
-            
-            # Mettre à jour le compteur d'opérations
-            trans['operations'] += 1
-            
-            # Construire le résultat
-            result = {'success': True}
-            
-            # Détecter le type de requête
-            sql_upper = sql.lstrip().upper()
-            
-            if sql_upper.startswith("SELECT"):
-                rows = cursor.fetchall()
-                column_names = [desc[0] for desc in cursor.description] if cursor.description else []
-                
-                formatted_rows = []
-                for row in rows:
-                    if len(column_names) == len(row):
-                        formatted_rows.append(dict(zip(column_names, row)))
-                    else:
-                        formatted_rows.append(row)
-                
-                result.update({
-                    'type': 'select',
-                    'count': len(rows),
-                    'columns': column_names,
-                    'rows': formatted_rows
-                })
-                
-            elif sql_upper.startswith("INSERT"):
-                result.update({
-                    'type': 'insert',
-                    'lastrowid': cursor.lastrowid,
-                    'rows_affected': cursor.rowcount
-                })
-                
-            elif sql_upper.startswith("UPDATE"):
-                result.update({
-                    'type': 'update',
-                    'rows_affected': cursor.rowcount
-                })
-                
-            elif sql_upper.startswith("DELETE"):
-                result.update({
-                    'type': 'delete',
-                    'rows_affected': cursor.rowcount
-                })
-            
-            return result
-            
-        except Exception as e:
-            error_msg = str(e)
-            logger.error(f"Transaction {tid} execution error: {error_msg}")
-            return {'success': False, 'error': error_msg, 'tid': tid}
-    
-    def commit(self, tid: int) -> Dict:
-        """Valide une transaction - VERSION CORRIGÉE"""
+    def commit(self, tid: int) -> bool:
+        """Valide une transaction"""
         with self.lock:
             if tid not in self.active_transactions:
-                return {
-                    'success': False, 
-                    'error': f'Transaction {tid} not found or already completed',
-                    'tid': tid
-                }
+                raise TransactionError(f"Transaction {tid} not found")
             
             trans = self.active_transactions[tid]
             
             if trans['state'] != 'ACTIVE':
-                return {
-                    'success': False,
-                    'error': f'Transaction {tid} is already {trans["state"]}',
-                    'tid': tid,
-                    'state': trans['state']
-                }
+                raise TransactionError(f"Transaction {tid} is already {trans['state']}")
             
             # Vérifier le timeout
-            elapsed = time.time() - trans['start_time']
-            if elapsed > self.transaction_timeout:
-                logger.warning(f"Transaction {tid} timeout after {elapsed:.1f}s")
-                # Rollback automatique
-                rollback_result = self._rollback_internal(tid)
-                return {
-                    'success': False,
-                    'error': f'Transaction {tid} timeout after {elapsed:.1f}s',
-                    'tid': tid,
-                    'auto_rollback': rollback_result.get('success', False)
-                }
+            if time.time() - trans['start_time'] > self.transaction_timeout:
+                logger.warning(f"Transaction {tid} timeout")
+                return self.rollback(tid)
             
             try:
-                cursor = trans['cursor']
-                cursor.execute("COMMIT")
-                cursor.close()
+                # COMMIT direct
+                cursor = trans.get('cursor')
+                if cursor:
+                    cursor.execute("COMMIT")
+                    cursor.close()
                 
                 trans['state'] = 'COMMITTED'
-                logger.info(f"Transaction {tid} committed successfully")
-                
-                # Journaliser
-                self.transaction_log.append({
-                    'time': datetime.now().isoformat(),
-                    'tid': tid,
-                    'action': 'COMMIT',
-                    'operations': trans['operations'],
-                    'duration': elapsed
-                })
+                logger.info(f"Transaction {tid} committed")
                 
                 # Nettoyer
                 del self.active_transactions[tid]
@@ -359,124 +202,95 @@ class TransactionManager:
                 # Invalider le buffer pool
                 self.storage.buffer_pool.invalidate()
                 
-                return {
-                    'success': True,
-                    'tid': tid,
-                    'message': f'Transaction {tid} committed successfully',
-                    'operations': trans['operations'],
-                    'duration': elapsed
-                }
+                return True
                 
             except Exception as e:
                 logger.error(f"Commit failed for transaction {tid}: {e}")
-                
-                # Rollback automatique en cas d'échec
+                # Rollback automatique
                 try:
-                    trans['cursor'].execute("ROLLBACK")
-                    trans['cursor'].close()
+                    if trans.get('cursor'):
+                        trans['cursor'].execute("ROLLBACK")
+                        trans['cursor'].close()
                 except:
                     pass
                 
                 trans['state'] = 'FAILED'
                 del self.active_transactions[tid]
-                
-                return {
-                    'success': False,
-                    'error': f'Commit failed: {e}',
-                    'tid': tid
-                }
+                raise TransactionError(f"Commit failed: {e}")
     
-    def _rollback_internal(self, tid: int, to_savepoint: str = None) -> Dict:
-        """Méthode interne pour rollback"""
-        if tid not in self.active_transactions:
-            return {'success': False, 'error': f'Transaction {tid} not found'}
-        
-        trans = self.active_transactions[tid]
-        
-        try:
-            cursor = trans['cursor']
-            
-            if to_savepoint:
-                if to_savepoint not in trans['savepoints']:
-                    return {'success': False, 'error': f'Savepoint {to_savepoint} not found'}
-                
-                cursor.execute(f"ROLLBACK TO SAVEPOINT {to_savepoint}")
-                
-                # Retirer les savepoints après celui-ci
-                sp_index = trans['savepoints'].index(to_savepoint)
-                trans['savepoints'] = trans['savepoints'][:sp_index + 1]
-                
-                message = f'Rolled back to savepoint {to_savepoint}'
-            else:
-                cursor.execute("ROLLBACK")
-                cursor.close()
-                
-                trans['state'] = 'ROLLED_BACK'
-                message = 'Transaction rolled back completely'
-                
-                # Nettoyer
-                del self.active_transactions[tid]
-            
-            # Journaliser
-            self.transaction_log.append({
-                'time': datetime.now().isoformat(),
-                'tid': tid,
-                'action': 'ROLLBACK',
-                'savepoint': to_savepoint,
-                'operations': trans.get('operations', 0)
-            })
-            
-            return {'success': True, 'tid': tid, 'message': message}
-            
-        except Exception as e:
-            logger.error(f"Rollback failed for transaction {tid}: {e}")
-            
-            # Nettoyer même en cas d'erreur
-            try:
-                if trans.get('cursor'):
-                    trans['cursor'].close()
-            except:
-                pass
-            
-            if tid in self.active_transactions:
-                del self.active_transactions[tid]
-            
-            return {'success': False, 'error': f'Rollback failed: {e}', 'tid': tid}
-    
-    def rollback(self, tid: int, to_savepoint: str = None) -> Dict:
-        """Annule une transaction - VERSION CORRIGÉE"""
-        with self.lock:
-            return self._rollback_internal(tid, to_savepoint)
-    
-    def savepoint(self, tid: int, name: str) -> Dict:
-        """Crée un savepoint dans la transaction - VERSION CORRIGÉE"""
+    def rollback(self, tid: int, to_savepoint: str = None) -> bool:
+        """Annule une transaction"""
         with self.lock:
             if tid not in self.active_transactions:
-                return {'success': False, 'error': f'Transaction {tid} not found'}
+                # Si la transaction n'existe pas, c'est peut-être déjà rollback
+                logger.warning(f"Transaction {tid} not found for rollback")
+                return True
+            
+            trans = self.active_transactions[tid]
+            
+            try:
+                cursor = trans.get('cursor')
+                
+                if to_savepoint:
+                    # Vérifier que le savepoint existe
+                    if to_savepoint not in trans['savepoints']:
+                        raise TransactionError(f"Savepoint '{to_savepoint}' not found")
+                    
+                    if cursor:
+                        cursor.execute(f"ROLLBACK TO SAVEPOINT {to_savepoint}")
+                    logger.info(f"Transaction {tid} rolled back to savepoint {to_savepoint}")
+                else:
+                    # Rollback complet
+                    if cursor:
+                        cursor.execute("ROLLBACK")
+                        cursor.close()
+                    
+                    trans['state'] = 'ROLLED_BACK'
+                    logger.info(f"Transaction {tid} rolled back")
+                    
+                    # Nettoyer
+                    del self.active_transactions[tid]
+                
+                return True
+                
+            except Exception as e:
+                logger.error(f"Rollback failed for transaction {tid}: {e}")
+                trans['state'] = 'CORRUPTED'
+                # Essayer de fermer le curseur
+                try:
+                    if trans.get('cursor'):
+                        trans['cursor'].close()
+                except:
+                    pass
+                
+                # Supprimer quand même
+                if tid in self.active_transactions:
+                    del self.active_transactions[tid]
+                
+                return False
+    
+    def savepoint(self, tid: int, name: str) -> bool:
+        """Crée un savepoint dans la transaction"""
+        with self.lock:
+            if tid not in self.active_transactions:
+                raise TransactionError(f"Transaction {tid} not found")
             
             trans = self.active_transactions[tid]
             
             if trans['state'] != 'ACTIVE':
-                return {'success': False, 'error': f'Cannot create savepoint, transaction is {trans["state"]}'}
+                raise TransactionError(f"Cannot create savepoint, transaction is {trans['state']}")
             
             try:
-                cursor = trans['cursor']
-                cursor.execute(f"SAVEPOINT {name}")
+                cursor = trans.get('cursor')
+                if cursor:
+                    cursor.execute(f"SAVEPOINT {name}")
                 
                 trans['savepoints'].append(name)
                 logger.debug(f"Savepoint '{name}' created in transaction {tid}")
-                
-                return {
-                    'success': True,
-                    'tid': tid,
-                    'savepoint': name,
-                    'message': f"Savepoint '{name}' created"
-                }
+                return True
                 
             except Exception as e:
-                error_msg = f"Savepoint failed: {e}"
-                logger.error(error_msg)
-                return {'success': False, 'error': error_msg}
+                raise TransactionError(f"Savepoint failed: {e}")
     
     def get_active_transactions(self) -> List[Dict]:
         """Liste les transactions actives"""
@@ -487,31 +301,23 @@ class TransactionManager:
                     'age': round(time.time() - data['start_time'], 2),
                     'isolation': data['isolation'],
                     'savepoints': len(data['savepoints']),
-                    'state': data['state'],
-                    'operations': data['operations']
+                    'state': data['state']
                 }
                 for tid, data in self.active_transactions.items()
                 if data['state'] == 'ACTIVE'
             ]
+
+
+# ==================== SQLITE STORAGE ====================
+
+class SQLiteStorage:
+    """Moteur de stockage SQLite complet"""
     
-    def get_transaction_log(self, limit: int = 100) -> List[Dict]:
-        """Retourne le journal des transactions"""
-        with self.lock:
-            return self.transaction_log[-limit:] if self.transaction_log else []
-
-
-# ==================== SQLITE STORAGE COMPLET ====================
-
-class SQLiteStorage(Storage):
-    """Moteur de stockage SQLite avec transactions ACID stables"""
-    
-    VERSION = "3.2.0"
-    SCHEMA_VERSION = 3
+    VERSION = "3.1.0"
+    SCHEMA_VERSION = 2
     
     def __init__(self, db_path=None, base_dir="/root/.gsql", 
-                 buffer_pool_size=100, enable_wal=True, auto_recovery=True):
-        
-        super().__init__(db_path, base_dir=base_dir, buffer_pool_size=buffer_pool_size)
+                 buffer_pool_size=100, enable_wal=True):
         
         self.base_dir = Path(base_dir)
         self.base_dir.mkdir(parents=True, exist_ok=True)
@@ -523,11 +329,12 @@ class SQLiteStorage(Storage):
             if not self.db_path.is_absolute():
                 self.db_path = self.base_dir / self.db_path
         
-        self.connection = None
+        self.conn = None
         self.is_connected = False
         self.connection_lock = threading.RLock()
         self.recovery_mode = False
         
+        self.buffer_pool = BufferPool(max_pages=buffer_pool_size)
         self.transaction_manager = TransactionManager(self)
         
         self.config = {
@@ -535,8 +342,7 @@ class SQLiteStorage(Storage):
             'auto_vacuum': 'FULL',
             'busy_timeout': 10000,
             'cache_size': -2000,
-            'journal_mode': 'WAL' if enable_wal else 'DELETE',
-            'auto_recovery': auto_recovery
+            'journal_mode': 'WAL' if enable_wal else 'DELETE'
         }
         
         self.meta_file = self.base_dir / "storage_meta.json"
@@ -553,22 +359,15 @@ class SQLiteStorage(Storage):
     def _initialize(self):
         """Initialise la connexion"""
         try:
-            self.open()
+            self._connect()
             if self._check_integrity():
                 logger.info(f"Storage initialized: {self.db_path}")
             else:
-                if self.config['auto_recovery']:
-                    logger.warning("Integrity check failed, attempting recovery...")
-                    self._recover_database()
-                else:
-                    raise StorageError("Database integrity check failed")
+                logger.warning("Integrity check failed, attempting recovery...")
+                self._recover_database()
         except Exception as e:
             logger.error(f"Initialization failed: {e}")
             self._create_new_database()
-    
-    def open(self):
-        """Établit la connexion SQLite"""
-        return self._connect()
     
     def _create_new_database(self):
         """Crée une nouvelle base de données vierge"""
@@ -590,36 +389,32 @@ class SQLiteStorage(Storage):
         for attempt in range(retries):
             try:
                 with self.connection_lock:
-                    if self.connection:
+                    if self.conn:
                         try:
-                            self.connection.close()
+                            self.conn.close()
                         except:
                             pass
                     
-                    self.connection = sqlite3.connect(
+                    self.conn = sqlite3.connect(
                         str(self.db_path),
                         timeout=self.config['busy_timeout'] / 1000,
                         check_same_thread=False,
-                        isolation_level=None  # Auto-commit par défaut
+                        isolation_level=None
                     )
                     
                     # Configuration de base
-                    self.connection.execute("PRAGMA foreign_keys = ON")
+                    self.conn.execute("PRAGMA foreign_keys = ON")
                     
                     # Configuration WAL
                     if self.config['enable_wal']:
-                        self.connection.execute(f"PRAGMA journal_mode = {self.config['journal_mode']}")
+                        self.conn.execute(f"PRAGMA journal_mode = {self.config['journal_mode']}")
                     
-                    self.connection.execute(f"PRAGMA auto_vacuum = {self.config['auto_vacuum']}")
-                    self.connection.execute(f"PRAGMA cache_size = {self.config['cache_size']}")
-                    self.connection.execute("PRAGMA synchronous = NORMAL")
-                    self.connection.execute("PRAGMA temp_store = MEMORY")
+                    self.conn.execute(f"PRAGMA auto_vacuum = {self.config['auto_vacuum']}")
+                    self.conn.execute(f"PRAGMA cache_size = {self.config['cache_size']}")
+                    self.conn.execute("PRAGMA synchronous = NORMAL")
+                    self.conn.execute("PRAGMA temp_store = MEMORY")
                     
                     self.is_connected = True
-                    
-                    # Créer les tables système
-                    self._create_system_tables()
-                    
                     logger.debug(f"Connected to SQLite (attempt {attempt+1})")
                     return True
                     
@@ -636,6 +431,13 @@ class SQLiteStorage(Storage):
                 logger.error(f"Unexpected connection error: {e}")
                 self.is_connected = False
                 raise
+    
+    def _configure_connection(self):
+        """Configure la connexion"""
+        if not self.conn:
+            return
+        
+        self._create_system_tables()
     
     def _create_system_tables(self):
         """Crée les tables système"""
@@ -671,49 +473,17 @@ class SQLiteStorage(Storage):
         ]
         
         try:
-            cursor = self.connection.cursor()
+            cursor = self.conn.cursor()
             for table_sql in system_tables:
                 cursor.execute(table_sql)
-            self.connection.commit()
+            self.conn.commit()
         except Exception as e:
             logger.warning(f"Failed to create some system tables: {e}")
-    
-    def is_new_database(self):
-        """
-        Vérifie si la base de données est nouvelle (vide).
-        """
-        try:
-            cursor = self.connection.cursor()
-            
-            # Vérifier si la table 'sqlite_master' a des tables utilisateur
-            cursor.execute("""
-                SELECT COUNT(*) FROM sqlite_master 
-                WHERE type='table' AND name NOT LIKE 'sqlite_%'
-            """)
-            user_table_count = cursor.fetchone()[0]
-            
-            # Vérifier si les tables système de GSQL existent
-            cursor.execute("""
-                SELECT COUNT(*) FROM sqlite_master 
-                WHERE type='table' AND name IN ('_gsql_metadata', '_gsql_schemas')
-            """)
-            system_table_count = cursor.fetchone()[0]
-            
-            return user_table_count == 0 or system_table_count == 0
-            
-        except Exception as e:
-            # Si erreur, considérer comme nouvelle base
-            logger.warning(f"Error checking if database is new: {e}")
-            return True
-    
-    def get_connection(self):
-        """Retourne la connexion SQLite"""
-        return self.connection
     
     def _check_integrity(self) -> bool:
         """Vérifie l'intégrité de la base"""
         try:
-            cursor = self.connection.cursor()
+            cursor = self.conn.cursor()
             cursor.execute("PRAGMA integrity_check")
             result = cursor.fetchone()
             return result[0] == "ok"
@@ -761,8 +531,8 @@ class SQLiteStorage(Storage):
             temp_conn.close()
             
             if integrity_result and integrity_result[0] == "ok":
-                if self.connection:
-                    self.connection.close()
+                if self.conn:
+                    self.conn.close()
                 os.replace(str(latest_backup), str(self.db_path))
                 self._connect()
                 return True
@@ -775,17 +545,17 @@ class SQLiteStorage(Storage):
     def _attempt_sqlite_recovery(self) -> bool:
         """Tente une récupération SQLite"""
         try:
-            if not self.connection:
+            if not self.conn:
                 return False
             
-            cursor = self.connection.cursor()
+            cursor = self.conn.cursor()
             cursor.execute("PRAGMA wal_checkpoint(FULL)")
             cursor.execute("PRAGMA integrity_check")
             result = cursor.fetchone()
             
             if result and result[0] == "ok":
                 cursor.execute("VACUUM")
-                self.connection.commit()
+                self.conn.commit()
                 return True
                 
         except Exception as e:
@@ -796,8 +566,8 @@ class SQLiteStorage(Storage):
     def _reset_database(self):
         """Réinitialise complètement"""
         try:
-            if self.connection:
-                self.connection.close()
+            if self.conn:
+                self.conn.close()
             
             if self.db_path.exists():
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -812,41 +582,31 @@ class SQLiteStorage(Storage):
             logger.error(f"Database reset failed: {e}")
             raise
     
-    def execute(self, query: str, params: Tuple = None, tid: int = None) -> Dict:
-        """Exécute une requête SQL - VERSION CORRIGÉE"""
+    def execute(self, query: str, params: Tuple = None) -> Dict:
+        """Exécute une requête SQL"""
         if not self.is_connected:
             self._connect()
         
         if params is None:
             params = ()
         
-        # Convertir les paramètres en tuple
-        if isinstance(params, dict):
-            params = tuple(params.values())
-        elif isinstance(params, list):
-            params = tuple(params)
-        elif not isinstance(params, tuple):
-            params = (params,) if params else ()
-        
         try:
             query = query.strip()
             if not query:
                 return {'success': False, 'error': 'Empty query'}
             
+            # Convertir les paramètres en tuple
+            if isinstance(params, dict):
+                params = tuple(params.values())
+            elif isinstance(params, list):
+                params = tuple(params)
+            elif not isinstance(params, tuple):
+                params = (params,) if params else ()
+            
             start_time = time.time()
+            cursor = self.conn.cursor()
             
-            # Vérifier si on exécute dans une transaction
-            if tid is not None:
-                # Utiliser le gestionnaire de transactions
-                result = self.transaction_manager._execute_in_transaction(tid, query, params)
-                if result.get('success'):
-                    result['execution_time'] = round(time.time() - start_time, 4)
-                    result['timestamp'] = datetime.now().isoformat()
-                return result
-            
-            # Exécution normale (hors transaction)
-            cursor = self.connection.cursor()
-            
+            # Exécuter la requête
             if params:
                 cursor.execute(query, params)
             else:
@@ -854,15 +614,15 @@ class SQLiteStorage(Storage):
             
             execution_time = time.time() - start_time
             
+            # Détecter le type de requête
+            query_upper = query.lstrip().upper()
+            
             # Construire le résultat
             result = {
                 'success': True, 
                 'execution_time': round(execution_time, 4),
                 'timestamp': datetime.now().isoformat()
             }
-            
-            # Détecter le type de requête
-            query_upper = query.lstrip().upper()
             
             if query_upper.startswith("SELECT"):
                 rows = cursor.fetchall()
@@ -920,25 +680,25 @@ class SQLiteStorage(Storage):
             elif query_upper.startswith("BEGIN"):
                 result.update({
                     'type': 'transaction',
-                    'message': 'Use begin_transaction() for explicit transactions'
+                    'message': 'Transaction started'
                 })
                 
             elif query_upper.startswith("COMMIT"):
                 result.update({
                     'type': 'transaction',
-                    'message': 'Use commit_transaction() for explicit transactions'
+                    'message': 'Transaction committed'
                 })
                 
             elif query_upper.startswith("ROLLBACK"):
                 result.update({
                     'type': 'transaction',
-                    'message': 'Use rollback_transaction() for explicit transactions'
+                    'message': 'Transaction rolled back'
                 })
                 
             elif query_upper.startswith("SAVEPOINT"):
                 result.update({
                     'type': 'savepoint',
-                    'message': 'Use create_savepoint() for explicit savepoints'
+                    'message': 'Savepoint created'
                 })
                 
             else:
@@ -947,8 +707,10 @@ class SQLiteStorage(Storage):
                     'rows_affected': cursor.rowcount
                 })
             
-            # Commit automatique pour les exécutions hors transaction
-            self.connection.commit()
+            # Commit seulement si pas de transaction active
+            active_tx = self.transaction_manager.get_active_transactions()
+            if not active_tx:
+                self.conn.commit()
             
             # Mettre à jour les statistiques
             self._update_statistics(query_upper.split()[0] if query_upper else "OTHER", execution_time)
@@ -959,9 +721,9 @@ class SQLiteStorage(Storage):
             error_msg = str(e)
             logger.error(f"SQL execution error: {error_msg}")
             
-            # Rollback pour les erreurs
+            # Essayer de rollback
             try:
-                self.connection.rollback()
+                self.conn.rollback()
             except:
                 pass
             
@@ -980,15 +742,13 @@ class SQLiteStorage(Storage):
                 return {'success': False, 'error': 'Duplicate entry'}
             elif "FOREIGN KEY constraint failed" in error_msg:
                 return {'success': False, 'error': 'Foreign key violation'}
-            elif "syntax error" in error_msg:
-                return {'success': False, 'error': f'SQL syntax error: {error_msg}'}
             else:
                 return {'success': False, 'error': f'SQL error: {error_msg}'}
                 
         except Exception as e:
             logger.error(f"Unexpected error: {e}")
             try:
-                self.connection.rollback()
+                self.conn.rollback()
             except:
                 pass
             return {'success': False, 'error': f'Unexpected error: {e}'}
@@ -996,7 +756,7 @@ class SQLiteStorage(Storage):
     def _update_statistics(self, query_type: str, execution_time: float):
         """Met à jour les statistiques"""
         try:
-            cursor = self.connection.cursor()
+            cursor = self.conn.cursor()
             cursor.execute(
                 """INSERT OR IGNORE INTO _gsql_statistics (metric, value) 
                    VALUES (?, 0)""",
@@ -1009,7 +769,7 @@ class SQLiteStorage(Storage):
                    WHERE metric = ?""",
                 (f"query_count_{query_type}",)
             )
-            self.connection.commit()
+            self.conn.commit()
         except:
             pass
     
@@ -1020,7 +780,7 @@ class SQLiteStorage(Storage):
             if cache_key in self.schema_cache:
                 return self.schema_cache[cache_key]
             
-            cursor = self.connection.cursor()
+            cursor = self.conn.cursor()
             cursor.execute(f'PRAGMA table_info("{table}")')
             columns_data = cursor.fetchall()
             
@@ -1054,7 +814,7 @@ class SQLiteStorage(Storage):
     def _get_table_row_count(self, table: str) -> int:
         """Récupère le nombre de lignes"""
         try:
-            cursor = self.connection.cursor()
+            cursor = self.conn.cursor()
             cursor.execute(f'SELECT COUNT(*) FROM "{table}"')
             return cursor.fetchone()[0]
         except:
@@ -1063,7 +823,7 @@ class SQLiteStorage(Storage):
     def get_tables(self) -> List[Dict]:
         """Récupère la liste des tables"""
         try:
-            cursor = self.connection.cursor()
+            cursor = self.conn.cursor()
             cursor.execute("""
                 SELECT name, type, sql 
                 FROM sqlite_master 
@@ -1095,132 +855,23 @@ class SQLiteStorage(Storage):
             logger.error(f"Failed to get tables: {e}")
             return []
     
-    # ============ API TRANSACTIONS STABLE ============
+    # ============ API TRANSACTIONS ============
     
-    def begin_transaction(self, isolation_level: str = "DEFERRED") -> Dict:
+    def begin_transaction(self, isolation_level: str = "DEFERRED") -> int:
         """Démarre une transaction"""
         return self.transaction_manager.begin(isolation_level)
     
-    def commit_transaction(self, tid: int) -> Dict:
+    def commit_transaction(self, tid: int) -> bool:
         """Valide une transaction"""
         return self.transaction_manager.commit(tid)
     
-    def rollback_transaction(self, tid: int, to_savepoint: str = None) -> Dict:
+    def rollback_transaction(self, tid: int, to_savepoint: str = None) -> bool:
         """Annule une transaction"""
         return self.transaction_manager.rollback(tid, to_savepoint)
     
-    def create_savepoint(self, tid: int, name: str) -> Dict:
+    def create_savepoint(self, tid: int, name: str) -> bool:
         """Crée un savepoint"""
         return self.transaction_manager.savepoint(tid, name)
-    
-    def execute_in_transaction(self, tid: int, query: str, params: Tuple = None) -> Dict:
-        """
-        Exécute une requête dans une transaction spécifique
-        
-        Args:
-            tid: Transaction ID
-            query: Requête SQL
-            params: Paramètres de la requête
-        
-        Returns:
-            Résultat de l'exécution
-        """
-        if tid not in self.transaction_manager.active_transactions:
-            return {'success': False, 'error': f'Transaction {tid} not found'}
-        
-        return self.transaction_manager._execute_in_transaction(tid, query, params)
-    
-    def get_transaction_status(self, tid: int = None) -> Dict:
-        """Récupère le statut des transactions"""
-        if tid is not None:
-            if tid in self.transaction_manager.active_transactions:
-                trans = self.transaction_manager.active_transactions[tid]
-                return {
-                    'tid': tid,
-                    'state': trans['state'],
-                    'isolation': trans['isolation'],
-                    'age_seconds': round(time.time() - trans['start_time'], 2),
-                    'operations': trans['operations'],
-                    'savepoints': trans['savepoints']
-                }
-            else:
-                return {'error': f'Transaction {tid} not found'}
-        else:
-            return {
-                'active_count': len(self.transaction_manager.get_active_transactions()),
-                'total_started': self.transaction_manager.transaction_counter,
-                'active_transactions': self.transaction_manager.get_active_transactions()
-            }
-    
-    def atomic_transaction(self, operations: List[Dict]) -> Dict:
-        """
-        Exécute plusieurs opérations dans une transaction atomique
-        
-        Args:
-            operations: Liste de dicts avec 'query' et 'params'
-        
-        Returns:
-            Résultat global de la transaction
-        """
-        if not operations:
-            return {'success': False, 'error': 'No operations provided'}
-        
-        tx_result = self.begin_transaction("DEFERRED")
-        if not tx_result.get('success'):
-            return tx_result
-        
-        tid = tx_result['tid']
-        results = []
-        
-        try:
-            for i, op in enumerate(operations):
-                query = op.get('query', '')
-                params = op.get('params')
-                
-                if not query:
-                    results.append({
-                        'index': i,
-                        'success': False,
-                        'error': 'Empty query'
-                    })
-                    raise SQLExecutionError(f"Empty query at index {i}")
-                
-                result = self.execute_in_transaction(tid, query, params)
-                results.append({
-                    'index': i,
-                    'success': result.get('success', False),
-                    'result': result
-                })
-                
-                if not result.get('success'):
-                    error = result.get('error', 'Unknown error')
-                    raise SQLExecutionError(f"Operation {i} failed: {error}")
-            
-            # Tout a réussi, commit
-            commit_result = self.commit_transaction(tid)
-            
-            return {
-                'success': True,
-                'transaction_id': tid,
-                'operations_executed': len(operations),
-                'commit_result': commit_result,
-                'operation_results': results,
-                'message': f'Successfully executed {len(operations)} operations in transaction'
-            }
-            
-        except Exception as e:
-            # Rollback en cas d'erreur
-            rollback_result = self.rollback_transaction(tid)
-            
-            return {
-                'success': False,
-                'error': str(e),
-                'transaction_id': tid,
-                'operations_executed_before_failure': len([r for r in results if r.get('success')]),
-                'failed_operation_index': len(results),
-                'operation_results': results,
-                'rollback_result': rollback_result
-            }
     
     # ============ BACKUP ET MAINTENANCE ============
     
@@ -1244,9 +895,9 @@ class SQLiteStorage(Storage):
     def vacuum(self) -> bool:
         """Optimise la base"""
         try:
-            cursor = self.connection.cursor()
+            cursor = self.conn.cursor()
             cursor.execute("VACUUM")
-            self.connection.commit()
+            self.conn.commit()
             self.buffer_pool.invalidate()
             self.schema_cache.clear()
             logger.info("Database vacuum completed")
@@ -1258,7 +909,7 @@ class SQLiteStorage(Storage):
     def get_stats(self) -> Dict:
         """Récupère les statistiques"""
         try:
-            cursor = self.connection.cursor()
+            cursor = self.conn.cursor()
             cursor.execute("""
                 SELECT COUNT(*) 
                 FROM sqlite_master 
@@ -1289,19 +940,16 @@ class SQLiteStorage(Storage):
                     'path': str(self.db_path),
                     'tables': table_count,
                     'size_mb': round(size_bytes / (1024 * 1024), 2),
-                    'connection_status': self.is_connected,
-                    'version': self.VERSION
+                    'connection_status': self.is_connected
                 },
                 'performance': self.buffer_pool.get_stats(),
                 'transactions': {
                     'active': len(self.transaction_manager.get_active_transactions()),
-                    'total_started': self.transaction_manager.transaction_counter,
-                    'recent_log': self.transaction_manager.get_transaction_log(10)
+                    'total': self.transaction_manager.transaction_counter
                 },
                 'cache': {
                     'schema': len(self.schema_cache),
-                    'tables': len(self.table_cache),
-                    'query': len(self.query_cache)
+                    'tables': len(self.table_cache)
                 },
                 'statistics': custom_stats
             }
@@ -1323,15 +971,14 @@ class SQLiteStorage(Storage):
                         except:
                             pass
                 
-                if self.connection:
-                    self.connection.close()
-                    self.connection = None
+                if self.conn:
+                    self.conn.close()
+                    self.conn = None
                     self.is_connected = False
                     
                     self.buffer_pool.invalidate()
                     self.schema_cache.clear()
                     self.table_cache.clear()
-                    self.query_cache.clear()
                 
                 logger.info("Storage closed")
         except Exception as e:
@@ -1346,55 +993,6 @@ class SQLiteStorage(Storage):
         self.close()
 
 
-# ==================== TRANSACTION CONTEXT ====================
-
-class TransactionContext:
-    """Context manager pour les transactions sécurisées"""
-    
-    def __init__(self, storage, isolation_level: str = "DEFERRED"):
-        self.storage = storage
-        self.isolation_level = isolation_level
-        self.tid = None
-    
-    def __enter__(self):
-        """Démarre la transaction"""
-        result = self.storage.begin_transaction(self.isolation_level)
-        if not result.get('success'):
-            raise TransactionError(f"Failed to begin transaction: {result.get('error')}")
-        
-        self.tid = result['tid']
-        return self
-    
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Termine la transaction (commit ou rollback)"""
-        if self.tid is None:
-            return False
-        
-        try:
-            if exc_type is None:
-                # Tout s'est bien passé, commit
-                result = self.storage.commit_transaction(self.tid)
-                if not result.get('success'):
-                    logger.error(f"Commit failed: {result.get('error')}")
-            else:
-                # Exception levée, rollback
-                logger.warning(f"Rollback transaction {self.tid} due to exception: {exc_val}")
-                self.storage.rollback_transaction(self.tid)
-            
-            return False  # Propager l'exception si elle existe
-        
-        except Exception as e:
-            logger.error(f"Error in transaction cleanup: {e}")
-            return False
-    
-    def execute(self, query: str, params: Tuple = None) -> Dict:
-        """Exécute une requête dans la transaction"""
-        if self.tid is None:
-            raise TransactionError("Transaction not started")
-        
-        return self.storage.execute_in_transaction(self.tid, query, params)
-
-
 # ==================== API PUBLIQUE ====================
 
 def create_storage(db_path=None, **kwargs) -> SQLiteStorage:
@@ -1402,84 +1000,11 @@ def create_storage(db_path=None, **kwargs) -> SQLiteStorage:
     return SQLiteStorage(db_path, **kwargs)
 
 
-def get_storage_stats(storage) -> Dict[str, Any]:
-    """
-    Get statistics about storage
-    
-    Args:
-        storage: Storage instance
-        
-    Returns:
-        Dict with statistics
-    """
-    stats = {
-        'type': 'SQLite',
-        'path': str(storage.db_path) if hasattr(storage, 'db_path') else 'unknown',
-        'connected': storage.connection is not None if hasattr(storage, 'connection') else False,
-        'tables_count': 0,
-        'total_rows': 0,
-        'file_size': 0,
-        'last_modified': None
-    }
-    
-    try:
-        if hasattr(storage, 'db_path') and storage.db_path:
-            path = Path(storage.db_path)
-            if path.exists():
-                stats['file_size'] = path.stat().st_size
-                stats['last_modified'] = datetime.fromtimestamp(path.stat().st_mtime).isoformat()
-        
-        if hasattr(storage, 'connection') and storage.connection:
-            cursor = storage.connection.cursor()
-            
-            # Get table count
-            cursor.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table'")
-            stats['tables_count'] = cursor.fetchone()[0]
-            
-            # Get total rows (approx)
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-            tables = cursor.fetchall()
-            
-            total_rows = 0
-            for table in tables:
-                try:
-                    cursor.execute(f"SELECT COUNT(*) FROM {table[0]}")
-                    total_rows += cursor.fetchone()[0]
-                except:
-                    continue
-            
-            stats['total_rows'] = total_rows
-            
-    except Exception as e:
-        stats['error'] = str(e)
-    
-    return stats
-
-
-def atomic_transaction(operations: List[Dict], db_path=None, isolation_level: str = "DEFERRED") -> Dict:
-    """
-    Exécute des opérations dans une transaction atomique
-    
-    Args:
-        operations: Liste de dicts avec 'query' et 'params'
-        db_path: Chemin de la base de données
-        isolation_level: Niveau d'isolation
-    
-    Returns:
-        Résultat de la transaction
-    """
-    storage = SQLiteStorage(db_path)
-    try:
-        return storage.atomic_transaction(operations)
-    finally:
-        storage.close()
-
-
-def quick_query(query: str, params: Tuple = None, db_path=None) -> Dict:
+def quick_query(query: str, db_path=None) -> Dict:
     """Exécute une requête rapide"""
     storage = SQLiteStorage(db_path)
     try:
-        result = storage.execute(query, params)
+        result = storage.execute(query)
         return result
     finally:
         storage.close()
