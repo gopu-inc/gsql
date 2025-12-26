@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-GSQL Database Module - SQLite Backend Only - VERSION CORRIGÉE avec transactions
-Version: 3.2.0 - Transactions synchronisées avec Storage
+GSQL Database Module - SQLite Backend Only - VERSION COMPLÈTE CORRIGÉE
+Version: 3.2.2 - Transactions entièrement compatibles
 """
 
 import os
@@ -38,7 +38,7 @@ class DatabaseTransactionContext:
     
     def __enter__(self):
         # Débuter la transaction via le storage
-        self.tx_context = self.db.storage.begin_transaction(self.isolation_level)
+        self.tx_context = self.db.begin_transaction(self.isolation_level)
         return self
     
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -48,10 +48,10 @@ class DatabaseTransactionContext:
         try:
             if exc_type is None:
                 # Commit si pas d'exception
-                self.db.storage.commit_transaction(self.tx_context.get('tid'))
+                self.db.commit_transaction()
             else:
                 # Rollback en cas d'exception
-                self.db.storage.rollback_transaction(self.tx_context.get('tid'))
+                self.db.rollback_transaction()
         except Exception as e:
             logger.error(f"Error in transaction cleanup: {e}")
         
@@ -86,7 +86,7 @@ class PreparedStatement:
 
 
 class Database:
-    """Base de données SQLite avec gestion de transactions - Version Corrigée"""
+    """Base de données SQLite avec gestion de transactions - Version Complète Corrigée"""
     
     def __init__(self, db_path=None, base_dir="/root/.gsql", 
                  buffer_pool_size=100, enable_wal=True, auto_recovery=True,
@@ -116,7 +116,7 @@ class Database:
             'backup_interval': 24 * 3600,
             'max_query_cache': 100,
             'query_timeout': 30,
-            'version': '3.2.0',
+            'version': '3.2.2',
             'create_default_tables': create_default_tables
         }
         
@@ -293,7 +293,7 @@ class Database:
                 use_cache: bool = True, timeout: int = None,
                 tid: int = None) -> Dict:
         """
-        Exécute une requête SQL sur la base de données - VERSION CORRIGÉE
+        Exécute une requête SQL sur la base de données
         
         Args:
             sql: Requête SQL
@@ -339,10 +339,17 @@ class Database:
                 elif sql_upper.startswith("SAVEPOINT"):
                     return self._handle_savepoint(sql)
                 
+                # Déterminer si on doit exécuter dans une transaction
+                execute_tid = None
+                if self.active_transaction:
+                    execute_tid = self.active_transaction['tid']
+                elif tid is not None:
+                    execute_tid = tid
+                
                 # Exécuter la requête
-                if tid is not None:
+                if execute_tid is not None:
                     # Exécution dans une transaction spécifique
-                    result = self.storage.execute_in_transaction(tid, sql, params)
+                    result = self.storage.execute_in_transaction(execute_tid, sql, params)
                 else:
                     # Exécution normale (hors transaction)
                     result = self.storage.execute(sql, params)
@@ -379,7 +386,7 @@ class Database:
                 if (use_cache and query_hash and 
                     result.get('success') and 
                     result['type'] == 'select' and
-                    not tid):
+                    not execute_tid):
                     
                     # Limiter la taille du cache
                     if len(self.query_cache) >= self.config['max_query_cache']:
@@ -405,7 +412,7 @@ class Database:
                 self._auto_recover()
                 
                 # Réessayer la requête
-                return self.execute(sql, params, use_cache=False)
+                return self.execute(sql, params, use_cache=False, tid=tid)
             
             # Retourner l'erreur proprement
             return {
@@ -718,7 +725,7 @@ class Database:
     def _execute_help(self) -> Dict:
         """Exécute HELP pour afficher l'aide"""
         help_text = """
-GSQL Database Commands (v3.2.0 - Transactions corrigées):
+GSQL Database Commands (v3.2.2 - Transactions compatibles):
 
 DATA MANIPULATION:
   SELECT * FROM table [WHERE condition] [LIMIT n]
@@ -764,7 +771,7 @@ DOT COMMANDS (compatible SQLite):
     
     # ==================== TRANSACTION MANAGEMENT ====================
     
-    def begin_transaction(self, sql: str = "BEGIN") -> Dict:
+    def begin_transaction(self, sql: str = "BEGIN", isolation_level: str = None) -> Dict:
         """Démarre une nouvelle transaction"""
         try:
             if self.active_transaction:
@@ -774,12 +781,13 @@ DOT COMMANDS (compatible SQLite):
                 }
             
             # Parser le type de transaction
-            parts = sql.upper().split()
-            isolation_level = "DEFERRED"
-            
-            if len(parts) > 1:
-                if parts[1] in ["DEFERRED", "IMMEDIATE", "EXCLUSIVE"]:
-                    isolation_level = parts[1]
+            if isolation_level is None:
+                parts = sql.upper().split()
+                isolation_level = "DEFERRED"
+                
+                if len(parts) > 1:
+                    if parts[1] in ["DEFERRED", "IMMEDIATE", "EXCLUSIVE"]:
+                        isolation_level = parts[1]
             
             # Commencer la transaction via storage
             result = self.storage.begin_transaction(isolation_level)
@@ -812,8 +820,8 @@ DOT COMMANDS (compatible SQLite):
                 'error': str(e)
             }
     
-    def commit_transaction(self) -> Dict:
-        """Valide la transaction courante"""
+    def commit_transaction(self, tid: int = None) -> Dict:
+        """Valide la transaction courante (avec support rétrocompatible pour tid)"""
         try:
             if not self.active_transaction:
                 return {
@@ -821,8 +829,13 @@ DOT COMMANDS (compatible SQLite):
                     'error': 'No active transaction to commit'
                 }
             
-            tid = self.active_transaction['tid']
-            result = self.storage.commit_transaction(tid)
+            # Si tid est fourni, vérifier qu'il correspond
+            current_tid = self.active_transaction['tid']
+            if tid is not None and tid != current_tid:
+                logger.warning(f"TID mismatch: provided {tid}, active {current_tid}")
+                # Ne pas échouer, utiliser quand même l'active transaction
+            
+            result = self.storage.commit_transaction(current_tid)
             
             if result.get('success'):
                 self.active_transaction = None
@@ -830,14 +843,14 @@ DOT COMMANDS (compatible SQLite):
                 
                 return {
                     'success': True,
-                    'tid': tid,
-                    'message': f'Transaction {tid} committed successfully'
+                    'tid': current_tid,
+                    'message': f'Transaction {current_tid} committed successfully'
                 }
             else:
                 return {
                     'success': False,
                     'error': result.get('error', 'Commit failed'),
-                    'tid': tid
+                    'tid': current_tid
                 }
                 
         except Exception as e:
@@ -847,8 +860,8 @@ DOT COMMANDS (compatible SQLite):
                 'error': str(e)
             }
     
-    def rollback_transaction(self) -> Dict:
-        """Annule la transaction courante"""
+    def rollback_transaction(self, tid: int = None) -> Dict:
+        """Annule la transaction courante (avec support rétrocompatible pour tid)"""
         try:
             if not self.active_transaction:
                 return {
@@ -856,8 +869,13 @@ DOT COMMANDS (compatible SQLite):
                     'error': 'No active transaction to rollback'
                 }
             
-            tid = self.active_transaction['tid']
-            result = self.storage.rollback_transaction(tid)
+            # Si tid est fourni, vérifier qu'il correspond
+            current_tid = self.active_transaction['tid']
+            if tid is not None and tid != current_tid:
+                logger.warning(f"TID mismatch: provided {tid}, active {current_tid}")
+                # Ne pas échouer, utiliser quand même l'active transaction
+            
+            result = self.storage.rollback_transaction(current_tid)
             
             if result.get('success'):
                 self.active_transaction = None
@@ -865,14 +883,14 @@ DOT COMMANDS (compatible SQLite):
                 
                 return {
                     'success': True,
-                    'tid': tid,
-                    'message': f'Transaction {tid} rolled back'
+                    'tid': current_tid,
+                    'message': f'Transaction {current_tid} rolled back'
                 }
             else:
                 return {
                     'success': False,
                     'error': result.get('error', 'Rollback failed'),
-                    'tid': tid
+                    'tid': current_tid
                 }
                 
         except Exception as e:
@@ -948,6 +966,16 @@ DOT COMMANDS (compatible SQLite):
     def transaction(self, isolation_level="DEFERRED"):
         """Retourne un context manager pour les transactions"""
         return DatabaseTransactionContext(self, isolation_level)
+    
+    def get_active_transaction(self) -> Optional[Dict]:
+        """Récupère les informations de la transaction active"""
+        if self.active_transaction:
+            return {
+                'tid': self.active_transaction['tid'],
+                'isolation': self.active_transaction['isolation'],
+                'age_seconds': (datetime.now() - self.active_transaction['start_time']).total_seconds()
+            }
+        return None
     
     # ==================== TABLE MANAGEMENT ====================
     
