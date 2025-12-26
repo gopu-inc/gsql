@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 GSQL Database Module - SQLite Backend Only - VERSION COMPLÈTE CORRIGÉE
-Version: 3.2.2 - Transactions entièrement compatibles
+Version: 3.2.3 - Transactions entièrement compatibles
 """
 
 import os
@@ -38,23 +38,16 @@ class DatabaseTransactionContext:
     
     def __enter__(self):
         # Débuter la transaction via le storage
-        self.tx_context = self.db.begin_transaction(self.isolation_level)
+        self.db.begin_transaction(self.isolation_level)
         return self
     
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if self.tx_context is None:
-            return False
-            
-        try:
-            if exc_type is None:
-                # Commit si pas d'exception
-                self.db.commit_transaction()
-            else:
-                # Rollback en cas d'exception
-                self.db.rollback_transaction()
-        except Exception as e:
-            logger.error(f"Error in transaction cleanup: {e}")
-        
+        if exc_type is None:
+            # Commit si pas d'exception
+            self.db.commit_transaction()
+        else:
+            # Rollback en cas d'exception
+            self.db.rollback_transaction()
         return False
 
 
@@ -116,7 +109,7 @@ class Database:
             'backup_interval': 24 * 3600,
             'max_query_cache': 100,
             'query_timeout': 30,
-            'version': '3.2.2',
+            'version': '3.2.3',
             'create_default_tables': create_default_tables
         }
         
@@ -293,7 +286,7 @@ class Database:
                 use_cache: bool = True, timeout: int = None,
                 tid: int = None) -> Dict:
         """
-        Exécute une requête SQL sur la base de données
+        Exécute une requête SQL sur la base de données - VERSION CORRIGÉE
         
         Args:
             sql: Requête SQL
@@ -330,20 +323,60 @@ class Database:
                 # Détecter si c'est une commande de transaction
                 sql_upper = sql.strip().upper()
                 
+                # Traiter les commandes de transaction
                 if sql_upper.startswith("BEGIN"):
-                    return self.begin_transaction(sql)
+                    result = self.begin_transaction(sql)
+                    # Mettre à jour l'état interne
+                    if result.get('success'):
+                        self.active_transaction = {
+                            'tid': result['tid'],
+                            'isolation': result.get('isolation', 'DEFERRED'),
+                            'start_time': datetime.now()
+                        }
+                        self.auto_commit_mode = False
+                        self.stats['transactions'] += 1
+                    return result
+                    
                 elif sql_upper.startswith("COMMIT"):
-                    return self.commit_transaction()
+                    result = self.commit_transaction()
+                    # Nettoyer l'état après commit
+                    if result.get('success'):
+                        self.active_transaction = None
+                        self.auto_commit_mode = True
+                    return result
+                    
                 elif sql_upper.startswith("ROLLBACK"):
-                    return self.rollback_transaction()
+                    # Vérifier si c'est un ROLLBACK TO SAVEPOINT
+                    if " TO " in sql_upper:
+                        parts = sql.split()
+                        if len(parts) >= 4 and parts[2].upper() == "TO":
+                            savepoint = parts[3]
+                            return self.rollback_to_savepoint(savepoint)
+                    
+                    result = self.rollback_transaction()
+                    # Nettoyer l'état après rollback
+                    if result.get('success'):
+                        self.active_transaction = None
+                        self.auto_commit_mode = True
+                    return result
+                    
                 elif sql_upper.startswith("SAVEPOINT"):
-                    return self._handle_savepoint(sql)
+                    parts = sql.split()
+                    if len(parts) >= 2:
+                        return self.create_savepoint(parts[1])
+                    else:
+                        return {
+                            'success': False,
+                            'error': 'Invalid SAVEPOINT syntax'
+                        }
                 
                 # Déterminer si on doit exécuter dans une transaction
                 execute_tid = None
                 if self.active_transaction:
+                    # Transaction active via BEGIN SQL ou begin_transaction()
                     execute_tid = self.active_transaction['tid']
                 elif tid is not None:
+                    # TID fourni explicitement
                     execute_tid = tid
                 
                 # Exécuter la requête
@@ -376,6 +409,10 @@ class Database:
                     result['type'] = 'vacuum'
                 elif sql_upper.startswith('BACKUP'):
                     result['type'] = 'backup'
+                elif sql_upper.startswith('ALTER'):
+                    result['type'] = 'alter'
+                elif sql_upper.startswith('PRAGMA'):
+                    result['type'] = 'pragma'
                 else:
                     result['type'] = 'other'
                 
@@ -425,37 +462,26 @@ class Database:
             }
     
     def _handle_savepoint(self, sql: str) -> Dict:
-        """Gère les commandes SAVEPOINT"""
-        try:
-            if not self.active_transaction:
-                return {
-                    'success': False,
-                    'error': 'No active transaction for savepoint'
-                }
-            
-            parts = sql.strip().split()
-            if len(parts) < 2:
-                return {
-                    'success': False,
-                    'error': 'Invalid SAVEPOINT syntax'
-                }
-            
-            action = parts[0].upper()
-            name = parts[1]
-            
-            if action == "SAVEPOINT":
-                return self.create_savepoint(name)
-            elif action == "ROLLBACK" and len(parts) > 2 and parts[2].upper() == "TO":
-                return self.rollback_to_savepoint(name)
-            else:
-                return {
-                    'success': False,
-                    'error': f'Unknown savepoint command: {sql}'
-                }
-        except Exception as e:
+        """Gère les commandes SAVEPOINT (maintenant intégré dans execute())"""
+        # Cette méthode est maintenant obsolète, la logique est dans execute()
+        parts = sql.strip().split()
+        if len(parts) < 2:
             return {
                 'success': False,
-                'error': str(e)
+                'error': 'Invalid SAVEPOINT syntax'
+            }
+        
+        action = parts[0].upper()
+        name = parts[1]
+        
+        if action == "SAVEPOINT":
+            return self.create_savepoint(name)
+        elif action == "ROLLBACK" and len(parts) > 2 and parts[2].upper() == "TO":
+            return self.rollback_to_savepoint(name)
+        else:
+            return {
+                'success': False,
+                'error': f'Unknown savepoint command: {sql}'
             }
     
     def execute_script(self, sql_script: str) -> List[Dict]:
@@ -725,7 +751,7 @@ class Database:
     def _execute_help(self) -> Dict:
         """Exécute HELP pour afficher l'aide"""
         help_text = """
-GSQL Database Commands (v3.2.2 - Transactions compatibles):
+GSQL Database Commands (v3.2.3 - Transactions corrigées):
 
 DATA MANIPULATION:
   SELECT * FROM table [WHERE condition] [LIMIT n]
