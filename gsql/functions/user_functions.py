@@ -5,7 +5,79 @@ Fonctions utilisateur pour GSQL
 import math
 import re
 from datetime import datetime
-from typing import Any, List, Dict
+from typing import Any, List, Dict, Callable, Optional
+
+# ==================== CLASSE FunctionManager ====================
+
+class FunctionManager:
+    """Gestionnaire des fonctions utilisateur pour GSQL"""
+    
+    def __init__(self):
+        self.functions = {}
+        self._register_builtins()
+    
+    def _register_builtins(self):
+        """Enregistre toutes les fonctions intégrées"""
+        # String functions
+        self.register('UPPER', UPPER)
+        self.register('LOWER', LOWER)
+        self.register('LENGTH', LENGTH)
+        self.register('CONCAT', CONCAT)
+        self.register('SUBSTR', SUBSTR)
+        self.register('TRIM', TRIM)
+        
+        # Math functions
+        self.register('ABS', ABS)
+        self.register('ROUND', ROUND)
+        self.register('SQRT', SQRT)
+        self.register('POWER', POWER)
+        self.register('MOD', MOD)
+        
+        # Date/Time functions
+        self.register('NOW', NOW)
+        self.register('DATE', DATE)
+        self.register('TIME', TIME)
+        self.register('YEAR', YEAR)
+        self.register('MONTH', MONTH)
+        self.register('DAY', DAY)
+        
+        # Aggregation functions
+        self.register('SUM', SUM)
+        self.register('AVG', AVG)
+        self.register('COUNT', COUNT)
+        self.register('MAX', MAX)
+        self.register('MIN', MIN)
+        
+        # Validation functions
+        self.register('IS_EMAIL', IS_EMAIL)
+        self.register('IS_NUMBER', IS_NUMBER)
+        self.register('IS_DATE', IS_DATE)
+    
+    def register(self, name: str, func: Callable) -> None:
+        """Enregistre une nouvelle fonction"""
+        self.functions[name.upper()] = func
+    
+    def get(self, name: str) -> Optional[Callable]:
+        """Récupère une fonction par son nom"""
+        return self.functions.get(name.upper())
+    
+    def execute(self, name: str, *args) -> Any:
+        """Exécute une fonction avec ses arguments"""
+        func = self.get(name)
+        if func:
+            try:
+                return func(*args)
+            except Exception as e:
+                raise Exception(f"Error executing function {name}: {str(e)}")
+        raise Exception(f"Function {name} not found")
+    
+    def list_functions(self) -> List[str]:
+        """Liste toutes les fonctions disponibles"""
+        return list(self.functions.keys())
+    
+    def has_function(self, name: str) -> bool:
+        """Vérifie si une fonction existe"""
+        return name.upper() in self.functions
 
 # ==================== FONCTIONS STRING ====================
 
@@ -175,9 +247,21 @@ def IS_DATE(text: str) -> bool:
     except:
         return False
 
+# ==================== FONCTION D'ENREGISTREMENT ====================
+
+def register_function(name: str, func: Callable) -> None:
+    """Fonction utilitaire pour enregistrer une nouvelle fonction"""
+    # Cette fonction sera utilisée par le code externe
+    # pour enregistrer des fonctions personnalisées
+    # Le manager sera initialisé dans __init__.py
+    pass
+
 # ==================== EXPORT ====================
 
 __all__ = [
+    # Classe principale
+    'FunctionManager',
+    
     # String
     'UPPER', 'LOWER', 'LENGTH', 'CONCAT', 'SUBSTR', 'TRIM',
     
@@ -191,5 +275,8 @@ __all__ = [
     'SUM', 'AVG', 'COUNT', 'MAX', 'MIN',
     
     # Validation
-    'IS_EMAIL', 'IS_NUMBER', 'IS_DATE'
+    'IS_EMAIL', 'IS_NUMBER', 'IS_DATE',
+    
+    # Utilitaire
+    'register_function'
 ]
