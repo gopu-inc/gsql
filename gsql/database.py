@@ -17,6 +17,7 @@ import shutil
 
 from .storage import SQLiteStorage
 from .executor import QueryExecutor
+from .exceptions import SQLExecutionError, StorageError
 
 # ==================== CACHE MANAGEMENT ====================
 
