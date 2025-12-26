@@ -1801,69 +1801,69 @@ class GSQLApp:
             return False
     
     def initialize(self, database_path: Optional[str] = None) -> None:
-    """Initialize GSQL components"""
-    print(Colors.info("Initializing GSQL..."))
-    
-    try:
-        # Database - filtrer uniquement les paramètres supportés
-        db_config = self.config['database'].copy()
+        """Initialize GSQL components"""
+        print(Colors.info("Initializing GSQL..."))
         
-        # Paramètres supportés par create_database
-        supported_params = ['base_dir', 'auto_recovery', 'buffer_pool_size', 'enable_wal']
-        filtered_config = {k: v for k, v in db_config.items() if k in supported_params}
-        
-        if database_path:
-            filtered_config['path'] = database_path
-        
-        self.db = create_database(**filtered_config)
-        
-        # Configurer les paramètres SQLite avancés après création
-        if self.db and hasattr(self.db, 'storage'):
-            # Configurer journal_mode si spécifié
-            journal_mode = db_config.get('journal_mode')
-            if journal_mode and hasattr(self.db.storage, 'connection'):
-                try:
-                    cursor = self.db.storage.connection.cursor()
-                    cursor.execute(f"PRAGMA journal_mode = {journal_mode}")
-                except:
-                    pass
+        try:
+            # Database - filtrer uniquement les paramètres supportés
+            db_config = self.config['database'].copy()
             
-            # Configurer synchronous si spécifié
-            synchronous = db_config.get('synchronous')
-            if synchronous and hasattr(self.db.storage, 'connection'):
-                try:
-                    cursor = self.db.storage.connection.cursor()
-                    cursor.execute(f"PRAGMA synchronous = {synchronous}")
-                except:
-                    pass
-        
-        # Executor
-        self.executor = create_executor(storage=self.db.storage)
-        
-        # Function manager
-        self.function_manager = FunctionManager()
-        
-        # NLP (optional)
-        if self.nlp_enabled:
-            nlp_success = self.initialize_nlp(database_path)
-            if nlp_success:
-                print(Colors.success("✓ NLP initialized"))
-            else:
-                print(Colors.warning("⚠ NLP initialization failed"))
-        
-        # Autocompleter
-        self.completer = GSQLCompleter(self.db)
-        
-        print(Colors.success("✓ GSQL initialized successfully"))
-        print(Colors.dim(f"Database: {self.db.storage.db_path}"))
-        
-        if self.nlp_enabled:
-            print(Colors.dim(f"NLP: Enabled (confidence: {self.config['executor'].get('nlp_confidence_threshold', 0.4)})"))
-        
-    except Exception as e:
-        print(Colors.error(f"Failed to initialize GSQL: {e}"))
-        traceback.print_exc()
-        sys.exit(1)
+            # Paramètres supportés par create_database
+            supported_params = ['base_dir', 'auto_recovery', 'buffer_pool_size', 'enable_wal']
+            filtered_config = {k: v for k, v in db_config.items() if k in supported_params}
+            
+            if database_path:
+                filtered_config['path'] = database_path
+            
+            self.db = create_database(**filtered_config)
+            
+            # Configurer les paramètres SQLite avancés après création
+            if self.db and hasattr(self.db, 'storage'):
+                # Configurer journal_mode si spécifié
+                journal_mode = db_config.get('journal_mode')
+                if journal_mode and hasattr(self.db.storage, 'connection'):
+                    try:
+                        cursor = self.db.storage.connection.cursor()
+                        cursor.execute(f"PRAGMA journal_mode = {journal_mode}")
+                    except:
+                        pass
+                
+                # Configurer synchronous si spécifié
+                synchronous = db_config.get('synchronous')
+                if synchronous and hasattr(self.db.storage, 'connection'):
+                    try:
+                        cursor = self.db.storage.connection.cursor()
+                        cursor.execute(f"PRAGMA synchronous = {synchronous}")
+                    except:
+                        pass
+            
+            # Executor
+            self.executor = create_executor(storage=self.db.storage)
+            
+            # Function manager
+            self.function_manager = FunctionManager()
+            
+            # NLP (optional)
+            if self.nlp_enabled:
+                nlp_success = self.initialize_nlp(database_path)
+                if nlp_success:
+                    print(Colors.success("✓ NLP initialized"))
+                else:
+                    print(Colors.warning("⚠ NLP initialization failed"))
+            
+            # Autocompleter
+            self.completer = GSQLCompleter(self.db)
+            
+            print(Colors.success("✓ GSQL initialized successfully"))
+            print(Colors.dim(f"Database: {self.db.storage.db_path}"))
+            
+            if self.nlp_enabled:
+                print(Colors.dim(f"NLP: Enabled (confidence: {self.config['executor'].get('nlp_confidence_threshold', 0.4)})"))
+            
+        except Exception as e:
+            print(Colors.error(f"Failed to initialize GSQL: {e}"))
+            traceback.print_exc()
+            sys.exit(1)
     
     def run_shell(self, database_path: Optional[str] = None) -> None:
         """Run interactive shell"""
