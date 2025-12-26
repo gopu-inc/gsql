@@ -1,7 +1,7 @@
 [package]
 name = "gsql"
 version = "0.1.0"
-edition = "2021"
+edition = "2025"
 description = "Simple yet powerful SQL database"
 license = "MIT"
 authors = ["GSQL Contributors"]
