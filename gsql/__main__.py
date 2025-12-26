@@ -15,33 +15,44 @@ import json
 import re
 import logging
 import time
+import sqlite3
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any, Tuple, Union
 from datetime import datetime
+from dataclasses import dataclass
+from enum import Enum
 
 # ==================== IMPORTS ====================
 
 # Définir __version__ si non présent
 __version__ = "3.1.0"
 
-# Import des modules GSQL
+# Import des modules GSQL avec fallbacks plus robustes
 try:
     # Config simple si config.py n'existe pas
     try:
         from . import config
+        CONFIG_AVAILABLE = True
     except ImportError:
+        CONFIG_AVAILABLE = False
         # Créer un module config simple
         class SimpleConfig:
-            _config = {
-                'base_dir': str(Path.home() / '.gsql'),
-                'log_level': 'INFO',
-                'colors': True,
-                'verbose_errors': False,
-                'auto_commit': False,
-                'transaction_timeout': 30
-            }
+            def __init__(self):
+                self._config = {
+                    'base_dir': str(Path.home() / '.gsql'),
+                    'log_level': 'INFO',
+                    'colors': True,
+                    'verbose_errors': True,
+                    'auto_commit': False,
+                    'transaction_timeout': 30,
+                    'database': {
+                        'enable_wal': True,
+                        'buffer_pool_size': 100
+                    }
+                }
             
-            def get(self, key, default=None):
+            def get(self, key: str, default=None):
+                """Get nested config value using dot notation"""
                 keys = key.split('.')
                 value = self._config
                 for k in keys:
@@ -51,19 +62,53 @@ try:
                         return default
                 return value
             
-            def set(self, key, value):
-                self._config[key] = value
+            def set(self, key: str, value):
+                """Set config value"""
+                keys = key.split('.')
+                data = self._config
+                for k in keys[:-1]:
+                    data = data.setdefault(k, {})
+                data[keys[-1]] = value
             
             def to_dict(self):
+                """Return full config dict"""
                 return self._config.copy()
             
             def update(self, **kwargs):
+                """Update config with kwargs"""
                 self._config.update(kwargs)
         
         config = SimpleConfig()
     
     # Import du database.py
-    from .database import create_database, Database, connect
+    try:
+        from .database import create_database, Database, connect
+        DATABASE_AVAILABLE = True
+    except ImportError as e:
+        DATABASE_AVAILABLE = False
+        print(f"Warning: Database module not available: {e}")
+        
+        class MockDatabase:
+            def __init__(self, *args, **kwargs):
+                self.active_transactions = {}
+                self.storage = None
+            
+            def execute(self, sql: str, params=None):
+                return {'success': False, 'message': 'Database not available'}
+            
+            def execute_script(self, script: str):
+                return []
+            
+            def close(self):
+                pass
+        
+        def create_database(**kwargs):
+            return MockDatabase()
+        
+        def connect(**kwargs):
+            return MockDatabase()
+        
+        Database = MockDatabase
     
     # Gérer les imports optionnels
     try:
@@ -71,7 +116,7 @@ try:
         STORAGE_AVAILABLE = True
     except ImportError:
         STORAGE_AVAILABLE = False
-        # Définir un fallback minimal
+        
         class FallbackStorage:
             def __init__(self, *args, **kwargs):
                 pass
@@ -125,18 +170,42 @@ try:
 except ImportError as e:
     print(f"Warning: Some imports failed: {e}")
     GSQL_AVAILABLE = True
+    # Définir des fallbacks pour les variables non définies
+    if 'CONFIG_AVAILABLE' not in locals():
+        CONFIG_AVAILABLE = False
+    if 'DATABASE_AVAILABLE' not in locals():
+        DATABASE_AVAILABLE = False
 
 # ==================== LOGGING ====================
 
 def setup_logging(level='INFO', log_file=None):
     """Configure le logging"""
+    log_level = getattr(logging, level.upper(), logging.INFO)
+    
+    # Formatter personnalisé
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    
+    # Handler console
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    console_handler.setLevel(log_level)
+    
+    handlers = [console_handler]
+    
+    # Handler fichier si spécifié
+    if log_file:
+        file_handler = logging.FileHandler(log_file, encoding='utf-8')
+        file_handler.setFormatter(formatter)
+        file_handler.setLevel(log_level)
+        handlers.append(file_handler)
+    
+    # Configuration principale
     logging.basicConfig(
-        level=getattr(logging, level),
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.StreamHandler(),
-            *([logging.FileHandler(log_file)] if log_file else [])
-        ]
+        level=log_level,
+        handlers=handlers
     )
 
 logger = logging.getLogger(__name__)
@@ -150,12 +219,16 @@ DEFAULT_CONFIG = {
         'buffer_pool_size': 100,
         'enable_wal': True,
         'transaction_timeout': 30,
-        'max_transactions': 10
+        'max_transactions': 10,
+        'journal_mode': 'WAL',
+        'synchronous': 'NORMAL'
     },
     'executor': {
         'enable_nlp': False,
         'enable_learning': False,
-        'auto_commit': False
+        'auto_commit': False,
+        'max_execution_time': 30,
+        'row_limit': 1000
     },
     'shell': {
         'prompt': 'gsql> ',
@@ -164,9 +237,40 @@ DEFAULT_CONFIG = {
         'colors': True,
         'autocomplete': True,
         'show_transaction_status': True,
-        'transaction_warning_time': 5
+        'transaction_warning_time': 5,
+        'pager': None
     }
 }
+
+# ==================== ENUMS & DATA CLASSES ====================
+
+class IsolationLevel(Enum):
+    """Niveaux d'isolation des transactions"""
+    DEFERRED = "DEFERRED"
+    IMMEDIATE = "IMMEDIATE"
+    EXCLUSIVE = "EXCLUSIVE"
+
+class TransactionState(Enum):
+    """États des transactions"""
+    ACTIVE = "ACTIVE"
+    COMMITTED = "COMMITTED"
+    ROLLED_BACK = "ROLLED_BACK"
+    SAVEPOINT = "SAVEPOINT"
+
+@dataclass
+class TransactionInfo:
+    """Information sur une transaction"""
+    id: str
+    state: TransactionState
+    isolation: IsolationLevel
+    start_time: datetime
+    savepoints: List[str]
+    queries: List[str]
+    
+    @property
+    def duration(self) -> float:
+        """Durée de la transaction en secondes"""
+        return (datetime.now() - self.start_time).total_seconds()
 
 # ==================== COLOR SUPPORT ====================
 
@@ -188,11 +292,21 @@ class Colors:
     RED = '\033[31m'
     GREEN = '\033[32m'
     YELLOW = '\033[33m'
-    BLUE = '\033[34m'
+    BLITE = '\033[34m'
     MAGENTA = '\033[35m'
     CYAN = '\033[36m'
     WHITE = '\033[37m'
     DEFAULT = '\033[39m'
+    
+    # Couleurs vives
+    BRIGHT_BLACK = '\033[90m'
+    BRIGHT_RED = '\033[91m'
+    BRIGHT_GREEN = '\033[92m'
+    BRIGHT_YELLOW = '\033[93m'
+    BRIGHT_BLUE = '\033[94m'
+    BRIGHT_MAGENTA = '\033[95m'
+    BRIGHT_CYAN = '\033[96m'
+    BRIGHT_WHITE = '\033[97m'
     
     # Couleurs de fond
     BG_BLACK = '\033[40m'
@@ -211,6 +325,7 @@ class Colors:
     TX_ROLLBACK = '\033[38;5;208m' # Orange
     TX_ACTIVE = '\033[38;5;226m'   # Jaune vif
     TX_SAVEPOINT = '\033[38;5;183m' # Violet clair
+    TX_WARNING = '\033[38;5;214m'  # Orange vif
     
     # Méthodes utilitaires
     @staticmethod
@@ -236,7 +351,7 @@ class Colors:
     @staticmethod
     def info(text):
         """Texte d'information (bleu)"""
-        return Colors.colorize(text, Colors.CYAN)
+        return Colors.colorize(text, Colors.BLUE)
     
     @staticmethod
     def highlight(text):
@@ -292,6 +407,71 @@ class Colors:
     def tx_savepoint(text):
         """Savepoint"""
         return Colors.colorize(text, Colors.TX_SAVEPOINT)
+    
+    @staticmethod
+    def tx_warning(text):
+        """Avertissement transaction"""
+        return Colors.colorize(text, Colors.TX_WARNING)
+
+# ==================== UTILITY FUNCTIONS ====================
+
+def format_duration(seconds: float) -> str:
+    """Formate une durée en secondes"""
+    if seconds < 0.001:
+        return f"{seconds*1_000_000:.0f}µs"
+    elif seconds < 1:
+        return f"{seconds*1000:.0f}ms"
+    elif seconds < 60:
+        return f"{seconds:.2f}s"
+    else:
+        minutes = seconds / 60
+        return f"{minutes:.1f}min"
+
+def safe_str(value: Any, max_len: int = 50) -> str:
+    """Convertit une valeur en string de manière sécurisée"""
+    if value is None:
+        return "NULL"
+    
+    text = str(value)
+    if len(text) > max_len:
+        return text[:max_len] + "..."
+    return text
+
+def detect_sql_type(sql: str) -> str:
+    """Détecte le type de requête SQL"""
+    sql_upper = sql.strip().upper()
+    
+    # Commandes transactionnelles
+    if sql_upper.startswith(('BEGIN', 'COMMIT', 'ROLLBACK', 'SAVEPOINT', 'RELEASE')):
+        return 'transaction'
+    
+    # Autres types
+    if sql_upper.startswith('SELECT'):
+        return 'select'
+    elif sql_upper.startswith('INSERT'):
+        return 'insert'
+    elif sql_upper.startswith('UPDATE'):
+        return 'update'
+    elif sql_upper.startswith('DELETE'):
+        return 'delete'
+    elif sql_upper.startswith('CREATE'):
+        return 'create'
+    elif sql_upper.startswith('DROP'):
+        return 'drop'
+    elif sql_upper.startswith('ALTER'):
+        return 'alter'
+    elif sql_upper.startswith('SHOW'):
+        return 'show'
+    elif sql_upper.startswith('DESCRIBE'):
+        return 'describe'
+    elif sql_upper.startswith('EXPLAIN'):
+        return 'explain'
+    elif sql_upper.startswith('VACUUM'):
+        return 'vacuum'
+    elif sql_upper.startswith('BACKUP'):
+        return 'backup'
+    else:
+        return 'unknown'
 
 # ==================== AUTO-COMPLETER ====================
 
@@ -316,18 +496,25 @@ class GSQLCompleter:
             'ORDER', 'BY', 'GROUP', 'HAVING', 'LIMIT', 'OFFSET',
             'JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER', 'ON', 'AS',
             'UNION', 'INTERSECT', 'EXCEPT', 'DISTINCT', 'ALL',
-            'CASE', 'WHEN', 'THEN', 'ELSE', 'END'
+            'CASE', 'WHEN', 'THEN', 'ELSE', 'END', 'WITH',
+            'RECURSIVE', 'OVER', 'PARTITION', 'BY', 'ROW_NUMBER',
+            'RANK', 'DENSE_RANK', 'LEAD', 'LAG', 'FIRST_VALUE',
+            'LAST_VALUE', 'NTH_VALUE', 'NTILE'
         ]
         
         # Commandes spéciales GSQL
         self.gsql_commands = [
             '.tables', '.schema', '.stats', '.help', '.backup',
             '.vacuum', '.exit', '.quit', '.clear', '.history',
-            '.transactions', '.tx', '.autocommit', '.isolation'
+            '.transactions', '.tx', '.autocommit', '.isolation',
+            '.mode', '.timer', '.headers', '.nullvalue', '.output',
+            '.read', '.save', '.restore', '.dump'
         ]
         
         self.table_names = []
         self.column_names = {}
+        self.view_names = []
+        self.index_names = []
         
         if database and hasattr(database, 'storage'):
             self._refresh_schema()
@@ -335,94 +522,108 @@ class GSQLCompleter:
     def _refresh_schema(self):
         """Rafraîchit le schéma depuis la base"""
         try:
-            if self.database:
+            if self.database and hasattr(self.database, 'execute'):
                 # Récupérer les tables
-                result = self.database.execute("SHOW TABLES")
-                if result.get('success'):
-                    self.table_names = [table['table'] for table in result.get('tables', [])]
+                result = self.database.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                if result.get('success') and result.get('rows'):
+                    self.table_names = [row[0] if isinstance(row, (list, tuple)) else row.get('name', '') 
+                                      for row in result.get('rows', [])]
+                
+                # Récupérer les vues
+                result = self.database.execute("SELECT name FROM sqlite_master WHERE type='view'")
+                if result.get('success') and result.get('rows'):
+                    self.view_names = [row[0] if isinstance(row, (list, tuple)) else row.get('name', '')
+                                      for row in result.get('rows', [])]
+                
+                # Récupérer les index
+                result = self.database.execute("SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'")
+                if result.get('success') and result.get('rows'):
+                    self.index_names = [row[0] if isinstance(row, (list, tuple)) else row.get('name', '')
+                                       for row in result.get('rows', [])]
                 
                 # Récupérer les colonnes pour chaque table
                 self.column_names = {}
                 for table in self.table_names:
                     try:
-                        result = self.database.execute(f"DESCRIBE {table}")
-                        if result.get('success'):
+                        result = self.database.execute(f"PRAGMA table_info({table})")
+                        if result.get('success') and result.get('rows'):
                             self.column_names[table] = [
-                                col['field'] for col in result.get('columns', [])
+                                row[1] if isinstance(row, (list, tuple)) else row.get('name', '')
+                                for row in result.get('rows', [])
                             ]
-                    except:
+                    except Exception:
                         pass
-        except:
-            pass
+        except Exception as e:
+            logger.debug(f"Error refreshing schema: {e}")
     
     def complete(self, text: str, state: int) -> Optional[str]:
         """Fonction de complétion pour readline avec support transactions"""
         if state == 0:
-            # Préparer la liste des suggestions
-            line = readline.get_line_buffer().lower()
-            tokens = line.strip().split()
+            line = readline.get_line_buffer().strip()
+            line_lower = line.lower()
             
-            if not tokens or len(tokens) == 1:
-                # Complétion de commande
-                if line.startswith('.'):
-                    # Commandes dot
-                    all_commands = self.gsql_commands
-                    self.matches = [cmd for cmd in all_commands if cmd.lower().startswith(text.lower())]
-                else:
-                    # Commandes SQL
-                    all_commands = self.keywords + self.table_names
-                    self.matches = [cmd for cmd in all_commands if cmd.lower().startswith(text.lower())]
-            
-            elif len(tokens) >= 2:
-                # Détection contextuelle
-                if tokens[-2].lower() == 'begin':
-                    # Complétion après BEGIN
-                    tx_types = ['TRANSACTION', 'IMMEDIATE', 'EXCLUSIVE', 'DEFERRED']
-                    self.matches = [tx for tx in tx_types if tx.lower().startswith(text.lower())]
-                
-                elif tokens[-2].lower() == 'begin' and tokens[-1].lower() in ['immediate', 'exclusive']:
-                    # BEGIN IMMEDIATE/EXCLUSIVE TRANSACTION
-                    self.matches = ['TRANSACTION'] if 'transaction'.startswith(text.lower()) else []
-                
-                elif tokens[-2].lower() == 'rollback' and tokens[-1].lower() == 'to':
-                    # ROLLBACK TO SAVEPOINT
-                    self.matches = ['SAVEPOINT'] if 'savepoint'.startswith(text.lower()) else []
-                
-                elif tokens[-1].lower() == 'savepoint':
-                    # Après SAVEPOINT, attend un nom
-                    self.matches = []
-                
-                elif tokens[-2].upper() == 'FROM' or tokens[-2].upper() == 'INTO':
-                    # Complétion de table après FROM ou INTO
-                    self.matches = [table for table in self.table_names if table.lower().startswith(text.lower())]
-                
-                elif tokens[-2].upper() == 'WHERE' or tokens[-2].upper() == 'SET':
-                    # Complétion de colonne après WHERE ou SET
-                    table = self._find_current_table(tokens)
-                    if table and table in self.column_names:
-                        self.matches = [col for col in self.column_names[table] if col.lower().startswith(text.lower())]
-                    else:
-                        self.matches = []
-                else:
-                    self.matches = []
-            else:
+            if not line:
                 self.matches = []
+            elif line.startswith('.'):
+                # Commandes dot
+                self.matches = [cmd for cmd in self.gsql_commands 
+                              if cmd.lower().startswith(text.lower())]
+            else:
+                # Détection contextuelle basée sur le dernier mot-clé
+                tokens = line.upper().split()
+                
+                if not tokens:
+                    self.matches = [kw for kw in self.keywords if kw.lower().startswith(text.lower())]
+                else:
+                    last_token = tokens[-1] if tokens else ""
+                    
+                    # Complétion contextuelle
+                    if last_token in ['FROM', 'JOIN', 'INTO', 'UPDATE']:
+                        # Tables après FROM, JOIN, INTO, UPDATE
+                        self.matches = [name for name in self.table_names + self.view_names 
+                                      if name.lower().startswith(text.lower())]
+                    elif last_token in ['TABLE', 'VIEW', 'INDEX'] and len(tokens) >= 2:
+                        # Noms d'objets après CREATE/DROP TABLE/VIEW/INDEX
+                        if tokens[-2] in ['CREATE', 'DROP']:
+                            all_objects = self.table_names + self.view_names + self.index_names
+                            self.matches = [name for name in all_objects 
+                                          if name.lower().startswith(text.lower())]
+                        else:
+                            self.matches = []
+                    elif last_token in ['ON'] and len(tokens) >= 3:
+                        # Colonnes après ON dans les JOINs
+                        table = tokens[-2] if len(tokens) >= 2 else None
+                        if table and table in self.column_names:
+                            self.matches = [col for col in self.column_names[table] 
+                                          if col.lower().startswith(text.lower())]
+                        else:
+                            self.matches = []
+                    elif any(tok in ['WHERE', 'SET', 'ORDER', 'GROUP'] for tok in tokens):
+                        # Chercher la table la plus récente
+                        table = None
+                        for i, token in enumerate(tokens):
+                            if token in ['FROM', 'JOIN', 'UPDATE'] and i + 1 < len(tokens):
+                                table = tokens[i + 1]
+                                break
+                        
+                        if table and table in self.column_names:
+                            self.matches = [col for col in self.column_names[table] 
+                                          if col.lower().startswith(text.lower())]
+                        else:
+                            # Toutes les colonnes de toutes les tables
+                            all_columns = [col for cols in self.column_names.values() for col in cols]
+                            self.matches = [col for col in all_columns 
+                                          if col.lower().startswith(text.lower())]
+                    else:
+                        # Complétion par défaut (mots-clés + tables)
+                        all_options = self.keywords + self.table_names + self.view_names
+                        self.matches = [opt for opt in all_options 
+                                      if opt.lower().startswith(text.lower())]
         
         try:
-            return self.matches[state]
+            return self.matches[state] if self.matches else None
         except IndexError:
             return None
-    
-    def _find_current_table(self, tokens: List[str]) -> Optional[str]:
-        """Trouve la table courante dans les tokens"""
-        for i, token in enumerate(tokens):
-            if token.upper() == 'FROM' and i + 1 < len(tokens):
-                return tokens[i + 1]
-            elif token.upper() == 'UPDATE' and i + 1 < len(tokens):
-                return tokens[i + 1]
-            elif token.upper() == 'INTO' and i + 1 < len(tokens):
-                return tokens[i + 1]
-        return None
 
 # ==================== SHELL COMMANDS ====================
 
@@ -444,6 +645,11 @@ class GSQLShell(cmd.Cmd):
         self.current_tx_id = None
         self.tx_start_time = None
         self.auto_commit = False
+        self.isolation_level = 'DEFERRED'
+        self.show_headers = True
+        self.show_timer = True
+        self.null_value = 'NULL'
+        self.output_file = None
         
         # Configuration du prompt
         self._update_prompt()
@@ -478,7 +684,7 @@ class GSQLShell(cmd.Cmd):
             if self.tx_start_time and self.show_tx_status:
                 elapsed = (datetime.now() - self.tx_start_time).total_seconds()
                 if elapsed > self.tx_warning_time:
-                    print(Colors.warning(f"⚠ Transaction active depuis {elapsed:.1f}s. Pensez à COMMIT ou ROLLBACK."))
+                    print(Colors.tx_warning(f"⚠ Transaction active depuis {elapsed:.1f}s. Pensez à COMMIT ou ROLLBACK."))
         else:
             self.prompt = Colors.info('gsql> ')
     
@@ -493,7 +699,27 @@ class GSQLShell(cmd.Cmd):
         readline.set_history_length(1000)
         
         # Enregistrer l'historique à la sortie
-        atexit.register(readline.write_history_file, str(self.history_file))
+        atexit.register(self._save_history)
+    
+    def _save_history(self):
+        """Sauvegarde l'historique"""
+        try:
+            readline.write_history_file(str(self.history_file))
+        except Exception as e:
+            logger.debug(f"Failed to save history: {e}")
+    
+    def _write_output(self, text: str):
+        """Écrit la sortie dans le fichier ou la console"""
+        if self.output_file:
+            try:
+                with open(self.output_file, 'a', encoding='utf-8') as f:
+                    f.write(text + '\n')
+            except Exception as e:
+                print(Colors.error(f"Error writing to output file: {e}"))
+                self.output_file = None
+                print(text)
+        else:
+            print(text)
     
     # ==================== COMMAND HANDLING ====================
     
@@ -507,34 +733,284 @@ class GSQLShell(cmd.Cmd):
             self._handle_dot_command(line)
             return
         
-        # Vérifier si c'est une commande transactionnelle
-        if self._is_transaction_command(line):
-            self._execute_transaction_command(line)
-            return
-        
         # Exécuter la requête SQL
         self._execute_sql(line)
     
-    def _is_transaction_command(self, sql: str) -> bool:
-        """Détecte si c'est une commande transactionnelle"""
-        sql_upper = sql.strip().upper()
-        transaction_commands = [
-            'BEGIN',
-            'BEGIN TRANSACTION',
-            'BEGIN IMMEDIATE TRANSACTION',
-            'BEGIN EXCLUSIVE TRANSACTION',
-            'BEGIN DEFERRED TRANSACTION',
-            'COMMIT',
-            'ROLLBACK',
-            'SAVEPOINT',
-            'RELEASE SAVEPOINT',
-            'ROLLBACK TO SAVEPOINT'
-        ]
+    def _handle_dot_command(self, command: str):
+        """Gère les commandes avec point (comme SQLite)"""
+        parts = command[1:].strip().split()
+        cmd = parts[0].lower() if parts else ""
+        args = parts[1:] if len(parts) > 1 else []
         
-        for cmd in transaction_commands:
-            if sql_upper.startswith(cmd):
+        handlers = {
+            'tables': self._dot_tables,
+            'schema': self._dot_schema,
+            'stats': self._dot_stats,
+            'transactions': self._dot_transactions,
+            'tx': self._dot_transactions,
+            'help': self._dot_help,
+            'backup': self._dot_backup,
+            'vacuum': self._dot_vacuum,
+            'autocommit': self._dot_autocommit,
+            'isolation': self._dot_isolation,
+            'mode': self._dot_mode,
+            'timer': self._dot_timer,
+            'headers': self._dot_headers,
+            'nullvalue': self._dot_nullvalue,
+            'output': self._dot_output,
+            'read': self._dot_read,
+            'dump': self._dot_dump,
+            'exit': lambda a: True,
+            'quit': lambda a: True,
+            'clear': lambda a: self.do_clear(""),
+            'history': lambda a: self._show_history(),
+        }
+        
+        if cmd in handlers:
+            result = handlers[cmd](args)
+            if result is True:
                 return True
-        return False
+        else:
+            self._write_output(Colors.error(f"Unknown command: .{cmd}"))
+            self._write_output(Colors.dim("Try .help for available commands"))
+    
+    def _dot_tables(self, args):
+        """Commande .tables"""
+        self._execute_sql("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+    
+    def _dot_schema(self, args):
+        """Commande .schema"""
+        if args:
+            table = args[0]
+            self._execute_sql(f"SELECT sql FROM sqlite_master WHERE type='table' AND name='{table}'")
+        else:
+            self._execute_sql("SELECT name, sql FROM sqlite_master WHERE type='table' ORDER BY name")
+    
+    def _dot_stats(self, args):
+        """Commande .stats"""
+        if self.db and hasattr(self.db, 'execute'):
+            result = self.db.execute("STATS")
+            self._display_result(result, 0)
+    
+    def _dot_transactions(self, args):
+        """Commande .transactions ou .tx"""
+        self.do_transactions("")
+    
+    def _dot_help(self, args):
+        """Commande .help"""
+        self.do_help("")
+    
+    def _dot_backup(self, args):
+        """Commande .backup"""
+        file = args[0] if args else None
+        if file:
+            self._execute_sql(f"BACKUP '{file}'")
+        else:
+            self._execute_sql("BACKUP")
+    
+    def _dot_vacuum(self, args):
+        """Commande .vacuum"""
+        self._execute_sql("VACUUM")
+    
+    def _dot_autocommit(self, args):
+        """Commande .autocommit"""
+        if not args:
+            status = "ON" if self.auto_commit else "OFF"
+            self._write_output(f"Auto-commit: {Colors.highlight(status)}")
+            return
+        
+        arg = args[0].lower()
+        if arg in ['on', '1', 'true', 'yes']:
+            self.auto_commit = True
+            self._write_output(Colors.success("Auto-commit enabled"))
+        elif arg in ['off', '0', 'false', 'no']:
+            self.auto_commit = False
+            self._write_output(Colors.success("Auto-commit disabled"))
+        else:
+            self._write_output(Colors.error("Usage: .autocommit [on|off]"))
+    
+    def _dot_isolation(self, args):
+        """Commande .isolation"""
+        if not args:
+            self._write_output(Colors.info("Isolation levels: DEFERRED, IMMEDIATE, EXCLUSIVE"))
+            self._write_output(f"Current: {Colors.highlight(self.isolation_level)}")
+            return
+        
+        level = args[0].upper()
+        if level in ['DEFERRED', 'IMMEDIATE', 'EXCLUSIVE']:
+            self.isolation_level = level
+            self._write_output(Colors.success(f"Isolation level set to: {level}"))
+        else:
+            self._write_output(Colors.error("Invalid isolation level. Use: DEFERRED, IMMEDIATE, EXCLUSIVE"))
+    
+    def _dot_mode(self, args):
+        """Commande .mode"""
+        if not args:
+            self._write_output(Colors.info("Available modes: list, column, line, csv, tabs, html, insert"))
+            return
+        
+        mode = args[0].lower()
+        self._write_output(Colors.info(f"Mode set to: {mode}"))
+        # Implémentation à compléter selon les besoins
+    
+    def _dot_timer(self, args):
+        """Commande .timer"""
+        if not args:
+            status = "ON" if self.show_timer else "OFF"
+            self._write_output(f"Timer: {Colors.highlight(status)}")
+            return
+        
+        arg = args[0].lower()
+        if arg in ['on', '1', 'true', 'yes']:
+            self.show_timer = True
+            self._write_output(Colors.success("Timer enabled"))
+        elif arg in ['off', '0', 'false', 'no']:
+            self.show_timer = False
+            self._write_output(Colors.success("Timer disabled"))
+        else:
+            self._write_output(Colors.error("Usage: .timer [on|off]"))
+    
+    def _dot_headers(self, args):
+        """Commande .headers"""
+        if not args:
+            status = "ON" if self.show_headers else "OFF"
+            self._write_output(f"Headers: {Colors.highlight(status)}")
+            return
+        
+        arg = args[0].lower()
+        if arg in ['on', '1', 'true', 'yes']:
+            self.show_headers = True
+            self._write_output(Colors.success("Headers enabled"))
+        elif arg in ['off', '0', 'false', 'no']:
+            self.show_headers = False
+            self._write_output(Colors.success("Headers disabled"))
+        else:
+            self._write_output(Colors.error("Usage: .headers [on|off]"))
+    
+    def _dot_nullvalue(self, args):
+        """Commande .nullvalue"""
+        if not args:
+            self._write_output(f"Null value: {Colors.highlight(self.null_value)}")
+            return
+        
+        self.null_value = args[0]
+        self._write_output(Colors.success(f"Null value set to: {self.null_value}"))
+    
+    def _dot_output(self, args):
+        """Commande .output"""
+        if not args:
+            if self.output_file:
+                self._write_output(f"Output file: {Colors.highlight(self.output_file)}")
+            else:
+                self._write_output("Output: stdout")
+            return
+        
+        filename = args[0]
+        if filename.lower() == 'stdout':
+            self.output_file = None
+            self._write_output(Colors.success("Output redirected to stdout"))
+        else:
+            self.output_file = filename
+            self._write_output(Colors.success(f"Output redirected to: {filename}"))
+    
+    def _dot_read(self, args):
+        """Commande .read"""
+        if not args:
+            self._write_output(Colors.error("Usage: .read <filename>"))
+            return
+        
+        filename = args[0]
+        try:
+            with open(filename, 'r', encoding='utf-8') as f:
+                script = f.read()
+            
+            # Exécuter le script ligne par ligne
+            for line in script.split(';'):
+                line = line.strip()
+                if line:
+                    self._execute_sql(line)
+                    
+        except FileNotFoundError:
+            self._write_output(Colors.error(f"File not found: {filename}"))
+        except Exception as e:
+            self._write_output(Colors.error(f"Error reading file: {e}"))
+    
+    def _dot_dump(self, args):
+        """Commande .dump"""
+        if self.db and hasattr(self.db.storage, 'connection'):
+            try:
+                conn = self.db.storage.connection
+                for line in conn.iterdump():
+                    self._write_output(line)
+            except Exception as e:
+                self._write_output(Colors.error(f"Error dumping database: {e}"))
+    
+    def _show_history(self):
+        """Affiche l'historique des commandes"""
+        try:
+            histsize = readline.get_current_history_length()
+            for i in range(max(1, histsize - 20), histsize + 1):
+                cmd = readline.get_history_item(i)
+                if cmd:
+                    self._write_output(f"{i:4d}  {cmd}")
+        except Exception:
+            self._write_output(Colors.error("Could not display history"))
+    
+    def _execute_sql(self, sql: str):
+        """Exécute une requête SQL et affiche le résultat"""
+        if not self.db:
+            self._write_output(Colors.error("No database connection"))
+            return
+        
+        try:
+            # Nettoyer la requête
+            sql = sql.strip()
+            if not sql:
+                return
+            
+            # Vérifier si c'est une commande transactionnelle
+            sql_upper = sql.upper()
+            is_transaction_command = any(
+                sql_upper.startswith(cmd) for cmd in 
+                ['BEGIN', 'COMMIT', 'ROLLBACK', 'SAVEPOINT', 'RELEASE']
+            )
+            
+            if is_transaction_command:
+                self._execute_transaction_command(sql)
+                return
+            
+            # Vérifier s'il y a une transaction active pour les écritures
+            is_write_operation = any(
+                sql_upper.startswith(cmd) for cmd in 
+                ['INSERT', 'UPDATE', 'DELETE', 'CREATE', 'DROP', 'ALTER', 'REPLACE']
+            )
+            
+            if is_write_operation:
+                # Vérifier les transactions actives
+                has_active_tx = False
+                if hasattr(self.db, 'active_transactions'):
+                    has_active_tx = len(self.db.active_transactions) > 0
+                
+                if not has_active_tx and not self.auto_commit:
+                    self._write_output(Colors.warning("⚠ No active transaction. Use BEGIN TRANSACTION or enable auto-commit."))
+                    self._write_output(Colors.dim("Add 'BEGIN TRANSACTION;' before your write operations."))
+                    return
+            
+            # Exécuter la requête
+            start_time = time.time()
+            result = self.db.execute(sql)
+            execution_time = time.time() - start_time
+            
+            # Afficher le résultat
+            self._display_result(result, execution_time)
+            
+            # Mettre à jour le prompt si nécessaire
+            self._update_prompt()
+            
+        except Exception as e:
+            self._write_output(Colors.error(f"Error: {e}"))
+            if hasattr(self.gsql, 'config') and self.gsql.config.get('verbose_errors'):
+                traceback.print_exc()
     
     def _execute_transaction_command(self, sql: str):
         """Exécute une commande transactionnelle"""
@@ -549,12 +1025,13 @@ class GSQLShell(cmd.Cmd):
                 # Nouvelle transaction démarrée
                 self.current_tx_id = result.get('tid')
                 self.tx_start_time = datetime.now()
-                print(Colors.tx_start(f"✓ Transaction {self.current_tx_id} started"))
-                print(Colors.dim(f"Isolation: {result.get('isolation', 'DEFERRED')}"))
+                self._write_output(Colors.tx_start(f"✓ Transaction {self.current_tx_id} started"))
+                isolation = result.get('isolation', 'DEFERRED')
+                self._write_output(Colors.dim(f"Isolation: {isolation}"))
                 
             elif sql_upper.startswith('COMMIT'):
                 # Transaction validée
-                print(Colors.tx_commit(f"✓ Transaction {result.get('tid', '?')} committed"))
+                self._write_output(Colors.tx_commit(f"✓ Transaction {result.get('tid', '?')} committed"))
                 self.current_tx_id = None
                 self.tx_start_time = None
                 
@@ -562,149 +1039,30 @@ class GSQLShell(cmd.Cmd):
                 # Transaction annulée
                 if 'TO SAVEPOINT' in sql_upper:
                     savepoint = sql.split()[-1]
-                    print(Colors.tx_rollback(f"↺ Rollback to savepoint '{savepoint}'"))
+                    self._write_output(Colors.tx_rollback(f"↺ Rollback to savepoint '{savepoint}'"))
                 else:
-                    print(Colors.tx_rollback(f"↺ Transaction {result.get('tid', '?')} rolled back"))
+                    self._write_output(Colors.tx_rollback(f"↺ Transaction {result.get('tid', '?')} rolled back"))
                     self.current_tx_id = None
                     self.tx_start_time = None
                     
             elif sql_upper.startswith('SAVEPOINT'):
                 savepoint = sql.split()[1] if len(sql.split()) > 1 else 'unknown'
-                print(Colors.tx_savepoint(f"✓ Savepoint '{savepoint}' created"))
+                self._write_output(Colors.tx_savepoint(f"✓ Savepoint '{savepoint}' created"))
                 
             elif sql_upper.startswith('RELEASE SAVEPOINT'):
                 savepoint = sql.split()[2] if len(sql.split()) > 2 else 'unknown'
-                print(Colors.tx_savepoint(f"✓ Savepoint '{savepoint}' released"))
+                self._write_output(Colors.tx_savepoint(f"✓ Savepoint '{savepoint}' released"))
             
             # Mettre à jour le prompt
             self._update_prompt()
             
         except Exception as e:
-            print(Colors.error(f"Transaction error: {e}"))
-    
-    def _handle_dot_command(self, command: str):
-        """Gère les commandes avec point (comme SQLite)"""
-        parts = command[1:].strip().split()
-        cmd = parts[0].lower() if parts else ""
-        
-        if cmd == 'tables':
-            self._execute_sql("SHOW TABLES")
-        elif cmd == 'schema':
-            table = parts[1] if len(parts) > 1 else None
-            if table:
-                self._execute_sql(f"DESCRIBE {table}")
-            else:
-                print(Colors.error("Usage: .schema <table_name>"))
-        elif cmd == 'stats':
-            self._execute_sql("STATS")
-        elif cmd == 'transactions' or cmd == 'tx':
-            self.do_transactions("")
-        elif cmd == 'help':
-            self.do_help("")
-        elif cmd == 'backup':
-            file = parts[1] if len(parts) > 1 else None
-            if file:
-                self._execute_sql(f"BACKUP {file}")
-            else:
-                self._execute_sql("BACKUP")
-        elif cmd == 'vacuum':
-            self._execute_sql("VACUUM")
-        elif cmd == 'autocommit':
-            self._handle_autocommit(parts[1:] if len(parts) > 1 else [])
-        elif cmd == 'isolation':
-            self._handle_isolation(parts[1:] if len(parts) > 1 else [])
-        elif cmd == 'exit' or cmd == 'quit':
-            return True
-        elif cmd == 'clear':
-            os.system('clear' if os.name == 'posix' else 'cls')
-        elif cmd == 'history':
-            self._show_history()
-        else:
-            print(Colors.error(f"Unknown command: .{cmd}"))
-            print(Colors.dim("Try .help for available commands"))
-    
-    def _handle_autocommit(self, args):
-        """Gère la commande .autocommit"""
-        if not args:
-            status = "ON" if self.auto_commit else "OFF"
-            print(f"Auto-commit: {Colors.highlight(status)}")
-            return
-        
-        arg = args[0].lower()
-        if arg in ['on', '1', 'true', 'yes']:
-            self.auto_commit = True
-            print(Colors.success("Auto-commit enabled"))
-        elif arg in ['off', '0', 'false', 'no']:
-            self.auto_commit = False
-            print(Colors.success("Auto-commit disabled"))
-        else:
-            print(Colors.error("Usage: .autocommit [on|off]"))
-    
-    def _handle_isolation(self, args):
-        """Gère la commande .isolation"""
-        if not args:
-            print(Colors.info("Isolation levels: DEFERRED, IMMEDIATE, EXCLUSIVE"))
-            return
-        
-        level = args[0].upper()
-        if level in ['DEFERRED', 'IMMEDIATE', 'EXCLUSIVE']:
-            self.isolation_level = level
-            print(Colors.success(f"Isolation level set to: {level}"))
-        else:
-            print(Colors.error("Invalid isolation level. Use: DEFERRED, IMMEDIATE, EXCLUSIVE"))
-    
-    def _show_history(self):
-        """Affiche l'historique des commandes"""
-        try:
-            histsize = readline.get_current_history_length()
-            for i in range(1, histsize + 1):
-                cmd = readline.get_history_item(i)
-                print(f"{i:4d}  {cmd}")
-        except:
-            print(Colors.error("Could not display history"))
-    
-    def _execute_sql(self, sql: str):
-        """Exécute une requête SQL et affiche le résultat"""
-        if not self.db:
-            print(Colors.error("No database connection"))
-            return
-        
-        try:
-            # Nettoyer la requête
-            sql = sql.strip()
-            if not sql:
-                return
-            
-            # Vérifier s'il y a une transaction active pour les écritures
-            sql_upper = sql.upper()
-            is_write_operation = any(
-                sql_upper.startswith(cmd) for cmd in 
-                ['INSERT', 'UPDATE', 'DELETE', 'CREATE', 'DROP', 'ALTER']
-            )
-            
-            if is_write_operation and not hasattr(self.db, 'active_transactions') and not self.auto_commit:
-                print(Colors.warning("⚠ No active transaction. Use BEGIN TRANSACTION or enable auto-commit."))
-                print(Colors.dim("Add 'BEGIN TRANSACTION;' before your write operations."))
-                return
-            
-            # Exécuter la requête
-            start_time = datetime.now()
-            result = self.db.execute(sql)
-            execution_time = (datetime.now() - start_time).total_seconds()
-            
-            # Afficher le résultat
-            self._display_result(result, execution_time)
-            
-            # Mettre à jour le prompt si nécessaire
-            self._update_prompt()
-            
-        except Exception as e:
-            print(Colors.error(f"Error: {e}"))
+            self._write_output(Colors.error(f"Transaction error: {e}"))
     
     def _display_result(self, result: Dict, execution_time: float):
         """Affiche le résultat d'une requête avec support transactions"""
         if not result.get('success'):
-            print(Colors.error(f"Query failed: {result.get('message', 'Unknown error')}"))
+            self._write_output(Colors.error(f"Query failed: {result.get('message', 'Unknown error')}"))
             return
         
         query_type = result.get('type', '').lower()
@@ -713,103 +1071,107 @@ class GSQLShell(cmd.Cmd):
         if query_type == 'transaction':
             message = result.get('message', '')
             if 'started' in message.lower():
-                print(Colors.tx_start(f"✓ Transaction started (ID: {result.get('tid', 'N/A')})"))
-                print(Colors.dim(f"Isolation: {result.get('isolation', 'DEFERRED')}"))
+                self._write_output(Colors.tx_start(f"✓ Transaction started (ID: {result.get('tid', 'N/A')})"))
+                self._write_output(Colors.dim(f"Isolation: {result.get('isolation', 'DEFERRED')}"))
             elif 'committed' in message.lower():
-                print(Colors.tx_commit(f"✓ Transaction {result.get('tid', 'N/A')} committed"))
+                self._write_output(Colors.tx_commit(f"✓ Transaction {result.get('tid', 'N/A')} committed"))
             elif 'rolled back' in message.lower():
-                print(Colors.tx_rollback(f"↺ Transaction {result.get('tid', 'N/A')} rolled back"))
+                self._write_output(Colors.tx_rollback(f"↺ Transaction {result.get('tid', 'N/A')} rolled back"))
             return
         
         elif query_type == 'savepoint':
-            print(Colors.tx_savepoint(f"✓ Savepoint '{result.get('name', 'N/A')}' created"))
+            self._write_output(Colors.tx_savepoint(f"✓ Savepoint '{result.get('name', 'N/A')}' created"))
             return
         # ==================== FIN TRANSACTION DISPLAY ====================
         
         elif query_type == 'select':
             rows = result.get('rows', [])
             columns = result.get('columns', [])
-            count = result.get('count', 0)
+            count = result.get('count', len(rows))
             
             if count == 0:
-                print(Colors.warning("No rows returned"))
+                self._write_output(Colors.warning("No rows returned"))
             else:
-                # Afficher l'en-tête avec indication de transaction
-                if self.current_tx_id:
-                    header = f"{Colors.tx_active('TX:' + str(self.current_tx_id))} | "
-                else:
-                    header = ""
-                header += " | ".join(Colors.highlight(col) for col in columns)
-                print(header)
-                print(Colors.dim('─' * len(header)))
-                
-                # Afficher les données (limité à 50 lignes)
-                for i, row in enumerate(rows[:50]):
-                    if isinstance(row, dict):
-                        values = [str(v) if v is not None else Colors.dim("NULL") for v in row.values()]
-                    elif isinstance(row, (list, tuple)):
-                        values = [str(v) if v is not None else Colors.dim("NULL") for v in row]
+                # Afficher l'en-tête si demandé
+                if self.show_headers and columns:
+                    if self.current_tx_id:
+                        header = f"{Colors.tx_active('TX:' + str(self.current_tx_id))} | "
                     else:
-                        values = [str(row)]
+                        header = ""
+                    header += " | ".join(Colors.highlight(col) for col in columns)
+                    self._write_output(header)
+                    self._write_output(Colors.dim('─' * len(header)))
+                
+                # Afficher les données (limité à 100 lignes par défaut)
+                max_rows = self.gsql.config.get('executor.row_limit', 100) if self.gsql else 100
+                rows_to_display = rows[:max_rows]
+                
+                for i, row in enumerate(rows_to_display):
+                    if isinstance(row, dict):
+                        values = [safe_str(v) if v is not None else self.null_value for v in row.values()]
+                    elif isinstance(row, (list, tuple)):
+                        values = [safe_str(v) if v is not None else self.null_value for v in row]
+                    else:
+                        values = [safe_str(row)]
                     
                     # Colorer les valeurs
                     colored_values = []
                     for val in values:
-                        if val == "NULL":
+                        if val == self.null_value:
                             colored_values.append(Colors.dim(val))
                         elif val.isdigit() or (val.replace('.', '', 1).isdigit() and val.count('.') <= 1):
                             colored_values.append(Colors.sql_number(val))
-                        elif val.startswith("'") and val.endswith("'"):
+                        elif (val.startswith("'") and val.endswith("'")) or (val.startswith('"') and val.endswith('"')):
                             colored_values.append(Colors.sql_string(val))
                         else:
                             colored_values.append(val)
                     
-                    print(" | ".join(colored_values))
+                    self._write_output(" | ".join(colored_values))
                 
-                if len(rows) > 50:
-                    print(Colors.dim(f"... and {len(rows) - 50} more rows"))
+                if len(rows) > max_rows:
+                    self._write_output(Colors.dim(f"... and {len(rows) - max_rows} more rows"))
                 
-                print(Colors.dim(f"\n{count} row(s) returned"))
+                self._write_output(Colors.dim(f"\n{count} row(s) returned"))
         
         elif query_type == 'insert':
             last_id = result.get('lastrowid', result.get('last_insert_id', 'N/A'))
             rows_affected = result.get('rows_affected', 0)
             
-            print(Colors.success(f"✓ Row inserted"))
+            self._write_output(Colors.success(f"✓ Row inserted"))
             if last_id and last_id != 'N/A':
-                print(Colors.dim(f"ID: {last_id}"))
-            print(Colors.dim(f"Rows affected: {rows_affected}"))
+                self._write_output(Colors.dim(f"ID: {last_id}"))
+            self._write_output(Colors.dim(f"Rows affected: {rows_affected}"))
             
             # Afficher un warning si pas dans une transaction
             if hasattr(self.db, 'active_transactions') and not self.db.active_transactions and not self.auto_commit:
-                print(Colors.warning("⚠ Warning: Insert not in transaction (auto-commit disabled)"))
+                self._write_output(Colors.warning("⚠ Warning: Insert not in transaction (auto-commit disabled)"))
         
         elif query_type == 'update' or query_type == 'delete':
             rows_affected = result.get('rows_affected', 0)
-            print(Colors.success(f"✓ Query successful"))
-            print(Colors.dim(f"Rows affected: {rows_affected}"))
+            self._write_output(Colors.success(f"✓ Query successful"))
+            self._write_output(Colors.dim(f"Rows affected: {rows_affected}"))
             
             # Afficher un warning si pas dans une transaction
             if hasattr(self.db, 'active_transactions') and not self.db.active_transactions and not self.auto_commit:
-                print(Colors.warning("⚠ Warning: Operation not in transaction (auto-commit disabled)"))
+                self._write_output(Colors.warning("⚠ Warning: Operation not in transaction (auto-commit disabled)"))
         
         elif query_type == 'show_tables':
             tables = result.get('tables', [])
             if tables:
-                print(Colors.success(f"Found {len(tables)} table(s):"))
+                self._write_output(Colors.success(f"Found {len(tables)} table(s):"))
                 for table in tables:
                     row_count = table.get('rows', 0)
                     size = table.get('size_kb', 0)
-                    print(f"  • {Colors.highlight(table['table'])} "
+                    self._write_output(f"  • {Colors.highlight(table['table'])} "
                           f"({Colors.sql_number(str(row_count))} rows, "
                           f"{Colors.sql_number(f'{size}KB')})")
             else:
-                print(Colors.warning("No tables found"))
+                self._write_output(Colors.warning("No tables found"))
         
         elif query_type == 'describe':
             columns = result.get('columns', [])
             if columns:
-                print(Colors.success(f"Table structure:"))
+                self._write_output(Colors.success(f"Table structure:"))
                 for col in columns:
                     null_str = "NOT NULL" if not col.get('null') else "NULL"
                     default_str = f"DEFAULT {col.get('default')}" if col.get('default') else ""
@@ -817,51 +1179,52 @@ class GSQLShell(cmd.Cmd):
                     extra_str = f" {col.get('extra')}" if col.get('extra') else ""
                     
                     line = f"  {Colors.highlight(col['field'])} {col['type']} {null_str} {default_str}{key_str}{extra_str}"
-                    print(line.strip())
+                    self._write_output(line.strip())
             else:
-                print(Colors.warning("No columns found"))
+                self._write_output(Colors.warning("No columns found"))
         
         elif query_type == 'stats':
             stats = result.get('database', {})
-            print(Colors.success("Database statistics:"))
+            self._write_output(Colors.success("Database statistics:"))
             
             # Statistiques de transaction
             if 'active_transactions' in stats:
                 active_tx = stats['active_transactions']
                 tx_color = Colors.RED if active_tx > 0 else Colors.GREEN
-                print(f"  Active transactions: {tx_color}{active_tx}{Colors.RESET}")
+                self._write_output(f"  Active transactions: {tx_color}{active_tx}{Colors.RESET}")
             
             if 'transactions_total' in stats:
-                print(f"  Total transactions: {stats['transactions_total']}")
+                self._write_output(f"  Total transactions: {stats['transactions_total']}")
             
             for key, value in stats.items():
                 if key not in ['active_transactions', 'transactions_total']:
                     if isinstance(value, dict):
-                        print(f"  {key}:")
+                        self._write_output(f"  {key}:")
                         for k, v in value.items():
-                            print(f"    {k}: {v}")
+                            self._write_output(f"    {k}: {v}")
                     else:
-                        print(f"  {key}: {value}")
+                        self._write_output(f"  {key}: {value}")
         
         elif query_type == 'vacuum':
-            print(Colors.success("✓ Database optimized"))
+            self._write_output(Colors.success("✓ Database optimized"))
         
         elif query_type == 'backup':
-            print(Colors.success(f"✓ Backup created: {result.get('backup_file', 'N/A')}"))
+            self._write_output(Colors.success(f"✓ Backup created: {result.get('backup_file', 'N/A')}"))
         
         elif query_type == 'help':
-            print(result.get('message', ''))
+            self._write_output(result.get('message', ''))
         
         else:
-            print(Colors.success(f"✓ Query executed successfully"))
+            self._write_output(Colors.success(f"✓ Query executed successfully"))
         
         # Afficher le temps d'exécution
-        if 'execution_time' in result:
-            time_str = f"{result['execution_time']:.3f}s"
-        else:
-            time_str = f"{execution_time:.3f}s"
-        
-        print(Colors.dim(f"Time: {time_str}"))
+        if self.show_timer:
+            if 'execution_time' in result:
+                time_str = f"{result['execution_time']:.3f}s"
+            else:
+                time_str = f"{execution_time:.3f}s"
+            
+            self._write_output(Colors.dim(f"Time: {time_str}"))
     
     # ==================== BUILT-IN COMMANDS ====================
     
@@ -889,6 +1252,7 @@ class GSQLShell(cmd.Cmd):
   DROP TABLE name
   ALTER TABLE name ADD COLUMN col TYPE
   CREATE INDEX idx_name ON table(column)
+  CREATE VIEW name AS SELECT ...
 
 {Colors.underline("GSQL SPECIAL COMMANDS:")}
   SHOW TABLES                    - List all tables
@@ -905,6 +1269,13 @@ class GSQLShell(cmd.Cmd):
   .transactions / .tx            - Show active transactions
   .autocommit [on|off]           - Toggle auto-commit mode
   .isolation [level]             - Set isolation level
+  .headers [on|off]              - Toggle column headers
+  .timer [on|off]                - Toggle execution timer
+  .mode [mode]                   - Set output mode
+  .nullvalue [string]            - Set string for NULL values
+  .output [filename]             - Redirect output to file
+  .read [filename]               - Execute SQL from file
+  .dump                          - Dump database as SQL
   .help                          - Show help
   .backup [file]                 - Create backup
   .vacuum                        - Optimize database
@@ -924,12 +1295,12 @@ class GSQLShell(cmd.Cmd):
   • Watch for transaction timeouts (>5s warning)
   • Enable auto-commit with .autocommit on
         """
-        print(help_text.strip())
+        self._write_output(help_text.strip())
     
     def do_transactions(self, arg: str):
         """Affiche les transactions actives"""
         if not self.db:
-            print(Colors.error("No database connection"))
+            self._write_output(Colors.error("No database connection"))
             return
         
         active_tx = 0
@@ -937,13 +1308,13 @@ class GSQLShell(cmd.Cmd):
             active_tx = len(self.db.active_transactions)
         
         if active_tx == 0:
-            print(Colors.info("No active transactions"))
+            self._write_output(Colors.info("No active transactions"))
             if self.auto_commit:
-                print(Colors.dim("Auto-commit mode is enabled"))
+                self._write_output(Colors.dim("Auto-commit mode is enabled"))
             return
         
-        print(Colors.success(f"Active transactions: {active_tx}"))
-        print(Colors.dim("─" * 50))
+        self._write_output(Colors.success(f"Active transactions: {active_tx}"))
+        self._write_output(Colors.dim("─" * 50))
         
         for tid, tx_info in self.db.active_transactions.items():
             state = tx_info.get('state', 'UNKNOWN')
@@ -965,7 +1336,7 @@ class GSQLShell(cmd.Cmd):
                     
                     # Avertissement si trop long
                     if duration > self.tx_warning_time:
-                        duration_str = Colors.warning(f"{duration:.1f}s ⚠")
+                        duration_str = Colors.tx_warning(f"{duration:.1f}s ⚠")
             
             # Couleur selon l'état
             if state == 'ACTIVE':
@@ -977,29 +1348,29 @@ class GSQLShell(cmd.Cmd):
             else:
                 state_color = Colors.dim
             
-            print(f"{Colors.highlight('TID:')} {Colors.BOLD}{tid}{Colors.RESET}")
-            print(f"  {Colors.highlight('State:')} {state_color(state)}")
-            print(f"  {Colors.highlight('Isolation:')} {isolation}")
-            print(f"  {Colors.highlight('Duration:')} {duration_str}")
+            self._write_output(f"{Colors.highlight('TID:')} {Colors.BOLD}{tid}{Colors.RESET}")
+            self._write_output(f"  {Colors.highlight('State:')} {state_color(state)}")
+            self._write_output(f"  {Colors.highlight('Isolation:')} {isolation}")
+            self._write_output(f"  {Colors.highlight('Duration:')} {duration_str}")
             
             # Afficher les savepoints
             savepoints = tx_info.get('savepoints', [])
             if savepoints:
-                print(f"  {Colors.highlight('Savepoints:')} {', '.join(savepoints)}")
+                self._write_output(f"  {Colors.highlight('Savepoints:')} {', '.join(savepoints)}")
             
             # Afficher les requêtes exécutées
             queries = tx_info.get('queries', [])
             if queries:
-                print(f"  {Colors.highlight('Queries:')} {len(queries)} executed")
+                self._write_output(f"  {Colors.highlight('Queries:')} {len(queries)} executed")
                 if len(queries) <= 3:
                     for i, query in enumerate(queries[-3:], 1):
                         short_query = query[:50] + "..." if len(query) > 50 else query
-                        print(f"    {i}. {Colors.dim(short_query)}")
+                        self._write_output(f"    {i}. {Colors.dim(short_query)}")
             
-            print(Colors.dim("─" * 50))
+            self._write_output(Colors.dim("─" * 50))
         
-        print(Colors.warning(f"⚠ Total active transactions: {active_tx}"))
-        print(Colors.dim("Use COMMIT or ROLLBACK to finish transactions"))
+        self._write_output(Colors.warning(f"⚠ Total active transactions: {active_tx}"))
+        self._write_output(Colors.dim("Use COMMIT or ROLLBACK to finish transactions"))
     
     def do_exit(self, arg: str):
         """Quitte le shell GSQL"""
@@ -1007,7 +1378,7 @@ class GSQLShell(cmd.Cmd):
         if self.db and hasattr(self.db, 'active_transactions'):
             active_tx = len(self.db.active_transactions)
             if active_tx > 0:
-                print(Colors.warning(f"⚠ Warning: {active_tx} active transaction(s)"))
+                self._write_output(Colors.warning(f"⚠ Warning: {active_tx} active transaction(s)"))
                 response = input("Rollback all transactions? (y/N): ").strip().lower()
                 if response in ['y', 'yes']:
                     # Rollback toutes les transactions
@@ -1016,9 +1387,9 @@ class GSQLShell(cmd.Cmd):
                             self.db.execute("ROLLBACK")
                         except:
                             pass
-                    print(Colors.tx_rollback("All transactions rolled back"))
+                    self._write_output(Colors.tx_rollback("All transactions rolled back"))
         
-        print(Colors.info("Goodbye!"))
+        self._write_output(Colors.info("Goodbye!"))
         return True
     
     def do_quit(self, arg: str):
@@ -1035,11 +1406,11 @@ class GSQLShell(cmd.Cmd):
     
     def do_autocommit(self, arg: str):
         """Active/désactive le mode auto-commit"""
-        self._handle_autocommit(arg.split() if arg else [])
+        self._dot_autocommit(arg.split() if arg else [])
     
     def do_isolation(self, arg: str):
         """Définit le niveau d'isolation"""
-        self._handle_isolation(arg.split() if arg else [])
+        self._dot_isolation(arg.split() if arg else [])
     
     # ==================== SHELL CONTROL ====================
     
@@ -1051,7 +1422,10 @@ class GSQLShell(cmd.Cmd):
         """Avant l'exécution de la commande"""
         # Enregistrer dans l'historique (sauf les commandes spéciales)
         if line and not line.startswith('.'):
-            readline.add_history(line)
+            try:
+                readline.add_history(line)
+            except Exception:
+                pass
         return line
     
     def postcmd(self, stop: bool, line: str) -> bool:
@@ -1062,18 +1436,18 @@ class GSQLShell(cmd.Cmd):
     
     def sigint_handler(self, signum, frame):
         """Gère Ctrl+C"""
-        print("\n" + Colors.warning("Interrupted (Ctrl+C)"))
+        self._write_output("\n" + Colors.warning("Interrupted (Ctrl+C)"))
         
         # Si dans une transaction, proposer de rollback
         if self.current_tx_id:
-            print(Colors.warning(f"⚠ Transaction {self.current_tx_id} is still active"))
+            self._write_output(Colors.warning(f"⚠ Transaction {self.current_tx_id} is still active"))
             response = input("Rollback transaction? (y/N): ").strip().lower()
             if response in ['y', 'yes']:
                 try:
                     self.db.execute("ROLLBACK")
-                    print(Colors.tx_rollback(f"Transaction {self.current_tx_id} rolled back"))
+                    self._write_output(Colors.tx_rollback(f"Transaction {self.current_tx_id} rolled back"))
                 except:
-                    print(Colors.error("Failed to rollback"))
+                    self._write_output(Colors.error("Failed to rollback"))
         
         self._update_prompt()
 
@@ -1100,7 +1474,7 @@ class GSQLApp:
     
     def _load_config(self) -> Dict:
         """Charge la configuration"""
-        user_config = config.to_dict()
+        user_config = config.to_dict() if CONFIG_AVAILABLE else {}
         
         # Fusionner avec la configuration par défaut
         merged = DEFAULT_CONFIG.copy()
@@ -1108,10 +1482,8 @@ class GSQLApp:
         # Mettre à jour avec la configuration utilisateur
         for section in ['database', 'executor', 'shell']:
             if section in user_config:
-                merged[section].update(user_config[section])
-        
-        # Mettre à jour la configuration globale
-        config.update(**merged.get('database', {}))
+                if isinstance(user_config[section], dict):
+                    merged[section].update(user_config[section])
         
         return merged
     
@@ -1125,13 +1497,18 @@ class GSQLApp:
             if database_path:
                 db_config['path'] = database_path
             
+            if not DATABASE_AVAILABLE:
+                print(Colors.warning("Warning: Database module not available, using fallback"))
+            
             self.db = create_database(**db_config)
             
-            # Créer l'exécuteur
-            self.executor = create_executor(storage=self.db.storage)
+            # Créer l'exécuteur si disponible
+            if EXECUTOR_AVAILABLE:
+                self.executor = create_executor(storage=self.db.storage)
             
             # Initialiser les autres composants
-            self.function_manager = FunctionManager()
+            if FUNCTIONS_AVAILABLE:
+                self.function_manager = FunctionManager()
             
             # Gestion du NLP
             if NLP_AVAILABLE and NLToSQLTranslator:
@@ -1151,7 +1528,8 @@ class GSQLApp:
             
         except Exception as e:
             print(Colors.error(f"Failed to initialize GSQL: {e}"))
-            traceback.print_exc()
+            if self.config.get('verbose_errors'):
+                traceback.print_exc()
             sys.exit(1)
     
     def run_shell(self, database_path: Optional[str] = None):
@@ -1241,6 +1619,8 @@ class GSQLApp:
                 
         except Exception as e:
             print(Colors.error(f"Error: {e}"))
+            if self.config.get('verbose_errors'):
+                traceback.print_exc()
             return None
         finally:
             self._cleanup()
@@ -1248,7 +1628,7 @@ class GSQLApp:
     def run_script(self, script_path: str, database_path: Optional[str] = None):
         """Exécute un script SQL avec support transactions"""
         try:
-            with open(script_path, 'r') as f:
+            with open(script_path, 'r', encoding='utf-8') as f:
                 script = f.read()
             
             self._initialize(database_path)
@@ -1257,7 +1637,14 @@ class GSQLApp:
             print(Colors.dim("─" * 40))
             
             # Exécuter le script
-            results = self.db.execute_script(script)
+            results = []
+            for stmt in self._split_statements(script):
+                if stmt.strip():
+                    result = self.db.execute(stmt)
+                    results.append(result)
+                    
+                    if not result.get('success'):
+                        print(Colors.error(f"Failed: {stmt[:50]}..."))
             
             # Afficher les résultats
             success_count = sum(1 for r in results if r.get('success'))
@@ -1280,9 +1667,34 @@ class GSQLApp:
             
         except Exception as e:
             print(Colors.error(f"Error executing script: {e}"))
+            if self.config.get('verbose_errors'):
+                traceback.print_exc()
             return None
         finally:
             self._cleanup()
+    
+    def _split_statements(self, script: str) -> List[str]:
+        """Sépare un script SQL en instructions individuelles"""
+        # Simple split sur les points-virgules (à améliorer pour gérer les strings)
+        statements = []
+        current = ""
+        in_string = False
+        string_char = None
+        
+        for char in script:
+            if char in ("'", '"') and (not in_string or string_char == char):
+                in_string = not in_string
+                string_char = char if in_string else None
+            elif char == ';' and not in_string:
+                statements.append(current.strip())
+                current = ""
+                continue
+            current += char
+        
+        if current.strip():
+            statements.append(current.strip())
+        
+        return statements
     
     def _cleanup(self):
         """Nettoie les ressources"""
@@ -1296,9 +1708,9 @@ class GSQLApp:
                         print(Colors.warning(f"⚠ Closing database with {active_tx} active transaction(s)"))
                 
                 self.db.close()
-                print(Colors.dim("Database closed"))
-        except:
-            pass
+                logger.debug("Database closed")
+        except Exception as e:
+            logger.debug(f"Error during cleanup: {e}")
 
 # ==================== MAIN FUNCTION ====================
 
@@ -1364,7 +1776,7 @@ def main():
     parser.add_argument(
         '-v', '--verbose',
         action='store_true',
-        help='Verbose output'
+        help='Verbose output and errors'
     )
     
     parser.add_argument(
@@ -1378,6 +1790,13 @@ def main():
         '--auto-commit',
         action='store_true',
         help='Enable auto-commit mode'
+    )
+    
+    parser.add_argument(
+        '--row-limit',
+        type=int,
+        default=1000,
+        help='Maximum rows to display (default: 1000)'
     )
     
     parser.add_argument(
@@ -1398,6 +1817,7 @@ def main():
     # Configurer le verbose
     if args.verbose:
         setup_logging(level='DEBUG')
+        DEFAULT_CONFIG['verbose_errors'] = True
     
     # Configurer le timeout des transactions
     if args.tx_timeout:
@@ -1406,6 +1826,10 @@ def main():
     # Configurer auto-commit
     if args.auto_commit:
         DEFAULT_CONFIG['executor']['auto_commit'] = True
+    
+    # Configurer la limite de lignes
+    if args.row_limit:
+        DEFAULT_CONFIG['executor']['row_limit'] = args.row_limit
     
     # Créer l'application
     app = GSQLApp()
@@ -1416,7 +1840,7 @@ def main():
         app.run_query(args.execute, args.database)
     elif args.file:
         # Mode fichier
-        with open(args.file, 'r') as f:
+        with open(args.file, 'r', encoding='utf-8') as f:
             app.run_query(f.read(), args.database)
     elif args.script:
         # Mode script avec monitoring
