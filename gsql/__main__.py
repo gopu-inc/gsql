@@ -32,7 +32,7 @@ from enum import Enum
 # Import des modules GSQL
 try:
     # Version
-    __version__ = "4.0.0-beta"
+    __version__ = "3.10.0"
     
     # Configuration simplifiée
     class Config:
@@ -1396,19 +1396,19 @@ class RichGSQLShell(cmd.Cmd):
     
     def do_help(self, arg: str):
         """Affiche l'aide complète"""
-        help_text = """
-{success}GSQL Advanced Shell - Command Reference{reset}
+        help_text = f"""
+{theme.success("GSQL Advanced Shell - Command Reference")}
 
-{info}SQL COMMANDS:{reset}
+{theme.info("SQL COMMANDS:")}
   All standard SQL commands are supported
   Examples:
     SELECT * FROM table WHERE condition;
     INSERT INTO table (col1, col2) VALUES (val1, val2);
     CREATE TABLE name (id INT PRIMARY KEY, name TEXT);
 
-{info}DOT COMMANDS (GSQL Specific):{reset}
+{theme.info("DOT COMMANDS (GSQL Specific):")}
 
-{highlight}Database:{reset}
+{theme.highlight("Database:")}
   .tables [pattern]         - List tables (optional pattern)
   .schema <table>          - Show table structure
   .indexes [table]         - Show indexes
@@ -1419,14 +1419,14 @@ class RichGSQLShell(cmd.Cmd):
   .import <file> <table>   - Import data
   .export <table> <file>   - Export data
 
-{highlight}Display:{reset}
+{theme.highlight("Display:")}
   .mode [table|csv|json]   - Set output format
   .headers [on|off]        - Toggle column headers
   .timer [on|off]          - Toggle execution timer
   .nullvalue <string>      - Set NULL display string
   .width <num>             - Set column width
 
-{highlight}System:{reset}
+{theme.highlight("System:")}
   .sysinfo                 - Show system information
   .ps                      - Show running processes
   .df                      - Show disk usage
@@ -1434,7 +1434,7 @@ class RichGSQLShell(cmd.Cmd):
   .top                     - Show top processes
   .users                   - Show connected users
 
-{highlight}Shell:{reset}
+{theme.highlight("Shell:")}
   .clear                   - Clear screen
   .history [n]             - Show last n commands
   .system <cmd>            - Execute system command
@@ -1442,13 +1442,13 @@ class RichGSQLShell(cmd.Cmd):
   .help                    - This help
   .exit/.quit              - Exit GSQL
 
-{highlight}Administration:{reset}
+{theme.highlight("Administration:")}
   .config [key] [value]    - View/Set configuration
   .logs [level]            - View logs
   .restore <file>          - Restore from backup
 
-{info}SHELL FEATURES:{reset}
-  • Multi-line SQL: End line with \
+{theme.info("SHELL FEATURES:")}
+  • Multi-line SQL: End line with \\
   • Syntax highlighting
   • Auto-completion (Tab key)
   • Command history (Up/Down arrows)
@@ -1457,26 +1457,21 @@ class RichGSQLShell(cmd.Cmd):
   • Customizable prompt
   • System integration
 
-{info}KEYBOARD SHORTCUTS:{reset}
+{theme.info("KEYBOARD SHORTCUTS:")}
   Ctrl+C     - Cancel current operation
   Ctrl+D     - Exit GSQL
   Ctrl+L     - Clear screen
   Ctrl+R     - Search history
   Tab        - Auto-completion
 
-{info}EXAMPLES:{reset}
+{theme.info("EXAMPLES:")}
   .tables                           # List all tables
   .schema users                     # Show users table structure
   .mode json                        # Set JSON output
   !ls -la                           # Execute shell command
   .sysinfo                          # Show system info
   SELECT * FROM users LIMIT 10;     # SQL query
-        """.format(
-            success=theme.success(""),
-            info=theme.info(""),
-            highlight=theme.highlight(""),
-            reset="\033[0m"
-        )
+        """
         
         # Utiliser un pager pour l'aide si disponible
         if self.pager_enabled and len(help_text) > 1000:
@@ -1519,7 +1514,7 @@ class RichGSQLShell(cmd.Cmd):
     
     def sigint_handler(self, signum, frame):
         """Gère Ctrl+C"""
-        print("\n" + theme.warning("^C"))
+        print(f"\n{theme.warning('^C')}")
         self.multiline_mode = False
         self.multiline_buffer = []
     
@@ -1623,9 +1618,9 @@ class GSQLApp:
         try:
             shell.cmdloop()
         except KeyboardInterrupt:
-            print("\n" + theme.info("Session interrupted"))
+            print(f"\n{theme.info('Session interrupted')}")
         except EOFError:
-            print("\n" + theme.info("Session ended"))
+            print(f"\n{theme.info('Session ended')}")
         finally:
             self._cleanup()
     
