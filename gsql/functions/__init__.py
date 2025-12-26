@@ -1,8 +1,7 @@
-#!/usr/bin/env python3
 """
-Functions package for GSQL
+Package functions pour GSQL
 """
 
-from .user_functions import FunctionManager
+from .user_functions import FunctionManager, register_function
 
-__all__ = ['FunctionManager']
+__all__ = ['FunctionManager', 'register_function']
