@@ -14,10 +14,13 @@ import hashlib
 import time
 import contextlib
 import shutil
+import logging
 
-from .storage import SQLiteStorage
+from .storage import SQLiteStorage, get_storage_stats
 from .executor import QueryExecutor
 from .exceptions import SQLExecutionError, StorageError
+
+logger = logging.getLogger(__name__)
 
 # ==================== CACHE MANAGEMENT ====================
 
@@ -138,14 +141,13 @@ class Database:
         self.db_path = db_path
         
         # Filter valid parameters for SQLiteStorage
-        # SQLiteStorage ne supporte PAS 'auto_recovery'
-        valid_params = ['base_dir', 'buffer_pool_size', 'enable_wal']
+        valid_params = ['base_dir', 'buffer_pool_size', 'enable_wal', 'auto_recovery']
         storage_params = {k: v for k, v in kwargs.items() if k in valid_params}
         
         # Debug: afficher les paramètres reçus
-        print(f"DEBUG: Initializing Database with db_path={db_path}")
-        print(f"DEBUG: Storage params: {storage_params}")
-        print(f"DEBUG: All kwargs: {kwargs}")
+        logger.debug(f"Initializing Database with db_path={db_path}")
+        logger.debug(f"Storage params: {storage_params}")
+        logger.debug(f"All kwargs: {kwargs}")
         
         self.storage = SQLiteStorage(db_path, **storage_params)
         self.executor = QueryExecutor(self.storage)
@@ -159,6 +161,9 @@ class Database:
         # Initialize with default tables if new database
         if self.storage.is_new_database():
             self._initialize_default_tables()
+        else:
+            # Vérifier que les tables système existent
+            self._ensure_system_tables()
     
     def _configure_pragmas(self, config: Dict) -> None:
         """Configure SQLite pragmas"""
@@ -189,12 +194,81 @@ class Database:
             temp_store = config.get('temp_store', 0)
             cursor.execute(f"PRAGMA temp_store = {temp_store}")
             
+            self.storage.connection.commit()
+            
         except Exception as e:
-            print(f"Warning: Could not configure SQLite pragmas: {e}")
+            logger.warning(f"Could not configure SQLite pragmas: {e}")
+    
+    def _ensure_system_tables(self):
+        """Ensure system tables exist"""
+        try:
+            # Vérifier si les tables système existent
+            cursor = self.storage.connection.cursor()
+            
+            # Vérifier la table gsql_metadata
+            cursor.execute("""
+                SELECT name FROM sqlite_master 
+                WHERE type='table' AND name='gsql_metadata'
+            """)
+            if not cursor.fetchone():
+                self._create_system_tables()
+                
+        except Exception as e:
+            logger.error(f"Error checking system tables: {e}")
+            # Créer les tables en cas d'erreur
+            self._create_system_tables()
+    
+    def _create_system_tables(self):
+        """Create system tables"""
+        try:
+            # Create metadata table
+            self.storage.execute("""
+                CREATE TABLE IF NOT EXISTS gsql_metadata (
+                    key TEXT PRIMARY KEY,
+                    value TEXT,
+                    description TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # Create query history table
+            self.storage.execute("""
+                CREATE TABLE IF NOT EXISTS query_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    query_hash TEXT,
+                    query_text TEXT,
+                    query_type TEXT,
+                    execution_time REAL,
+                    success BOOLEAN,
+                    rows_affected INTEGER,
+                    error_message TEXT,
+                    user_agent TEXT,
+                    ip_address TEXT,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # Create performance metrics table
+            self.storage.execute("""
+                CREATE TABLE IF NOT EXISTS performance_metrics (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    metric_name TEXT,
+                    metric_value REAL,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            logger.info("System tables created")
+            
+        except Exception as e:
+            logger.error(f"Error creating system tables: {e}")
     
     def _initialize_default_tables(self):
         """Initialize default tables for new database"""
-        with self.lock:
+        logger.info("Initializing default tables for new database")
+        
+        try:
             # Create metadata table
             self.storage.execute("""
                 CREATE TABLE IF NOT EXISTS gsql_metadata (
@@ -224,16 +298,22 @@ class Database:
             """)
             
             # Create index on query history
-            self.storage.execute("""
-                CREATE INDEX IF NOT EXISTS idx_query_history_timestamp 
-                ON query_history(timestamp)
-            """)
+            try:
+                self.storage.execute("""
+                    CREATE INDEX idx_query_history_timestamp 
+                    ON query_history(timestamp)
+                """)
+            except:
+                pass  # Index might already exist
             
             # Create index on query history type
-            self.storage.execute("""
-                CREATE INDEX IF NOT EXISTS idx_query_history_type 
-                ON query_history(query_type)
-            """)
+            try:
+                self.storage.execute("""
+                    CREATE INDEX idx_query_history_type 
+                    ON query_history(query_type)
+                """)
+            except:
+                pass  # Index might already exist
             
             # Create performance metrics table
             self.storage.execute("""
@@ -256,11 +336,20 @@ class Database:
             ]
             
             for key, value, description in metadata:
-                self.storage.execute(
-                    """INSERT OR IGNORE INTO gsql_metadata (key, value, description) 
-                       VALUES (?, ?, ?)""",
-                    (key, value, description)
-                )
+                try:
+                    self.storage.execute(
+                        """INSERT OR IGNORE INTO gsql_metadata (key, value, description) 
+                           VALUES (?, ?, ?)""",
+                        (key, value, description)
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to insert metadata {key}: {e}")
+            
+            logger.info("Default tables initialized successfully")
+            
+        except Exception as e:
+            logger.error(f"Error initializing default tables: {e}")
+            # Continue anyway - database should still work
     
     def execute(self, query: str, params: Tuple = None, 
                 use_cache: bool = True, user_context: Dict = None) -> Dict[str, Any]:
@@ -359,8 +448,9 @@ class Database:
                 (query_hash, query[:500], query_type, execution_time, 
                  success, rows_affected, error_message, user_agent, ip_address)
             )
-        except:
-            pass  # Don't crash if logging fails
+        except Exception as e:
+            logger.debug(f"Failed to log query: {e}")
+            # Don't crash if logging fails
     
     def _update_performance_metrics(self, query: str, execution_time: float, 
                                    success: bool) -> None:
@@ -382,8 +472,8 @@ class Database:
                    VALUES (?, ?)""",
                 (f"success_{query_type.lower()}", metric_value)
             )
-        except:
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to update performance metrics: {e}")
     
     def transaction(self) -> Transaction:
         """Create a transaction context manager"""
@@ -534,36 +624,15 @@ class Database:
         """Update database statistics"""
         try:
             # Get database size
-            db_size = Path(self.db_path).stat().st_size
-            
-            # Get table sizes
-            result = self.execute("""
-                SELECT name, (
-                    SELECT SUM(pgsize) FROM dbstat WHERE name = tbl.name
-                ) as size
-                FROM sqlite_master as tbl
-                WHERE type = 'table'
-                ORDER BY size DESC
-            """)
-            
-            if result.get('success'):
-                table_sizes = result.get('rows', [])
+            if self.db_path and Path(self.db_path).exists():
+                db_size = Path(self.db_path).stat().st_size
                 
-                # Store in metadata
-                for table in table_sizes:
-                    self.storage.execute(
-                        """INSERT OR REPLACE INTO gsql_metadata (key, value, description) 
-                           VALUES (?, ?, ?)""",
-                        (f"table_size_{table['name']}", str(table['size']), 
-                         f"Size of table {table['name']}")
-                    )
-            
-            # Store total size
-            self.storage.execute(
-                """INSERT OR REPLACE INTO gsql_metadata (key, value, description) 
-                   VALUES (?, ?, ?)""",
-                ("database_size", str(db_size), "Total database size in bytes")
-            )
+                # Store total size
+                self.storage.execute(
+                    """INSERT OR REPLACE INTO gsql_metadata (key, value, description) 
+                       VALUES (?, ?, ?)""",
+                    ("database_size", str(db_size), "Total database size in bytes")
+                )
         except:
             pass
     
@@ -578,10 +647,14 @@ class Database:
             
             # Basic info
             stats['path'] = self.db_path
-            stats['size'] = Path(self.db_path).stat().st_size if Path(self.db_path).exists() else 0
-            stats['created'] = datetime.fromtimestamp(
-                Path(self.db_path).stat().st_ctime
-            ).isoformat() if Path(self.db_path).exists() else None
+            if self.db_path and Path(self.db_path).exists():
+                stats['size'] = Path(self.db_path).stat().st_size
+                stats['created'] = datetime.fromtimestamp(
+                    Path(self.db_path).stat().st_ctime
+                ).isoformat()
+            else:
+                stats['size'] = 0
+                stats['created'] = None
             
             # SQLite version
             result = self.execute("SELECT sqlite_version() as version")
@@ -619,31 +692,39 @@ class Database:
             stats['row_counts'] = row_counts
             stats['total_rows'] = total_rows
             
-            # Query history statistics
-            history_result = self.execute("""
-                SELECT 
-                    COUNT(*) as total_queries,
-                    SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successful_queries,
-                    AVG(execution_time) as avg_execution_time,
-                    MAX(execution_time) as max_execution_time,
-                    MIN(execution_time) as min_execution_time
-                FROM query_history
-                WHERE timestamp > datetime('now', '-1 day')
-            """)
+            # Query history statistics (if table exists)
+            try:
+                history_result = self.execute("""
+                    SELECT 
+                        COUNT(*) as total_queries,
+                        SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successful_queries,
+                        AVG(execution_time) as avg_execution_time,
+                        MAX(execution_time) as max_execution_time,
+                        MIN(execution_time) as min_execution_time
+                    FROM query_history
+                    WHERE timestamp > datetime('now', '-1 day')
+                """)
+                
+                if history_result.get('success'):
+                    stats['recent_queries'] = history_result.get('rows', [{}])[0]
+            except:
+                stats['recent_queries'] = {}
             
-            if history_result.get('success'):
-                stats['recent_queries'] = history_result.get('rows', [{}])[0]
-            
-            # Performance metrics
-            perf_result = self.execute("""
-                SELECT metric_name, AVG(metric_value) as avg_value
-                FROM performance_metrics
-                WHERE timestamp > datetime('now', '-1 hour')
-                GROUP BY metric_name
-            """)
-            
-            if perf_result.get('success'):
-                stats['performance_metrics'] = perf_result.get('rows', [])
+            # Performance metrics (if table exists)
+            try:
+                perf_result = self.execute("""
+                    SELECT metric_name, AVG(metric_value) as avg_value
+                    FROM performance_metrics
+                    WHERE timestamp > datetime('now', '-1 hour')
+                    GROUP BY metric_name
+                """)
+                
+                if perf_result.get('success'):
+                    stats['performance_metrics'] = perf_result.get('rows', [])
+                else:
+                    stats['performance_metrics'] = []
+            except:
+                stats['performance_metrics'] = []
             
             # Cache statistics
             stats['cache'] = self.cache.stats()
@@ -668,6 +749,9 @@ class Database:
                     pragma_values[pragma] = result.get('rows', [{}])[0].get(pragma)
             
             stats['pragmas'] = pragma_values
+            
+            # Storage stats
+            stats['storage'] = get_storage_stats(self.storage)
             
             return {
                 'success': True,
