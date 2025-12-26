@@ -18,7 +18,7 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple, Union
 from contextlib import contextmanager
 
-from .storage import SQLiteStorage, create_storage, TransactionContext
+from .storage import SqliteStorage, create_storage, TransactionContext
 from .exceptions import (
     GSQLBaseException, SQLSyntaxError, SQLExecutionError,
     ConstraintViolationError, TransactionError, FunctionError,
