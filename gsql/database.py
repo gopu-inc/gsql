@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-GSQL Database Module - SQLite Backend Only - VERSION CORRIGÉE
-Version: 3.1.0 - Tous les bugs fixés
+GSQL Database Module - SQLite Backend Only - VERSION COMPLÈTE CORRIGÉE
+Version: 3.2.3 - Transactions entièrement compatibles
 """
 
 import os
@@ -18,7 +18,7 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple, Union
 from contextlib import contextmanager
 
-from .storage import SQLiteStorage, create_storage
+from .storage import SQLiteStorage, create_storage, TransactionContext
 from .exceptions import (
     GSQLBaseException, SQLSyntaxError, SQLExecutionError,
     ConstraintViolationError, TransactionError, FunctionError,
@@ -27,37 +27,29 @@ from .exceptions import (
 
 logger = logging.getLogger(__name__)
 
-class TransactionContext:
+
+class DatabaseTransactionContext:
     """Context manager pour les transactions sécurisées"""
     
     def __init__(self, db, isolation_level="DEFERRED"):
         self.db = db
         self.isolation_level = isolation_level
-        self.tid = None
+        self.tx_context = None
     
     def __enter__(self):
-        # Débuter la transaction
-        result = self.db.begin_transaction(self.isolation_level)
-        # CORRECTION : Extraire tid correctement
-        if isinstance(result, dict):
-            self.tid = result.get('tid')
-        else:
-            self.tid = result
+        # Débuter la transaction via le storage
+        self.db.begin_transaction(self.isolation_level)
         return self
     
     def __exit__(self, exc_type, exc_val, exc_tb):
         if exc_type is None:
             # Commit si pas d'exception
-            if self.tid is not None:
-                self.db.commit_transaction(self.tid)
+            self.db.commit_transaction()
         else:
             # Rollback en cas d'exception
-            if self.tid is not None:
-                try:
-                    self.db.rollback_transaction(self.tid)
-                except:
-                    pass
-        return False  # Ne pas supprimer l'exception
+            self.db.rollback_transaction()
+        return False
+
 
 class PreparedStatement:
     """Requête préparée pour exécution multiple"""
@@ -85,8 +77,9 @@ class PreparedStatement:
         
         return self.db.execute(self.sql, params)
 
+
 class Database:
-    """Base de données SQLite auto-récupérante - Version Corrigée"""
+    """Base de données SQLite avec gestion de transactions - Version Complète Corrigée"""
     
     def __init__(self, db_path=None, base_dir="/root/.gsql", 
                  buffer_pool_size=100, enable_wal=True, auto_recovery=True,
@@ -116,7 +109,7 @@ class Database:
             'backup_interval': 24 * 3600,
             'max_query_cache': 100,
             'query_timeout': 30,
-            'version': '3.1.0',
+            'version': '3.2.3',
             'create_default_tables': create_default_tables
         }
         
@@ -137,6 +130,10 @@ class Database:
         self.query_cache = {}
         self.schema_cache = {}
         
+        # Transactions
+        self.active_transaction = None
+        self.auto_commit_mode = True  # Mode par défaut (auto-commit)
+        
         # Statistiques
         self.stats = {
             'queries_executed': 0,
@@ -146,10 +143,6 @@ class Database:
             'start_time': datetime.now(),
             'last_backup': None
         }
-        
-        # Journal de transaction actif
-        self.active_transactions = {}
-        self.transaction_counter = 0
         
         # Initialiser les tables système SEULEMENT si demandé
         if create_default_tables:
@@ -290,9 +283,17 @@ class Database:
                 raise SQLExecutionError(f"Database recovery failed after {MAX_RECURSION} attempts: {e}")
     
     def execute(self, sql: str, params: Dict = None,
-                use_cache: bool = True, timeout: int = None) -> Dict:
+                use_cache: bool = True, timeout: int = None,
+                tid: int = None) -> Dict:
         """
-        Exécute une requête SQL sur la base de données - CORRIGÉ
+        Exécute une requête SQL sur la base de données - VERSION CORRIGÉE
+        
+        Args:
+            sql: Requête SQL
+            params: Paramètres de la requête
+            use_cache: Utiliser le cache de requêtes
+            timeout: Timeout d'exécution
+            tid: Transaction ID (si exécution dans une transaction)
         
         Returns:
             Dict: Résultats formatés de la requête
@@ -308,8 +309,8 @@ class Database:
         start_time = datetime.now()
         query_hash = None
         
-        # CORRECTION : Générer un hash pour le cache
-        if use_cache and params is None:
+        # Générer un hash pour le cache
+        if use_cache and params is None and not tid:
             query_hash = hashlib.md5(sql.encode()).hexdigest()[:16]
             cached = self.query_cache.get(query_hash)
             if cached:
@@ -319,20 +320,72 @@ class Database:
         
         try:
             with self.lock:
-                # Exécuter la requête via le storage
-                result = self.storage.execute(sql, params)
+                # Détecter si c'est une commande de transaction
+                sql_upper = sql.strip().upper()
                 
-                # CORRECTION : Gérer les erreurs du storage
-                if not result.get('success', True):
-                    error_msg = result.get('error', 'Unknown error')
-                    return {
-                        'success': False,
-                        'message': error_msg,
-                        'error': error_msg,
-                        'type': 'error',
-                        'execution_time': 0,
-                        'timestamp': datetime.now().isoformat()
-                    }
+                # Traiter les commandes de transaction
+                if sql_upper.startswith("BEGIN"):
+                    result = self.begin_transaction(sql)
+                    # Mettre à jour l'état interne
+                    if result.get('success'):
+                        self.active_transaction = {
+                            'tid': result['tid'],
+                            'isolation': result.get('isolation', 'DEFERRED'),
+                            'start_time': datetime.now()
+                        }
+                        self.auto_commit_mode = False
+                        self.stats['transactions'] += 1
+                    return result
+                    
+                elif sql_upper.startswith("COMMIT"):
+                    result = self.commit_transaction()
+                    # Nettoyer l'état après commit
+                    if result.get('success'):
+                        self.active_transaction = None
+                        self.auto_commit_mode = True
+                    return result
+                    
+                elif sql_upper.startswith("ROLLBACK"):
+                    # Vérifier si c'est un ROLLBACK TO SAVEPOINT
+                    if " TO " in sql_upper:
+                        parts = sql.split()
+                        if len(parts) >= 4 and parts[2].upper() == "TO":
+                            savepoint = parts[3]
+                            return self.rollback_to_savepoint(savepoint)
+                    
+                    result = self.rollback_transaction()
+                    # Nettoyer l'état après rollback
+                    if result.get('success'):
+                        self.active_transaction = None
+                        self.auto_commit_mode = True
+                    return result
+                    
+                elif sql_upper.startswith("SAVEPOINT"):
+                    parts = sql.split()
+                    if len(parts) >= 2:
+                        return self.create_savepoint(parts[1])
+                    else:
+                        return {
+                            'success': False,
+                            'error': 'Invalid SAVEPOINT syntax'
+                        }
+                
+                # Déterminer si on doit exécuter dans une transaction
+                execute_tid = None
+                if self.active_transaction:
+                    # Transaction active via BEGIN SQL ou begin_transaction()
+                    execute_tid = self.active_transaction['tid']
+                elif tid is not None:
+                    # TID fourni explicitement
+                    execute_tid = tid
+                
+                # Exécuter la requête
+                if execute_tid is not None:
+                    # Exécution dans une transaction spécifique
+                    result = self.storage.execute_in_transaction(execute_tid, sql, params)
+                else:
+                    # Exécution normale (hors transaction)
+                    result = self.storage.execute(sql, params)
                 
                 # Ajouter des métadonnées
                 execution_time = (datetime.now() - start_time).total_seconds()
@@ -340,7 +393,6 @@ class Database:
                 result['timestamp'] = datetime.now().isoformat()
                 
                 # Déterminer le type de requête
-                sql_upper = sql.upper().strip()
                 if sql_upper.startswith('SELECT'):
                     result['type'] = 'select'
                 elif sql_upper.startswith('INSERT'):
@@ -353,26 +405,25 @@ class Database:
                     result['type'] = 'create'
                 elif sql_upper.startswith('DROP'):
                     result['type'] = 'drop'
-                elif sql_upper.startswith('BEGIN'):
-                    result['type'] = 'transaction'
-                elif sql_upper.startswith('COMMIT') or sql_upper.startswith('ROLLBACK'):
-                    result['type'] = 'transaction'
-                elif sql_upper.startswith('SAVEPOINT'):
-                    result['type'] = 'savepoint'
                 elif sql_upper.startswith('VACUUM'):
                     result['type'] = 'vacuum'
                 elif sql_upper.startswith('BACKUP'):
                     result['type'] = 'backup'
+                elif sql_upper.startswith('ALTER'):
+                    result['type'] = 'alter'
+                elif sql_upper.startswith('PRAGMA'):
+                    result['type'] = 'pragma'
                 else:
                     result['type'] = 'other'
                 
                 # Mettre à jour les statistiques
                 self.stats['queries_executed'] += 1
                 
-                # Mettre en cache les requêtes SELECT réussies
+                # Mettre en cache les requêtes SELECT réussies (seulement hors transaction)
                 if (use_cache and query_hash and 
                     result.get('success') and 
-                    result['type'] == 'select'):
+                    result['type'] == 'select' and
+                    not execute_tid):
                     
                     # Limiter la taille du cache
                     if len(self.query_cache) >= self.config['max_query_cache']:
@@ -398,7 +449,7 @@ class Database:
                 self._auto_recover()
                 
                 # Réessayer la requête
-                return self.execute(sql, params, use_cache=False)
+                return self.execute(sql, params, use_cache=False, tid=tid)
             
             # Retourner l'erreur proprement
             return {
@@ -408,6 +459,29 @@ class Database:
                 'type': 'error',
                 'execution_time': (datetime.now() - start_time).total_seconds(),
                 'timestamp': datetime.now().isoformat()
+            }
+    
+    def _handle_savepoint(self, sql: str) -> Dict:
+        """Gère les commandes SAVEPOINT (maintenant intégré dans execute())"""
+        # Cette méthode est maintenant obsolète, la logique est dans execute()
+        parts = sql.strip().split()
+        if len(parts) < 2:
+            return {
+                'success': False,
+                'error': 'Invalid SAVEPOINT syntax'
+            }
+        
+        action = parts[0].upper()
+        name = parts[1]
+        
+        if action == "SAVEPOINT":
+            return self.create_savepoint(name)
+        elif action == "ROLLBACK" and len(parts) > 2 and parts[2].upper() == "TO":
+            return self.rollback_to_savepoint(name)
+        else:
+            return {
+                'success': False,
+                'error': f'Unknown savepoint command: {sql}'
             }
     
     def execute_script(self, sql_script: str) -> List[Dict]:
@@ -491,7 +565,7 @@ class Database:
         return PreparedStatement(self, sql)
     
     def _handle_special_commands(self, sql: str) -> Optional[Dict]:
-        """Gère les commandes spéciales GSQL - CORRIGÉ"""
+        """Gère les commandes spéciales GSQL"""
         sql_upper = sql.strip().upper()
         
         # SHOW TABLES
@@ -510,11 +584,11 @@ class Database:
             return self._execute_stats()
         
         # VACUUM
-        elif sql_upper == "VACUUM":
+        elif sql_upper == "VACUUM" or sql == ".vacuum":
             return self._execute_vacuum()
         
         # BACKUP
-        elif sql_upper.startswith("BACKUP"):
+        elif sql_upper.startswith("BACKUP") or sql.startswith(".backup"):
             return self._execute_backup(sql)
         
         # HELP
@@ -524,7 +598,7 @@ class Database:
         return None
     
     def _execute_show_tables(self) -> Dict:
-        """Exécute SHOW TABLES - CORRIGÉ"""
+        """Exécute SHOW TABLES"""
         try:
             tables = self.storage.get_tables()
             
@@ -556,7 +630,7 @@ class Database:
             }
     
     def _execute_describe_table(self, table_name: str) -> Dict:
-        """Exécute DESCRIBE <table> - CORRIGÉ"""
+        """Exécute DESCRIBE <table>"""
         try:
             schema = self.storage.get_table_schema(table_name)
             
@@ -569,13 +643,13 @@ class Database:
                     'success': False
                 }
             
-            # CORRECTION : schema['columns'] est déjà une liste
+            # schema['columns'] est déjà une liste
             columns_info = schema.get('columns', [])
             
             return {
                 'type': 'describe',
                 'table': table_name,
-                'columns': columns_info,  # Directement la liste
+                'columns': columns_info,
                 'indexes': schema.get('indexes', []),
                 'foreign_keys': schema.get('foreign_keys', []),
                 'count': len(columns_info),
@@ -609,8 +683,8 @@ class Database:
                 'errors': self.stats['errors'],
                 'uptime_seconds': (datetime.now() - self.stats['start_time']).total_seconds(),
                 'query_cache_size': len(self.query_cache),
-                'active_transactions': len(self.active_transactions),
-                'transactions_total': self.transaction_counter
+                'active_transaction': bool(self.active_transaction),
+                'auto_commit_mode': self.auto_commit_mode
             }
             
             return {
@@ -630,25 +704,14 @@ class Database:
             }
     
     def _execute_vacuum(self) -> Dict:
-        """Exécute VACUUM pour optimiser la base - CORRIGÉ"""
+        """Exécute VACUUM pour optimiser la base"""
         try:
-            # Exécuter VACUUM via storage
-            result = self.storage.execute("VACUUM")
-            
-            # Vérifier le résultat
-            vacuum_success = False
-            if isinstance(result, dict):
-                vacuum_success = result.get('success', False)
-            elif isinstance(result, bool):
-                vacuum_success = result
-            else:
-                # Si c'est autre chose, considérer comme succès
-                vacuum_success = True
+            result = self.storage.vacuum()
             
             return {
                 'type': 'vacuum',
-                'success': vacuum_success,
-                'message': 'Database optimization completed' if vacuum_success else 'Optimization failed'
+                'success': result,
+                'message': 'Database optimization completed' if result else 'Optimization failed'
             }
             
         except Exception as e:
@@ -688,7 +751,7 @@ class Database:
     def _execute_help(self) -> Dict:
         """Exécute HELP pour afficher l'aide"""
         help_text = """
-GSQL Database Commands (v3.1.0 - Corrigée):
+GSQL Database Commands (v3.2.3 - Transactions corrigées):
 
 DATA MANIPULATION:
   SELECT * FROM table [WHERE condition] [LIMIT n]
@@ -711,7 +774,7 @@ DATABASE MANAGEMENT:
   HELP                           - This help message
 
 TRANSACTIONS:
-  BEGIN TRANSACTION              - Start transaction
+  BEGIN [DEFERRED|IMMEDIATE|EXCLUSIVE]  - Start transaction
   COMMIT                         - Commit transaction
   ROLLBACK                       - Rollback transaction
   SAVEPOINT name                 - Create savepoint
@@ -732,131 +795,213 @@ DOT COMMANDS (compatible SQLite):
             'success': True
         }
     
-    # ==================== TRANSACTION MANAGEMENT CORRIGÉ ====================
+    # ==================== TRANSACTION MANAGEMENT ====================
     
-    def begin_transaction(self, isolation_level: str = "DEFERRED"):
-        """Démarre une nouvelle transaction - CORRIGÉ"""
+    def begin_transaction(self, sql: str = "BEGIN", isolation_level: str = None) -> Dict:
+        """Démarre une nouvelle transaction"""
         try:
-            # CORRECTION : Utiliser execute() pour que tout soit cohérent
-            isolation_sql = {
-                "DEFERRED": "BEGIN DEFERRED TRANSACTION",
-                "IMMEDIATE": "BEGIN IMMEDIATE TRANSACTION", 
-                "EXCLUSIVE": "BEGIN EXCLUSIVE TRANSACTION"
-            }.get(isolation_level.upper(), "BEGIN TRANSACTION")
+            if self.active_transaction:
+                return {
+                    'success': False,
+                    'error': 'A transaction is already active'
+                }
             
-            # Exécuter via execute()
-            result = self.execute(isolation_sql)
-            
-            # Générer un TID
-            tid = self.transaction_counter
-            
-            # Enregistrer la transaction
-            self.active_transactions[tid] = {
-                'start_time': datetime.now(),
-                'isolation': isolation_level,
-                'queries': [],
-                'state': 'ACTIVE'
-            }
-            
-            self.transaction_counter += 1
-            
-            # CORRECTION : Retourner directement le TID pour compatibilité
-            return {
-                'type': 'transaction',
-                'tid': tid,
-                'isolation': isolation_level,
-                'message': f'Transaction {tid} started',
-                'success': True
-            }
-            
-        except Exception as e:
-            raise TransactionError(f"Failed to begin transaction: {e}")
-    
-    def commit_transaction(self, tid):
-        """Valide une transaction - CORRIGÉ"""
-        try:
-            # CORRECTION : Vérifier si tid est un dict
-            if isinstance(tid, dict):
-                tid = tid.get('tid', 0)
-            
-            # Exécuter COMMIT
-            result = self.execute("COMMIT")
-            
-            if tid in self.active_transactions:
-                self.active_transactions[tid]['state'] = 'COMMITTED'
-                del self.active_transactions[tid]
-            
-            return {
-                'type': 'transaction',
-                'tid': tid,
-                'message': f'Transaction {tid} committed',
-                'success': result.get('success', False)
-            }
-            
-        except Exception as e:
-            # Rollback automatique en cas d'erreur
-            try:
-                self.execute("ROLLBACK")
-            except:
-                pass
+            # Parser le type de transaction
+            if isolation_level is None:
+                parts = sql.upper().split()
+                isolation_level = "DEFERRED"
                 
-            if tid in self.active_transactions:
-                del self.active_transactions[tid]
+                if len(parts) > 1:
+                    if parts[1] in ["DEFERRED", "IMMEDIATE", "EXCLUSIVE"]:
+                        isolation_level = parts[1]
+            
+            # Commencer la transaction via storage
+            result = self.storage.begin_transaction(isolation_level)
+            
+            if result.get('success'):
+                self.active_transaction = {
+                    'tid': result['tid'],
+                    'isolation': isolation_level,
+                    'start_time': datetime.now()
+                }
+                self.auto_commit_mode = False
+                self.stats['transactions'] += 1
                 
-            raise TransactionError(f"Failed to commit transaction {tid}: {e}")
+                return {
+                    'success': True,
+                    'tid': result['tid'],
+                    'isolation': isolation_level,
+                    'message': f'Transaction {result["tid"]} started ({isolation_level})'
+                }
+            else:
+                return {
+                    'success': False,
+                    'error': result.get('error', 'Failed to begin transaction')
+                }
+                
+        except Exception as e:
+            logger.error(f"Failed to begin transaction: {e}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
     
-    def rollback_transaction(self, tid, to_savepoint: str = None):
-        """Annule une transaction - CORRIGÉ"""
+    def commit_transaction(self, tid: int = None) -> Dict:
+        """Valide la transaction courante (avec support rétrocompatible pour tid)"""
         try:
-            # CORRECTION : Vérifier si tid est un dict
-            if isinstance(tid, dict):
-                tid = tid.get('tid', 0)
+            if not self.active_transaction:
+                return {
+                    'success': False,
+                    'error': 'No active transaction to commit'
+                }
             
-            sql = f"ROLLBACK{' TO SAVEPOINT ' + to_savepoint if to_savepoint else ''}"
-            result = self.execute(sql)
+            # Si tid est fourni, vérifier qu'il correspond
+            current_tid = self.active_transaction['tid']
+            if tid is not None and tid != current_tid:
+                logger.warning(f"TID mismatch: provided {tid}, active {current_tid}")
+                # Ne pas échouer, utiliser quand même l'active transaction
             
-            if not to_savepoint and tid in self.active_transactions:
-                self.active_transactions[tid]['state'] = 'ROLLED_BACK'
-                del self.active_transactions[tid]
+            result = self.storage.commit_transaction(current_tid)
+            
+            if result.get('success'):
+                self.active_transaction = None
+                self.auto_commit_mode = True
+                
+                return {
+                    'success': True,
+                    'tid': current_tid,
+                    'message': f'Transaction {current_tid} committed successfully'
+                }
+            else:
+                return {
+                    'success': False,
+                    'error': result.get('error', 'Commit failed'),
+                    'tid': current_tid
+                }
+                
+        except Exception as e:
+            logger.error(f"Failed to commit transaction: {e}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
+    
+    def rollback_transaction(self, tid: int = None) -> Dict:
+        """Annule la transaction courante (avec support rétrocompatible pour tid)"""
+        try:
+            if not self.active_transaction:
+                return {
+                    'success': False,
+                    'error': 'No active transaction to rollback'
+                }
+            
+            # Si tid est fourni, vérifier qu'il correspond
+            current_tid = self.active_transaction['tid']
+            if tid is not None and tid != current_tid:
+                logger.warning(f"TID mismatch: provided {tid}, active {current_tid}")
+                # Ne pas échouer, utiliser quand même l'active transaction
+            
+            result = self.storage.rollback_transaction(current_tid)
+            
+            if result.get('success'):
+                self.active_transaction = None
+                self.auto_commit_mode = True
+                
+                return {
+                    'success': True,
+                    'tid': current_tid,
+                    'message': f'Transaction {current_tid} rolled back'
+                }
+            else:
+                return {
+                    'success': False,
+                    'error': result.get('error', 'Rollback failed'),
+                    'tid': current_tid
+                }
+                
+        except Exception as e:
+            logger.error(f"Failed to rollback transaction: {e}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
+    
+    def create_savepoint(self, name: str) -> Dict:
+        """Crée un savepoint dans la transaction courante"""
+        try:
+            if not self.active_transaction:
+                return {
+                    'success': False,
+                    'error': 'No active transaction for savepoint'
+                }
+            
+            tid = self.active_transaction['tid']
+            result = self.storage.create_savepoint(tid, name)
             
             return {
-                'type': 'transaction',
+                'success': result.get('success', False),
+                'message': result.get('message', ''),
+                'error': result.get('error'),
                 'tid': tid,
-                'message': f'Transaction {tid} rolled back' + 
-                          (f' to {to_savepoint}' if to_savepoint else ''),
-                'success': result.get('success', False)
+                'savepoint': name
             }
             
         except Exception as e:
-            raise TransactionError(f"Failed to rollback transaction {tid}: {e}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
     
-    def create_savepoint(self, tid, name: str):
-        """Crée un savepoint dans une transaction - CORRIGÉ"""
+    def rollback_to_savepoint(self, name: str) -> Dict:
+        """Rollback à un savepoint spécifique"""
         try:
-            # CORRECTION : Vérifier si tid est un dict
-            if isinstance(tid, dict):
-                tid = tid.get('tid', 0)
+            if not self.active_transaction:
+                return {
+                    'success': False,
+                    'error': 'No active transaction'
+                }
             
-            result = self.execute(f"SAVEPOINT {name}")
-            
-            if tid in self.active_transactions:
-                self.active_transactions[tid]['savepoints'] = \
-                    self.active_transactions[tid].get('savepoints', []) + [name]
+            tid = self.active_transaction['tid']
+            result = self.storage.rollback_transaction(tid, name)
             
             return {
-                'type': 'savepoint',
+                'success': result.get('success', False),
+                'message': result.get('message', ''),
+                'error': result.get('error'),
                 'tid': tid,
-                'name': name,
-                'message': f'Savepoint {name} created in transaction {tid}',
-                'success': result.get('success', False)
+                'savepoint': name
             }
             
         except Exception as e:
-            raise TransactionError(f"Failed to create savepoint: {e}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
+    
+    def execute_in_transaction(self, sql: str, params: Dict = None) -> Dict:
+        """Exécute une requête dans la transaction courante"""
+        if not self.active_transaction:
+            return {
+                'success': False,
+                'error': 'No active transaction'
+            }
+        
+        tid = self.active_transaction['tid']
+        return self.execute(sql, params, tid=tid)
     
     def transaction(self, isolation_level="DEFERRED"):
         """Retourne un context manager pour les transactions"""
-        return TransactionContext(self, isolation_level)
+        return DatabaseTransactionContext(self, isolation_level)
+    
+    def get_active_transaction(self) -> Optional[Dict]:
+        """Récupère les informations de la transaction active"""
+        if self.active_transaction:
+            return {
+                'tid': self.active_transaction['tid'],
+                'isolation': self.active_transaction['isolation'],
+                'age_seconds': (datetime.now() - self.active_transaction['start_time']).total_seconds()
+            }
+        return None
     
     # ==================== TABLE MANAGEMENT ====================
     
@@ -1190,19 +1335,18 @@ DOT COMMANDS (compatible SQLite):
         with self.lock:
             if self.is_open:
                 try:
+                    # Rollback toute transaction active
+                    if self.active_transaction:
+                        try:
+                            self.rollback_transaction()
+                        except:
+                            pass
+                    
                     # Sauvegarder les statistiques
                     self._save_stats()
                     
                     # Fermer le storage
                     self.storage.close()
-                    
-                    # Fermer les transactions actives
-                    for tid in list(self.active_transactions.keys()):
-                        try:
-                            if self.active_transactions[tid]['state'] == 'ACTIVE':
-                                self.execute("ROLLBACK")
-                        except:
-                            pass
                     
                     self.is_open = False
                     self.initialized = False
