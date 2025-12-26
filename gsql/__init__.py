@@ -758,6 +758,7 @@ __all__ = [
     'TransactionManager',
     'create_storage',
     'get_storage_stats',
+    'TransactionContext',
     
     'QueryExecutor',
     'create_executor',
