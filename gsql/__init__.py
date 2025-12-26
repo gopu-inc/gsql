@@ -199,6 +199,7 @@ except ImportError as e:
     create_storage = None
     get_storage_stats = None
     STORAGE_AVAILABLE = False
+    TransactionContext = None
 
 # Import du module database
 try:
