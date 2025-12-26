@@ -1331,8 +1331,7 @@ def main():
   ROLLBACK TO SAVEPOINT sp1;
   SELECT * FROM test;
   COMMIT;
-        """
-    )
+        """)
     
     parser.add_argument(
         'database',
