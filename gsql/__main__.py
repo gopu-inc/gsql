@@ -45,14 +45,35 @@ try:
         NLToSQLTranslator = None
         create_translator = None
     
-    # Functions manager
+    # Functions manager (optional)
     try:
         from .functions.user_functions import FunctionManager
         FUNCTIONS_AVAILABLE = True
     except ImportError as e:
-        print(f"Warning: Functions module not available: {e}")
+        print(f"Note: Functions module not available, continuing without it: {e}")
         FUNCTIONS_AVAILABLE = False
-        FunctionManager = None
+        # Create a dummy FunctionManager class
+        class FunctionManager:
+            def __init__(self):
+                self.functions = {}
+            def get_functions(self):
+                return {}
+            def register_function(self, name, func):
+                self.functions[name.upper()] = func
+            def execute_function(self, name, args):
+                # Return dummy values for common functions
+                common_funcs = {
+                    'COUNT': lambda *args: len([a for a in args if a is not None]),
+                    'SUM': lambda *args: sum([a for a in args if isinstance(a, (int, float))]),
+                    'AVG': lambda *args: sum([a for a in args if isinstance(a, (int, float))]) / len([a for a in args if isinstance(a, (int, float))]) if args else None,
+                    'MAX': lambda *args: max([a for a in args if isinstance(a, (int, float))]) if args else None,
+                    'MIN': lambda *args: min([a for a in args if isinstance(a, (int, float))]) if args else None,
+                    'UPPER': lambda x: x.upper() if isinstance(x, str) else x,
+                    'LOWER': lambda x: x.lower() if isinstance(x, str) else x,
+                }
+                if name.upper() in common_funcs:
+                    return common_funcs[name.upper()](*args)
+                raise ValueError(f"Function '{name}' not available")
     
     GSQL_AVAILABLE = True
     
@@ -615,7 +636,7 @@ class ResultDisplay:
                 print(Colors.dim(f"Rows affected: {result['rows_affected']}"))
         
         # Show execution time
-        if execution_time > 0 and config.get('shell', {}).get('show_timer', True):
+        if execution_time > 0:
             time_str = f"{execution_time:.3f}s"
             print(Colors.dim(f"Time: {time_str}"))
     
@@ -1058,26 +1079,11 @@ class GSQLShell(cmd.Cmd):
             return
         
         try:
-            # Basic stats
-            result = self.db.execute("SELECT sqlite_version() as version")
-            if result.get('success'):
-                version = result.get('rows', [{}])[0].get('version', 'unknown')
-                print(Colors.info(f"SQLite version: {version}"))
-            
-            # Table count
-            result = self.db.execute("SELECT COUNT(*) as count FROM sqlite_master WHERE type='table'")
-            if result.get('success'):
-                count = result.get('rows', [{}])[0].get('count', 0)
-                print(Colors.info(f"Tables: {count}"))
-            
-            # Database size
-            if hasattr(self.db.storage, 'db_path') and self.db.storage.db_path:
-                db_path = Path(self.db.storage.db_path)
-                if db_path.exists():
-                    size = db_path.stat().st_size
-                    size_mb = size / (1024 * 1024)
-                    print(Colors.info(f"Database size: {size_mb:.2f} MB"))
-            
+            stats_result = self.db.get_stats()
+            if stats_result.get('success'):
+                self.result_display.display_stats(stats_result)
+            else:
+                print(Colors.error(f"Failed to get stats: {stats_result.get('message')}"))
         except Exception as e:
             print(Colors.error(f"Error getting stats: {e}"))
     
@@ -1148,23 +1154,11 @@ class GSQLShell(cmd.Cmd):
             return
         
         try:
-            # Vacuum
-            result = self.db.execute("VACUUM")
+            result = self.db.optimize()
             if result.get('success'):
-                print(Colors.success("✓ Database vacuumed"))
-            
-            # Analyze
-            result = self.db.execute("ANALYZE")
-            if result.get('success'):
-                print(Colors.success("✓ Statistics analyzed"))
-            
-            # Reindex
-            result = self.db.execute("REINDEX")
-            if result.get('success'):
-                print(Colors.success("✓ Indexes rebuilt"))
-            
-            print(Colors.success("✓ Database optimization completed"))
-            
+                print(Colors.success("Database optimization completed"))
+            else:
+                print(Colors.error(f"Optimization failed: {result.get('message')}"))
         except Exception as e:
             print(Colors.error(f"Optimization error: {e}"))
     
@@ -1212,16 +1206,18 @@ class GSQLShell(cmd.Cmd):
     def _handle_timer(self, args: List[str]) -> None:
         """Handle .timer command"""
         if not args:
-            current = config.get('shell', {}).get('show_timer', True)
+            current = self.gsql.config.get('shell', {}).get('show_timer', True) if self.gsql else True
             status = "on" if current else "off"
             print(Colors.info(f"Timer is {status}"))
             return
         
         if args[0].lower() in ['on', 'yes', 'true', '1']:
-            config.set('shell.show_timer', True)
+            if self.gsql:
+                self.gsql.config['shell']['show_timer'] = True
             print(Colors.success("Timer enabled"))
         else:
-            config.set('shell.show_timer', False)
+            if self.gsql:
+                self.gsql.config['shell']['show_timer'] = False
             print(Colors.success("Timer disabled"))
     
     def _handle_headers(self, args: List[str]) -> None:
@@ -1259,32 +1255,11 @@ class GSQLShell(cmd.Cmd):
     
     def _handle_bail(self, args: List[str]) -> None:
         """Handle .bail command"""
-        if not args:
-            current = config.get('executor', {}).get('stop_on_error', True)
-            status = "on" if current else "off"
-            print(Colors.info(f"Bail is {status}"))
-            return
-        
-        if args[0].lower() in ['on', 'yes', 'true', '1']:
-            config.set('executor.stop_on_error', True)
-            print(Colors.success("Stop on error enabled"))
-        else:
-            config.set('executor.stop_on_error', False)
-            print(Colors.success("Stop on error disabled"))
+        print(Colors.info("Bail command not implemented"))
     
     def _handle_timeout(self, args: List[str]) -> None:
         """Handle .timeout command"""
-        if not args:
-            current = config.get('executor', {}).get('query_timeout', 30)
-            print(Colors.info(f"Query timeout: {current} seconds"))
-            return
-        
-        try:
-            timeout = int(args[0])
-            config.set('executor.query_timeout', timeout)
-            print(Colors.success(f"Query timeout set to {timeout} seconds"))
-        except ValueError:
-            print(Colors.error("Invalid timeout value"))
+        print(Colors.info("Timeout command not implemented"))
     
     def _handle_help(self, args: List[str]) -> None:
         """Handle .help command"""
@@ -1392,7 +1367,7 @@ class GSQLShell(cmd.Cmd):
         status.append(f"NLP: {'Enabled' if self.nlp_enabled else 'Disabled'}")
         status.append(f"Output mode: {self.result_display.mode}")
         status.append(f"Headers: {'On' if self.result_display.show_headers else 'Off'}")
-        status.append(f"Timer: {'On' if config.get('shell', {}).get('show_timer', True) else 'Off'}")
+        status.append(f"Timer: {'On' if self.gsql.config.get('shell', {}).get('show_timer', True) if self.gsql else True else 'Off'}")
         if self._current_transaction:
             status.append("Transaction: Active")
         if self._batch_mode:
@@ -1740,12 +1715,6 @@ class GSQLApp:
         except:
             pass
         
-        # Update global config
-        try:
-            config.update(**merged.get('database', {}))
-        except:
-            pass
-        
         return merged
     
     def setup_nlp(self, enable_nlp: bool = False, 
@@ -1774,11 +1743,6 @@ class GSQLApp:
         # Mettre à jour la configuration
         self.config['executor']['enable_nlp'] = True
         self.config['executor']['nlp_confidence_threshold'] = confidence_threshold
-        try:
-            config.set('executor.enable_nlp', True)
-            config.set('executor.nlp_confidence_threshold', confidence_threshold)
-        except:
-            pass
         
         logger.info(f"NLP enabled with patterns file: {self.nlp_patterns_file}")
         logger.info(f"NLP confidence threshold: {confidence_threshold}")
@@ -1816,13 +1780,13 @@ class GSQLApp:
             db_config = self.config['database'].copy()
             
             # Paramètres supportés par create_database
-            supported_params = ['base_dir', 'buffer_pool_size', 'enable_wal']
+            supported_params = ['base_dir', 'buffer_pool_size', 'enable_wal', 'auto_recovery']
             filtered_config = {k: v for k, v in db_config.items() if k in supported_params}
             
             if database_path:
                 filtered_config['db_path'] = database_path
             
-            print(f"DEBUG: Creating database with config: {filtered_config}")
+            logger.debug(f"Creating database with config: {filtered_config}")
             
             self.db = create_database(**filtered_config)
             
@@ -2111,51 +2075,23 @@ def main() -> None:
     parser = create_parser()
     args = parser.parse_args()
     
-    # Configure output
-    if args.no_color:
-        try:
-            config.set('shell.colors', False)
-        except:
-            pass
-    
-    # Configure UI mode
-    if args.simple_ui:
-        try:
-            config.set('shell.rich_ui', False)
-        except:
-            pass
-    
-    # Configure output mode
-    if args.mode:
-        try:
-            config.set('shell.mode', args.mode)
-        except:
-            pass
-    
-    # Configure headers
-    if args.no_headers:
-        try:
-            config.set('shell.show_headers', False)
-        except:
-            pass
-    
-    # Configure timer
-    if args.no_timer:
-        try:
-            config.set('shell.show_timer', False)
-        except:
-            pass
-    
-    # Configure logging
-    if args.verbose:
-        try:
-            config.set('log_level', 'DEBUG')
-            config.set('verbose_errors', True)
-        except:
-            pass
-    
     # Create and run application
     app = GSQLApp()
+    
+    # Override config with command line arguments
+    if args.no_color:
+        app.config['shell']['colors'] = False
+    if args.simple_ui:
+        app.config['shell']['rich_ui'] = False
+    if args.mode:
+        app.config['shell']['mode'] = args.mode
+    if args.no_headers:
+        app.config['shell']['show_headers'] = False
+    if args.no_timer:
+        app.config['shell']['show_timer'] = False
+    if args.verbose:
+        # Configure logging for verbose mode
+        logging.basicConfig(level=logging.DEBUG)
     
     # Setup NLP based on arguments
     nlp_enabled = args.enable_nlp or bool(args.nlp)
