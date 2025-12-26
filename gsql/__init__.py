@@ -184,6 +184,7 @@ except ImportError as e:
 try:
     from .storage import (
         SQLiteStorage,
+        TransactionContext,
         BufferPool,
         TransactionManager,
         create_storage,
