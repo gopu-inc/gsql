@@ -1,365 +1,176 @@
 #!/usr/bin/env python3
 """
-GSQL Function Manager - Gestion des fonctions personnalisées
+Test simple de transactions GSQL
 """
 
-import json
-import logging
-import inspect
-from typing import Dict, List, Any, Callable, Optional
-from datetime import datetime
+import os
+import tempfile
+import sys
+from pathlib import Path
 
-logger = logging.getLogger(__name__)
+# Ajouter le chemin parent pour importer gsql
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-class FunctionError(Exception):
-    """Exception pour les erreurs de fonction"""
-    pass
+from gsql.database import Database
 
-class FunctionManager:
-    """Gestionnaire de fonctions personnalisées GSQL"""
+def test_simple_transaction():
+    """Test transaction simple avec COMMIT"""
+    print("🧪 Test transaction simple")
     
-    def __init__(self):
-        self.user_functions = {}  # name -> function
-        self.function_metadata = {}  # name -> metadata
-        self.function_stats = {}  # name -> usage stats
+    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
+        db_path = tmp.name
+    
+    try:
+        # Créer base de données
+        db = Database(db_path, create_default_tables=False)
         
-        # Enregistrer les fonctions intégrées par défaut
-        self._register_builtin_functions()
-    
-    def _register_builtin_functions(self):
-        """Enregistre les fonctions intégrées"""
-        builtins = {
-            'UPPER': self._builtin_upper,
-            'LOWER': self._builtin_lower,
-            'LENGTH': self._builtin_length,
-            'ABS': self._builtin_abs,
-            'ROUND': self._builtin_round,
-            'CONCAT': self._builtin_concat,
-            'NOW': self._builtin_now,
-            'DATE': self._builtin_date,
-            'SUM': self._builtin_sum,
-            'AVG': self._builtin_avg,
-            'COUNT': self._builtin_count,
-            'MAX': self._builtin_max,
-            'MIN': self._builtin_min
-        }
+        # Créer table
+        db.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, value TEXT)")
         
-        for name, func in builtins.items():
-            self.register_function(name, func, num_params=-1, is_builtin=True)
-    
-    # ==================== FONCTIONS INTÉGRÉES ====================
-    
-    def _builtin_upper(self, text: str) -> str:
-        """Convertit en majuscules"""
-        return text.upper() if text else ''
-    
-    def _builtin_lower(self, text: str) -> str:
-        """Convertit en minuscules"""
-        return text.lower() if text else ''
-    
-    def _builtin_length(self, text: str) -> int:
-        """Longueur d'une chaîne"""
-        return len(text) if text else 0
-    
-    def _builtin_abs(self, number: float) -> float:
-        """Valeur absolue"""
-        try:
-            return abs(float(number))
-        except:
-            return 0.0
-    
-    def _builtin_round(self, number: float, decimals: int = 0) -> float:
-        """Arrondi"""
-        try:
-            return round(float(number), int(decimals))
-        except:
-            return float(number) if number else 0.0
-    
-    def _builtin_concat(self, *args) -> str:
-        """Concatène des chaînes"""
-        return ''.join(str(arg) for arg in args if arg is not None)
-    
-    def _builtin_now(self) -> str:
-        """Date et heure actuelles"""
-        return datetime.now().isoformat()
-    
-    def _builtin_date(self) -> str:
-        """Date actuelle"""
-        return datetime.now().strftime("%Y-%m-%d")
-    
-    def _builtin_sum(self, *args) -> float:
-        """Somme de valeurs"""
-        try:
-            return sum(float(arg) for arg in args if arg is not None)
-        except:
-            return 0.0
-    
-    def _builtin_avg(self, *args) -> float:
-        """Moyenne de valeurs"""
-        try:
-            values = [float(arg) for arg in args if arg is not None]
-            return sum(values) / len(values) if values else 0.0
-        except:
-            return 0.0
-    
-    def _builtin_count(self, *args) -> int:
-        """Compte les valeurs non-null"""
-        return sum(1 for arg in args if arg is not None)
-    
-    def _builtin_max(self, *args) -> float:
-        """Maximum"""
-        try:
-            values = [float(arg) for arg in args if arg is not None]
-            return max(values) if values else 0.0
-        except:
-            return 0.0
-    
-    def _builtin_min(self, *args) -> float:
-        """Minimum"""
-        try:
-            values = [float(arg) for arg in args if arg is not None]
-            return min(values) if values else 0.0
-        except:
-            return 0.0
-    
-    # ==================== GESTION DES FONCTIONS ====================
-    
-    def register_function(self, name: str, func: Callable, 
-                         num_params: int = -1, 
-                         description: str = "",
-                         is_builtin: bool = False) -> bool:
-        """
-        Enregistre une fonction personnalisée
+        # Test 1: INSERT sans transaction (auto-commit)
+        print("1. INSERT sans transaction:")
+        result = db.execute("INSERT INTO test (value) VALUES ('test1')")
+        print(f"   Success: {result.get('success')}")
         
-        Args:
-            name: Nom de la fonction
-            func: Fonction Python
-            num_params: Nombre de paramètres (-1 pour variable)
-            description: Description de la fonction
-            is_builtin: Si c'est une fonction intégrée
+        # Test 2: Transaction avec COMMIT
+        print("\n2. Transaction avec COMMIT:")
+        print("   a) BEGIN:")
+        result = db.execute("BEGIN")
+        print(f"      Success: {result.get('success')}, TID: {result.get('tid')}")
         
-        Returns:
-            bool: True si enregistrée avec succès
-        """
-        try:
-            # Valider le nom
-            if not name or not name.isidentifier():
-                raise FunctionError(f"Nom de fonction invalide: '{name}'")
-            
-            # Obtenir les informations de la fonction
-            sig = inspect.signature(func)
-            params = list(sig.parameters.keys())
-            
-            # Si num_params n'est pas spécifié, utiliser le nombre réel
-            if num_params == -1:
-                num_params = len(params)
-            
-            metadata = {
-                'name': name,
-                'function': func,
-                'num_params': num_params,
-                'params': params,
-                'description': description or func.__doc__ or '',
-                'is_builtin': is_builtin,
-                'registered_at': datetime.now().isoformat(),
-                'call_count': 0
-            }
-            
-            self.user_functions[name] = func
-            self.function_metadata[name] = metadata
-            self.function_stats[name] = {'calls': 0, 'errors': 0}
-            
-            logger.info(f"Fonction '{name}' enregistrée ({num_params} paramètres)")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Échec de l'enregistrement de la fonction '{name}': {e}")
-            raise FunctionError(f"Impossible d'enregistrer la fonction '{name}': {e}")
-    
-    def unregister_function(self, name: str) -> bool:
-        """Supprime une fonction enregistrée"""
-        if name in self.user_functions:
-            del self.user_functions[name]
-            del self.function_metadata[name]
-            del self.function_stats[name]
-            logger.info(f"Fonction '{name}' supprimée")
-            return True
+        print("   b) INSERT dans transaction:")
+        result = db.execute("INSERT INTO test (value) VALUES ('test2')")
+        print(f"      Success: {result.get('success')}")
+        
+        print("   c) SELECT dans transaction:")
+        result = db.execute("SELECT COUNT(*) as count FROM test")
+        count_in_tx = result.get('rows', [{}])[0].get('count', 0)
+        print(f"      Count in transaction: {count_in_tx}")
+        
+        print("   d) COMMIT:")
+        result = db.execute("COMMIT")
+        print(f"      Success: {result.get('success')}")
+        
+        print("   e) SELECT après COMMIT:")
+        result = db.execute("SELECT COUNT(*) as count FROM test")
+        count_after = result.get('rows', [{}])[0].get('count', 0)
+        print(f"      Count after commit: {count_after}")
+        
+        # Test 3: Transaction avec ROLLBACK
+        print("\n3. Transaction avec ROLLBACK:")
+        print("   a) BEGIN:")
+        result = db.execute("BEGIN")
+        print(f"      Success: {result.get('success')}")
+        
+        print("   b) INSERT dans transaction:")
+        result = db.execute("INSERT INTO test (value) VALUES ('to_rollback')")
+        print(f"      Success: {result.get('success')}")
+        
+        print("   c) SELECT avant ROLLBACK:")
+        result = db.execute("SELECT COUNT(*) as count FROM test")
+        count_before = result.get('rows', [{}])[0].get('count', 0)
+        print(f"      Count before rollback: {count_before}")
+        
+        print("   d) ROLLBACK:")
+        result = db.execute("ROLLBACK")
+        print(f"      Success: {result.get('success')}")
+        
+        print("   e) SELECT après ROLLBACK:")
+        result = db.execute("SELECT COUNT(*) as count FROM test", use_cache=False)
+        count_after = result.get('rows', [{}])[0].get('count', 0)
+        print(f"      Count after rollback: {count_after}")
+        
+        # Vérification finale
+        result = db.execute("SELECT value FROM test ORDER BY id")
+        values = [row.get('value') for row in result.get('rows', [])]
+        print(f"\n   Final values: {values}")
+        
+        success = count_after == 2  # test1 + test2 (to_rollback a été annulé)
+        print(f"\n✅ Test {'PASSED' if success else 'FAILED'}")
+        
+        return success
+        
+    except Exception as e:
+        print(f"❌ Exception: {e}")
+        import traceback
+        traceback.print_exc()
         return False
-    
-    def execute_function(self, name: str, *args) -> Any:
-        """
-        Exécute une fonction enregistrée
         
-        Args:
-            name: Nom de la fonction
-            *args: Arguments à passer
-        
-        Returns:
-            Résultat de la fonction
-        """
-        if name not in self.user_functions:
-            raise FunctionError(f"Fonction '{name}' non trouvée")
-        
+    finally:
         try:
-            # Mettre à jour les statistiques
-            self.function_stats[name]['calls'] += 1
-            
-            # Exécuter la fonction
-            result = self.user_functions[name](*args)
-            
-            return result
-            
-        except Exception as e:
-            self.function_stats[name]['errors'] += 1
-            logger.error(f"Erreur d'exécution de la fonction '{name}': {e}")
-            raise FunctionError(f"Erreur dans la fonction '{name}': {e}")
+            db.close()
+        except:
+            pass
+        if os.path.exists(db_path):
+            os.unlink(db_path)
+
+def test_api_transaction():
+    """Test transaction avec API (sans SQL direct)"""
+    print("\n🧪 Test transaction avec API")
     
-    def get_function_info(self, name: str) -> Optional[Dict]:
-        """Récupère les informations d'une fonction"""
-        return self.function_metadata.get(name)
+    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
+        db_path = tmp.name
     
-    def list_functions(self) -> List[Dict]:
-        """Liste toutes les fonctions disponibles"""
-        functions = []
-        for name, metadata in self.function_metadata.items():
-            functions.append({
-                'name': name,
-                'num_params': metadata['num_params'],
-                'description': metadata['description'],
-                'is_builtin': metadata['is_builtin'],
-                'call_count': metadata['call_count'],
-                'registered_at': metadata['registered_at']
-            })
+    try:
+        db = Database(db_path, create_default_tables=False)
         
-        # Trier par nom
-        functions.sort(key=lambda x: x['name'])
-        return functions
-    
-    def get_stats(self) -> Dict:
-        """Récupère les statistiques d'utilisation"""
-        total_calls = sum(stats['calls'] for stats in self.function_stats.values())
-        total_errors = sum(stats['errors'] for stats in self.function_stats.values())
+        # Créer table
+        db.execute("CREATE TABLE test_api (id INTEGER PRIMARY KEY, value TEXT)")
         
-        return {
-            'total_functions': len(self.user_functions),
-            'builtin_functions': sum(1 for m in self.function_metadata.values() if m['is_builtin']),
-            'user_functions': sum(1 for m in self.function_metadata.values() if not m['is_builtin']),
-            'total_calls': total_calls,
-            'total_errors': total_errors,
-            'functions': self.function_stats.copy()
-        }
-    
-    def save_to_file(self, filepath: str):
-        """Sauvegarde les fonctions dans un fichier"""
+        # Test avec API
+        print("1. Début transaction avec API:")
+        result = db.begin_transaction()
+        print(f"   Success: {result.get('success')}, TID: {result.get('tid')}")
+        
+        print("2. INSERT avec execute_in_transaction:")
+        result = db.execute_in_transaction("INSERT INTO test_api (value) VALUES ('test_api')")
+        print(f"   Success: {result.get('success')}")
+        
+        print("3. Commit avec API:")
+        result = db.commit_transaction()
+        print(f"   Success: {result.get('success')}")
+        
+        print("4. Vérifier après commit:")
+        result = db.execute("SELECT COUNT(*) as count FROM test_api")
+        count = result.get('rows', [{}])[0].get('count', 0)
+        print(f"   Count: {count}")
+        
+        success = count == 1
+        print(f"\n✅ Test API {'PASSED' if success else 'FAILED'}")
+        
+        return success
+        
+    except Exception as e:
+        print(f"❌ Exception: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+        
+    finally:
         try:
-            data = {
-                'metadata': self.function_metadata,
-                'stats': self.function_stats,
-                'saved_at': datetime.now().isoformat()
-            }
-            
-            # Convertir les fonctions en références (ne pas sérialiser le code)
-            for name in data['metadata']:
-                if 'function' in data['metadata'][name]:
-                    data['metadata'][name]['function'] = 'python_function'
-            
-            with open(filepath, 'w') as f:
-                json.dump(data, f, indent=2)
-            
-            logger.info(f"Fonctions sauvegardées dans {filepath}")
-            
-        except Exception as e:
-            logger.error(f"Échec de la sauvegarde: {e}")
-            raise
+            db.close()
+        except:
+            pass
+        if os.path.exists(db_path):
+            os.unlink(db_path)
+
+if __name__ == "__main__":
+    print("="*60)
+    print("🚀 TEST TRANSACTIONS GSQL")
+    print("="*60)
     
-    def load_from_file(self, filepath: str):
-        """Charge les fonctions depuis un fichier"""
-        # Note: Les fonctions Python ne peuvent pas être sérialisées
-        # Cette méthode ne chargera que les métadonnées
-        try:
-            with open(filepath, 'r') as f:
-                data = json.load(f)
-            
-            # Réinitialiser
-            self.user_functions.clear()
-            self.function_metadata.clear()
-            self.function_stats.clear()
-            
-            # Recharger les fonctions intégrées
-            self._register_builtin_functions()
-            
-            logger.info(f"Fonctions chargées depuis {filepath}")
-            
-        except Exception as e:
-            logger.error(f"Échec du chargement: {e}")
-            raise
-
-# ==================== FONCTIONS UTILITAIRES ====================
-
-def create_function_manager() -> FunctionManager:
-    """Crée une instance de FunctionManager"""
-    return FunctionManager()
-
-def get_default_function_manager() -> FunctionManager:
-    """Récupère le gestionnaire de fonctions par défaut"""
-    if not hasattr(get_default_function_manager, '_instance'):
-        get_default_function_manager._instance = FunctionManager()
-    return get_default_function_manager._instance
-
-# ==================== FONCTIONS D'EXEMPLE ====================
-
-def example_add(a: float, b: float) -> float:
-    """Additionne deux nombres"""
-    return float(a) + float(b)
-
-def example_multiply(a: float, b: float) -> float:
-    """Multiplie deux nombres"""
-    return float(a) * float(b)
-
-def example_greet(name: str) -> str:
-    """Saluer une personne"""
-    return f"Bonjour, {name}!"
-
-def example_calculate_age(birth_year: int) -> int:
-    """Calcule l'âge à partir de l'année de naissance"""
-    current_year = datetime.now().year
-    return current_year - int(birth_year)
-
-# ==================== ENREGISTREMENT DES FONCTIONS D'EXEMPLE ====================
-
-def register_example_functions(manager: FunctionManager = None):
-    """Enregistre les fonctions d'exemple"""
-    if manager is None:
-        manager = get_default_function_manager()
+    test1 = test_simple_transaction()
+    test2 = test_api_transaction()
     
-    examples = [
-        (example_add, 'ADD', 2, "Additionne deux nombres"),
-        (example_multiply, 'MULTIPLY', 2, "Multiplie deux nombres"),
-        (example_greet, 'GREET', 1, "Saluer une personne"),
-        (example_calculate_age, 'CALCULATE_AGE', 1, "Calcule l'âge")
-    ]
+    print("\n" + "="*60)
+    print("📊 RÉSULTATS")
+    print("="*60)
+    print(f"Test SQL direct: {'✅ PASS' if test1 else '❌ FAIL'}")
+    print(f"Test API: {'✅ PASS' if test2 else '❌ FAIL'}")
     
-    for func, name, num_params, description in examples:
-        try:
-            manager.register_function(
-                name=name,
-                func=func,
-                num_params=num_params,
-                description=description
-            )
-        except Exception as e:
-            logger.warning(f"Impossible d'enregistrer la fonction d'exemple {name}: {e}")
-
-# ==================== EXPORT ====================
-
-__all__ = [
-    'FunctionManager',
-    'FunctionError',
-    'create_function_manager',
-    'get_default_function_manager',
-    'register_example_functions',
-    'example_add',
-    'example_multiply',
-    'example_greet',
-    'example_calculate_age'
-]
+    if test1 and test2:
+        print("\n🎉 TOUS LES TESTS ONT RÉUSSI!")
+    else:
+        print("\n⚠️  CERTAINS TESTS ONT ÉCHOUÉ")
+    
+    sys.exit(0 if (test1 and test2) else 1)
