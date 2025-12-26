@@ -124,6 +124,48 @@ class BufferPool:
             self.invalidate()
 
 
+# ==================== BASE STORAGE CLASS ====================
+
+class Storage:
+    """Classe de base pour le stockage"""
+    
+    def __init__(self, db_path=None, **kwargs):
+        self.db_path = db_path
+        self.connection = None
+        self.base_dir = Path(kwargs.get('base_dir', '/root/.gsql'))
+        self.buffer_pool = BufferPool(max_pages=kwargs.get('buffer_pool_size', 100))
+        
+    def open(self):
+        """Ouvre la connexion au stockage"""
+        raise NotImplementedError
+        
+    def close(self):
+        """Ferme la connexion"""
+        raise NotImplementedError
+        
+    def is_new_database(self):
+        """Vérifie si la base de données est nouvelle"""
+        raise NotImplementedError
+        
+    def get_connection(self):
+        """Retourne la connexion"""
+        return self.connection
+        
+    def configure_pragmas(self, pragmas):
+        """Configure les pragmas SQLite"""
+        if not self.connection:
+            return
+        
+        try:
+            cursor = self.connection.cursor()
+            for pragma, value in pragmas.items():
+                cursor.execute(f"PRAGMA {pragma} = {value}")
+            self.connection.commit()
+            logger.debug(f"SQLite pragmas configured: {pragmas}")
+        except Exception as e:
+            logger.warning(f"Could not configure SQLite pragmas: {e}")
+
+
 # ==================== TRANSACTION MANAGER CORRIGÉ ====================
 
 class TransactionManager:
@@ -147,7 +189,7 @@ class TransactionManager:
             
             try:
                 # Créer un nouveau curseur pour cette transaction
-                cursor = self.storage.conn.cursor()
+                cursor = self.storage.connection.cursor()
                 
                 # Déterminer le type de transaction
                 sql = "BEGIN "
@@ -342,60 +384,7 @@ class TransactionManager:
                     'error': f'Commit failed: {e}',
                     'tid': tid
                 }
-    # Dans storage.py, ajouter cette fonction :
-
-def get_storage_stats(storage) -> Dict[str, Any]:
-    """
-    Get statistics about storage
     
-    Args:
-        storage: Storage instance
-        
-    Returns:
-        Dict with statistics
-    """
-    stats = {
-        'type': 'SQLite',
-        'path': str(storage.db_path) if hasattr(storage, 'db_path') else 'unknown',
-        'connected': storage.connection is not None if hasattr(storage, 'connection') else False,
-        'tables_count': 0,
-        'total_rows': 0,
-        'file_size': 0,
-        'last_modified': None
-    }
-    
-    try:
-        if hasattr(storage, 'db_path') and storage.db_path:
-            path = Path(storage.db_path)
-            if path.exists():
-                stats['file_size'] = path.stat().st_size
-                stats['last_modified'] = datetime.fromtimestamp(path.stat().st_mtime).isoformat()
-        
-        if hasattr(storage, 'connection') and storage.connection:
-            cursor = storage.connection.cursor()
-            
-            # Get table count
-            cursor.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table'")
-            stats['tables_count'] = cursor.fetchone()[0]
-            
-            # Get total rows (approx)
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-            tables = cursor.fetchall()
-            
-            total_rows = 0
-            for table in tables:
-                try:
-                    cursor.execute(f"SELECT COUNT(*) FROM {table[0]}")
-                    total_rows += cursor.fetchone()[0]
-                except:
-                    continue
-            
-            stats['total_rows'] = total_rows
-            
-    except Exception as e:
-        stats['error'] = str(e)
-    
-    return stats
     def _rollback_internal(self, tid: int, to_savepoint: str = None) -> Dict:
         """Méthode interne pour rollback"""
         if tid not in self.active_transactions:
@@ -512,14 +501,16 @@ def get_storage_stats(storage) -> Dict[str, Any]:
 
 # ==================== SQLITE STORAGE COMPLET ====================
 
-class SQLiteStorage:
+class SQLiteStorage(Storage):
     """Moteur de stockage SQLite avec transactions ACID stables"""
     
     VERSION = "3.2.0"
     SCHEMA_VERSION = 3
     
     def __init__(self, db_path=None, base_dir="/root/.gsql", 
-                 buffer_pool_size=100, enable_wal=True):
+                 buffer_pool_size=100, enable_wal=True, auto_recovery=True):
+        
+        super().__init__(db_path, base_dir=base_dir, buffer_pool_size=buffer_pool_size)
         
         self.base_dir = Path(base_dir)
         self.base_dir.mkdir(parents=True, exist_ok=True)
@@ -531,12 +522,11 @@ class SQLiteStorage:
             if not self.db_path.is_absolute():
                 self.db_path = self.base_dir / self.db_path
         
-        self.conn = None
+        self.connection = None
         self.is_connected = False
         self.connection_lock = threading.RLock()
         self.recovery_mode = False
         
-        self.buffer_pool = BufferPool(max_pages=buffer_pool_size)
         self.transaction_manager = TransactionManager(self)
         
         self.config = {
@@ -544,7 +534,8 @@ class SQLiteStorage:
             'auto_vacuum': 'FULL',
             'busy_timeout': 10000,
             'cache_size': -2000,
-            'journal_mode': 'WAL' if enable_wal else 'DELETE'
+            'journal_mode': 'WAL' if enable_wal else 'DELETE',
+            'auto_recovery': auto_recovery
         }
         
         self.meta_file = self.base_dir / "storage_meta.json"
@@ -561,15 +552,22 @@ class SQLiteStorage:
     def _initialize(self):
         """Initialise la connexion"""
         try:
-            self._connect()
+            self.open()
             if self._check_integrity():
                 logger.info(f"Storage initialized: {self.db_path}")
             else:
-                logger.warning("Integrity check failed, attempting recovery...")
-                self._recover_database()
+                if self.config['auto_recovery']:
+                    logger.warning("Integrity check failed, attempting recovery...")
+                    self._recover_database()
+                else:
+                    raise StorageError("Database integrity check failed")
         except Exception as e:
             logger.error(f"Initialization failed: {e}")
             self._create_new_database()
+    
+    def open(self):
+        """Établit la connexion SQLite"""
+        return self._connect()
     
     def _create_new_database(self):
         """Crée une nouvelle base de données vierge"""
@@ -591,13 +589,13 @@ class SQLiteStorage:
         for attempt in range(retries):
             try:
                 with self.connection_lock:
-                    if self.conn:
+                    if self.connection:
                         try:
-                            self.conn.close()
+                            self.connection.close()
                         except:
                             pass
                     
-                    self.conn = sqlite3.connect(
+                    self.connection = sqlite3.connect(
                         str(self.db_path),
                         timeout=self.config['busy_timeout'] / 1000,
                         check_same_thread=False,
@@ -605,18 +603,22 @@ class SQLiteStorage:
                     )
                     
                     # Configuration de base
-                    self.conn.execute("PRAGMA foreign_keys = ON")
+                    self.connection.execute("PRAGMA foreign_keys = ON")
                     
                     # Configuration WAL
                     if self.config['enable_wal']:
-                        self.conn.execute(f"PRAGMA journal_mode = {self.config['journal_mode']}")
+                        self.connection.execute(f"PRAGMA journal_mode = {self.config['journal_mode']}")
                     
-                    self.conn.execute(f"PRAGMA auto_vacuum = {self.config['auto_vacuum']}")
-                    self.conn.execute(f"PRAGMA cache_size = {self.config['cache_size']}")
-                    self.conn.execute("PRAGMA synchronous = NORMAL")
-                    self.conn.execute("PRAGMA temp_store = MEMORY")
+                    self.connection.execute(f"PRAGMA auto_vacuum = {self.config['auto_vacuum']}")
+                    self.connection.execute(f"PRAGMA cache_size = {self.config['cache_size']}")
+                    self.connection.execute("PRAGMA synchronous = NORMAL")
+                    self.connection.execute("PRAGMA temp_store = MEMORY")
                     
                     self.is_connected = True
+                    
+                    # Créer les tables système
+                    self._create_system_tables()
+                    
                     logger.debug(f"Connected to SQLite (attempt {attempt+1})")
                     return True
                     
@@ -633,13 +635,6 @@ class SQLiteStorage:
                 logger.error(f"Unexpected connection error: {e}")
                 self.is_connected = False
                 raise
-    
-    def _configure_connection(self):
-        """Configure la connexion"""
-        if not self.conn:
-            return
-        
-        self._create_system_tables()
     
     def _create_system_tables(self):
         """Crée les tables système"""
@@ -675,17 +670,49 @@ class SQLiteStorage:
         ]
         
         try:
-            cursor = self.conn.cursor()
+            cursor = self.connection.cursor()
             for table_sql in system_tables:
                 cursor.execute(table_sql)
-            self.conn.commit()
+            self.connection.commit()
         except Exception as e:
             logger.warning(f"Failed to create some system tables: {e}")
+    
+    def is_new_database(self):
+        """
+        Vérifie si la base de données est nouvelle (vide).
+        """
+        try:
+            cursor = self.connection.cursor()
+            
+            # Vérifier si la table 'sqlite_master' a des tables utilisateur
+            cursor.execute("""
+                SELECT COUNT(*) FROM sqlite_master 
+                WHERE type='table' AND name NOT LIKE 'sqlite_%'
+            """)
+            user_table_count = cursor.fetchone()[0]
+            
+            # Vérifier si les tables système de GSQL existent
+            cursor.execute("""
+                SELECT COUNT(*) FROM sqlite_master 
+                WHERE type='table' AND name IN ('_gsql_metadata', '_gsql_schemas')
+            """)
+            system_table_count = cursor.fetchone()[0]
+            
+            return user_table_count == 0 or system_table_count == 0
+            
+        except Exception as e:
+            # Si erreur, considérer comme nouvelle base
+            logger.warning(f"Error checking if database is new: {e}")
+            return True
+    
+    def get_connection(self):
+        """Retourne la connexion SQLite"""
+        return self.connection
     
     def _check_integrity(self) -> bool:
         """Vérifie l'intégrité de la base"""
         try:
-            cursor = self.conn.cursor()
+            cursor = self.connection.cursor()
             cursor.execute("PRAGMA integrity_check")
             result = cursor.fetchone()
             return result[0] == "ok"
@@ -733,8 +760,8 @@ class SQLiteStorage:
             temp_conn.close()
             
             if integrity_result and integrity_result[0] == "ok":
-                if self.conn:
-                    self.conn.close()
+                if self.connection:
+                    self.connection.close()
                 os.replace(str(latest_backup), str(self.db_path))
                 self._connect()
                 return True
@@ -747,17 +774,17 @@ class SQLiteStorage:
     def _attempt_sqlite_recovery(self) -> bool:
         """Tente une récupération SQLite"""
         try:
-            if not self.conn:
+            if not self.connection:
                 return False
             
-            cursor = self.conn.cursor()
+            cursor = self.connection.cursor()
             cursor.execute("PRAGMA wal_checkpoint(FULL)")
             cursor.execute("PRAGMA integrity_check")
             result = cursor.fetchone()
             
             if result and result[0] == "ok":
                 cursor.execute("VACUUM")
-                self.conn.commit()
+                self.connection.commit()
                 return True
                 
         except Exception as e:
@@ -768,8 +795,8 @@ class SQLiteStorage:
     def _reset_database(self):
         """Réinitialise complètement"""
         try:
-            if self.conn:
-                self.conn.close()
+            if self.connection:
+                self.connection.close()
             
             if self.db_path.exists():
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -817,7 +844,7 @@ class SQLiteStorage:
                 return result
             
             # Exécution normale (hors transaction)
-            cursor = self.conn.cursor()
+            cursor = self.connection.cursor()
             
             if params:
                 cursor.execute(query, params)
@@ -920,7 +947,7 @@ class SQLiteStorage:
                 })
             
             # Commit automatique pour les exécutions hors transaction
-            self.conn.commit()
+            self.connection.commit()
             
             # Mettre à jour les statistiques
             self._update_statistics(query_upper.split()[0] if query_upper else "OTHER", execution_time)
@@ -933,7 +960,7 @@ class SQLiteStorage:
             
             # Rollback pour les erreurs
             try:
-                self.conn.rollback()
+                self.connection.rollback()
             except:
                 pass
             
@@ -960,7 +987,7 @@ class SQLiteStorage:
         except Exception as e:
             logger.error(f"Unexpected error: {e}")
             try:
-                self.conn.rollback()
+                self.connection.rollback()
             except:
                 pass
             return {'success': False, 'error': f'Unexpected error: {e}'}
@@ -968,7 +995,7 @@ class SQLiteStorage:
     def _update_statistics(self, query_type: str, execution_time: float):
         """Met à jour les statistiques"""
         try:
-            cursor = self.conn.cursor()
+            cursor = self.connection.cursor()
             cursor.execute(
                 """INSERT OR IGNORE INTO _gsql_statistics (metric, value) 
                    VALUES (?, 0)""",
@@ -981,7 +1008,7 @@ class SQLiteStorage:
                    WHERE metric = ?""",
                 (f"query_count_{query_type}",)
             )
-            self.conn.commit()
+            self.connection.commit()
         except:
             pass
     
@@ -992,7 +1019,7 @@ class SQLiteStorage:
             if cache_key in self.schema_cache:
                 return self.schema_cache[cache_key]
             
-            cursor = self.conn.cursor()
+            cursor = self.connection.cursor()
             cursor.execute(f'PRAGMA table_info("{table}")')
             columns_data = cursor.fetchall()
             
@@ -1026,7 +1053,7 @@ class SQLiteStorage:
     def _get_table_row_count(self, table: str) -> int:
         """Récupère le nombre de lignes"""
         try:
-            cursor = self.conn.cursor()
+            cursor = self.connection.cursor()
             cursor.execute(f'SELECT COUNT(*) FROM "{table}"')
             return cursor.fetchone()[0]
         except:
@@ -1035,7 +1062,7 @@ class SQLiteStorage:
     def get_tables(self) -> List[Dict]:
         """Récupère la liste des tables"""
         try:
-            cursor = self.conn.cursor()
+            cursor = self.connection.cursor()
             cursor.execute("""
                 SELECT name, type, sql 
                 FROM sqlite_master 
@@ -1216,9 +1243,9 @@ class SQLiteStorage:
     def vacuum(self) -> bool:
         """Optimise la base"""
         try:
-            cursor = self.conn.cursor()
+            cursor = self.connection.cursor()
             cursor.execute("VACUUM")
-            self.conn.commit()
+            self.connection.commit()
             self.buffer_pool.invalidate()
             self.schema_cache.clear()
             logger.info("Database vacuum completed")
@@ -1230,7 +1257,7 @@ class SQLiteStorage:
     def get_stats(self) -> Dict:
         """Récupère les statistiques"""
         try:
-            cursor = self.conn.cursor()
+            cursor = self.connection.cursor()
             cursor.execute("""
                 SELECT COUNT(*) 
                 FROM sqlite_master 
@@ -1295,9 +1322,9 @@ class SQLiteStorage:
                         except:
                             pass
                 
-                if self.conn:
-                    self.conn.close()
-                    self.conn = None
+                if self.connection:
+                    self.connection.close()
+                    self.connection = None
                     self.is_connected = False
                     
                     self.buffer_pool.invalidate()
