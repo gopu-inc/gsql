@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-GSQL Database Module - SQLite Backend Only
-Version: 4.0.0 - Transactions Complètes
+GSQL Database Module - SQLite Backend Only - VERSION COMPLÈTE CORRIGÉE
+Version: 3.2.3 - Transactions entièrement compatibles
 """
 
 import os
@@ -18,7 +18,7 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple, Union
 from contextlib import contextmanager
 
-from .storage import SQLiteStorage, create_storage
+from .storage import SQLiteStorage, create_storage, TransactionContext
 from .exceptions import (
     GSQLBaseException, SQLSyntaxError, SQLExecutionError,
     ConstraintViolationError, TransactionError, FunctionError,
@@ -34,9 +34,10 @@ class DatabaseTransactionContext:
     def __init__(self, db, isolation_level="DEFERRED"):
         self.db = db
         self.isolation_level = isolation_level
+        self.tx_context = None
     
     def __enter__(self):
-        # Débuter la transaction
+        # Débuter la transaction via le storage
         self.db.begin_transaction(self.isolation_level)
         return self
     
@@ -78,7 +79,7 @@ class PreparedStatement:
 
 
 class Database:
-    """Base de données SQLite avec gestion de transactions"""
+    """Base de données SQLite avec gestion de transactions - Version Complète Corrigée"""
     
     def __init__(self, db_path=None, base_dir="/root/.gsql", 
                  buffer_pool_size=100, enable_wal=True, auto_recovery=True,
@@ -108,7 +109,7 @@ class Database:
             'backup_interval': 24 * 3600,
             'max_query_cache': 100,
             'query_timeout': 30,
-            'version': '4.0.0',
+            'version': '3.2.3',
             'create_default_tables': create_default_tables
         }
         
@@ -285,7 +286,7 @@ class Database:
                 use_cache: bool = True, timeout: int = None,
                 tid: int = None) -> Dict:
         """
-        Exécute une requête SQL sur la base de données
+        Exécute une requête SQL sur la base de données - VERSION CORRIGÉE
         
         Args:
             sql: Requête SQL
@@ -458,6 +459,29 @@ class Database:
                 'type': 'error',
                 'execution_time': (datetime.now() - start_time).total_seconds(),
                 'timestamp': datetime.now().isoformat()
+            }
+    
+    def _handle_savepoint(self, sql: str) -> Dict:
+        """Gère les commandes SAVEPOINT (maintenant intégré dans execute())"""
+        # Cette méthode est maintenant obsolète, la logique est dans execute()
+        parts = sql.strip().split()
+        if len(parts) < 2:
+            return {
+                'success': False,
+                'error': 'Invalid SAVEPOINT syntax'
+            }
+        
+        action = parts[0].upper()
+        name = parts[1]
+        
+        if action == "SAVEPOINT":
+            return self.create_savepoint(name)
+        elif action == "ROLLBACK" and len(parts) > 2 and parts[2].upper() == "TO":
+            return self.rollback_to_savepoint(name)
+        else:
+            return {
+                'success': False,
+                'error': f'Unknown savepoint command: {sql}'
             }
     
     def execute_script(self, sql_script: str) -> List[Dict]:
@@ -727,7 +751,7 @@ class Database:
     def _execute_help(self) -> Dict:
         """Exécute HELP pour afficher l'aide"""
         help_text = """
-GSQL Database Commands (v4.0.0):
+GSQL Database Commands (v3.2.3 - Transactions corrigées):
 
 DATA MANIPULATION:
   SELECT * FROM table [WHERE condition] [LIMIT n]
