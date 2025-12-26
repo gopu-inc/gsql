@@ -7,6 +7,7 @@ Version: 3.0 - SQLite Only
 
 import argparse
 import atexit
+import cmd
 import json
 import logging
 import os
@@ -394,7 +395,7 @@ class ResultDisplay:
 class GSQLShell(cmd.Cmd):
     """GSQL Interactive Shell"""
     
-    intro = f"{Colors.info('GSQL Interactive Shell')}\n{Colors.dim(\"Type 'help' for commands, 'exit' to quit\")}"
+    intro = Colors.info("GSQL Interactive Shell") + "\n" + Colors.dim("Type 'help' for commands, 'exit' to quit")
     prompt = Colors.info('gsql> ')
     ruler = Colors.dim('─')
     
@@ -451,11 +452,11 @@ class GSQLShell(cmd.Cmd):
         else:
             self._execute_sql(line)
     
-    def _handle_dot_command(self, command: str) -> None:
+    def _handle_dot_command(self, command: str) -> bool:
         """Handle dot commands (SQLite style)"""
         parts = command[1:].strip().split()
         if not parts:
-            return
+            return False
             
         cmd = parts[0].lower()
         args = parts[1:]
@@ -470,7 +471,7 @@ class GSQLShell(cmd.Cmd):
             'exit': lambda: True,
             'quit': lambda: True,
             'clear': lambda: os.system('clear' if os.name == 'posix' else 'cls'),
-            'history': self._show_history
+            'history': lambda: self._show_history()
         }
         
         handler = handlers.get(cmd)
@@ -481,6 +482,8 @@ class GSQLShell(cmd.Cmd):
         else:
             print(Colors.error(f"Unknown command: .{cmd}"))
             print(Colors.dim("Try .help for available commands"))
+        
+        return False
     
     def _handle_schema(self, args: List[str]) -> None:
         """Handle .schema command"""
