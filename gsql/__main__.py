@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 """
 GSQL Main Entry Point - Interactive Shell and CLI
@@ -14,6 +13,7 @@ import readline
 import atexit
 import json
 import logging
+import re  # Ajout pour la colorisation SQL
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime
@@ -22,7 +22,8 @@ from datetime import datetime
 
 # Import des modules GSQL
 try:
-    from . import __version__, config, setup_logging
+    from . import __version__
+    from .config import config, setup_logging  # Corrigé l'import
     from .database import create_database, Database, connect
     from .executor import create_executor, QueryExecutor
     from .functions import FunctionManager
@@ -65,7 +66,9 @@ DEFAULT_CONFIG = {
         'history_file': '.gsql_history',
         'max_history': 1000,
         'colors': True,
-        'autocomplete': True
+        'autocomplete': True,
+        'multiline': True,  # Support multi-lignes
+        'syntax_highlighting': True  # Colorisation syntaxique
     }
 }
 
@@ -161,6 +164,16 @@ class Colors:
     def sql_comment(text):
         """Commentaires SQL (vert)"""
         return Colors.colorize(text, Colors.GREEN)
+    
+    @staticmethod
+    def sql_function(text):
+        """Fonctions SQL (bleu)"""
+        return Colors.colorize(text, Colors.BLUE)
+    
+    @staticmethod
+    def sql_operator(text):
+        """Opérateurs SQL (cyan clair)"""
+        return Colors.colorize(text, Colors.CYAN + Colors.BOLD)
 
 # ==================== AUTO-COMPLETER ====================
 
@@ -184,10 +197,18 @@ class GSQLCompleter:
             'CASE', 'WHEN', 'THEN', 'ELSE', 'END'
         ]
         
+        # Fonctions SQL
+        self.functions = [
+            'COUNT', 'SUM', 'AVG', 'MIN', 'MAX', 'UPPER', 'LOWER',
+            'LENGTH', 'SUBSTR', 'TRIM', 'ROUND', 'ABS', 'NOW', 'DATE',
+            'TIME', 'YEAR', 'MONTH', 'DAY', 'COALESCE', 'NULLIF'
+        ]
+        
         # Commandes spéciales GSQL
         self.gsql_commands = [
             '.tables', '.schema', '.stats', '.help', '.backup',
-            '.vacuum', '.exit', '.quit', '.clear', '.history'
+            '.vacuum', '.exit', '.quit', '.clear', '.history',
+            '.mode', '.timer', '.headers', '.nullvalue', '.width'
         ]
         
         self.table_names = []
@@ -228,13 +249,20 @@ class GSQLCompleter:
             
             if not tokens or len(tokens) == 1:
                 # Complétion de commande
-                all_commands = self.keywords + self.gsql_commands + self.table_names
+                all_commands = self.keywords + self.functions + self.gsql_commands + self.table_names
                 self.matches = [cmd for cmd in all_commands if cmd.lower().startswith(text.lower())]
             elif tokens[-2].upper() == 'FROM' or tokens[-2].upper() == 'INTO':
                 # Complétion de table après FROM ou INTO
                 self.matches = [table for table in self.table_names if table.lower().startswith(text.lower())]
             elif tokens[-2].upper() == 'WHERE' or tokens[-2].upper() == 'SET':
                 # Complétion de colonne après WHERE ou SET
+                table = self._find_current_table(tokens)
+                if table and table in self.column_names:
+                    self.matches = [col for col in self.column_names[table] if col.lower().startswith(text.lower())]
+                else:
+                    self.matches = []
+            elif tokens[-1].upper() in ['COUNT', 'SUM', 'AVG', 'MIN', 'MAX']:
+                # Complétion après une fonction d'agrégation
                 table = self._find_current_table(tokens)
                 if table and table in self.column_names:
                     self.matches = [col for col in self.column_names[table] if col.lower().startswith(text.lower())]
@@ -262,7 +290,7 @@ class GSQLCompleter:
 # ==================== SHELL COMMANDS ====================
 
 class GSQLShell(cmd.Cmd):
-    """Shell interactif GSQL"""
+    """Shell interactif GSQL avec fonctionnalités avancées"""
     
     intro = Colors.info("GSQL Interactive Shell") + "\n" + Colors.dim("Type 'help' for commands, 'exit' to quit")
     prompt = Colors.info('gsql> ')
@@ -275,34 +303,85 @@ class GSQLShell(cmd.Cmd):
         self.executor = gsql_app.executor if gsql_app else None
         self.completer = gsql_app.completer if gsql_app else None
         
+        # Configuration
+        self.config = gsql_app.config if gsql_app else {}
+        self.multiline_mode = False
+        self.multiline_buffer = []
+        
+        # Options d'affichage
+        self.show_headers = True
+        self.show_timer = True
+        self.null_value = "NULL"
+        self.column_widths = {}
+        
         # Configuration du prompt
-        if config.get('colors', True):
+        if self.config.get('shell', {}).get('colors', True):
             self.prompt = Colors.info('gsql> ')
         else:
             self.prompt = 'gsql> '
         
         # Configuration de l'historique
-        self.history_file = Path(config.get('base_dir')) / config.get('shell', {}).get('history_file', '.gsql_history')
+        self.history_file = Path(self.config.get('database', {}).get('base_dir', Path.home() / '.gsql')) / \
+                           self.config.get('shell', {}).get('history_file', '.gsql_history')
         self._setup_history()
         
         # Configuration de l'auto-complétion
-        if config.get('shell', {}).get('autocomplete', True) and self.completer:
+        if self.config.get('shell', {}).get('autocomplete', True) and self.completer:
             readline.set_completer(self.completer.complete)
             readline.parse_and_bind("tab: complete")
             readline.set_completer_delims(' \t\n`~!@#$%^&*()-=+[{]}\\|;:\'",<>/?')
+        
+        # Support multi-lignes
+        if self.config.get('shell', {}).get('multiline', True):
+            readline.parse_and_bind("set bind-tty-special-chars off")
     
     def _setup_history(self):
         """Configure l'historique de commandes"""
         try:
+            self.history_file.parent.mkdir(parents=True, exist_ok=True)
             readline.read_history_file(str(self.history_file))
         except FileNotFoundError:
             pass
         
         # Limiter la taille de l'historique
-        readline.set_history_length(config.get('shell', {}).get('max_history', 1000))
+        readline.set_history_length(self.config.get('shell', {}).get('max_history', 1000))
         
         # Enregistrer l'historique à la sortie
         atexit.register(readline.write_history_file, str(self.history_file))
+    
+    # ==================== MULTI-LINE SUPPORT ====================
+    
+    def preloop(self):
+        """Avant le démarrage de la boucle"""
+        print(Colors.dim("Tip: End SQL commands with ';' or use '\\' for multi-line"))
+    
+    def parseline(self, line):
+        """Gère le support multi-lignes"""
+        line = line.rstrip()
+        
+        # Vérifier si on est en mode multi-ligne
+        if self.multiline_mode:
+            if line.lower() == 'end' or line == ';':
+                # Fin du mode multi-ligne
+                full_sql = '\n'.join(self.multiline_buffer)
+                self.multiline_buffer = []
+                self.multiline_mode = False
+                self.prompt = Colors.info('gsql> ')
+                return None, None, full_sql
+            else:
+                # Ajouter à la ligne en cours
+                self.multiline_buffer.append(line)
+                self.prompt = Colors.dim('    -> ')
+                return None, None, ''
+        
+        # Vérifier si la ligne commence un mode multi-lignes
+        if line.endswith('\\'):
+            self.multiline_mode = True
+            self.multiline_buffer.append(line[:-1].strip())
+            self.prompt = Colors.dim('    -> ')
+            return None, None, ''
+        
+        return super().parseline(line)
     
     # ==================== COMMAND HANDLING ====================
     
@@ -350,6 +429,47 @@ class GSQLShell(cmd.Cmd):
             os.system('clear' if os.name == 'posix' else 'cls')
         elif cmd == 'history':
             self._show_history()
+        elif cmd == 'mode':
+            if len(parts) > 1:
+                mode = parts[1].lower()
+                if mode == 'list':
+                    print(Colors.info("Available modes:"))
+                    print("  list    - Show tables")
+                    print("  insert  - Insert mode")
+                    print("  line    - One value per line")
+                    print("  column  - Left-aligned columns")
+                    print("  html    - HTML output")
+                    print("  csv     - CSV output")
+                    print("  json    - JSON output")
+                else:
+                    print(Colors.warning(f"Mode '{mode}' not yet implemented"))
+            else:
+                print(Colors.info("Current mode: default"))
+        elif cmd == 'timer':
+            self.show_timer = not self.show_timer
+            status = "ON" if self.show_timer else "OFF"
+            print(Colors.info(f"Timer: {status}"))
+        elif cmd == 'headers':
+            self.show_headers = not self.show_headers
+            status = "ON" if self.show_headers else "OFF"
+            print(Colors.info(f"Headers: {status}"))
+        elif cmd == 'nullvalue':
+            value = parts[1] if len(parts) > 1 else "NULL"
+            self.null_value = value
+            print(Colors.info(f"Null value set to: {value}"))
+        elif cmd == 'width':
+            if len(parts) > 1:
+                try:
+                    width = int(parts[1])
+                    for col in self.column_widths:
+                        self.column_widths[col] = width
+                    print(Colors.info(f"Default column width: {width}"))
+                except ValueError:
+                    print(Colors.error("Width must be a number"))
+            else:
+                print(Colors.info("Current column widths:"))
+                for col, width in self.column_widths.items():
+                    print(f"  {col}: {width}")
         else:
             print(Colors.error(f"Unknown command: .{cmd}"))
             print(Colors.dim("Try .help for available commands"))
@@ -358,9 +478,10 @@ class GSQLShell(cmd.Cmd):
         """Affiche l'historique des commandes"""
         try:
             histsize = readline.get_current_history_length()
-            for i in range(1, histsize + 1):
+            for i in range(max(1, histsize - 20), histsize + 1):
                 cmd = readline.get_history_item(i)
-                print(f"{i:4d}  {cmd}")
+                if cmd:
+                    print(f"{i:4d}  {cmd}")
         except:
             print(Colors.error("Could not display history"))
     
@@ -376,6 +497,10 @@ class GSQLShell(cmd.Cmd):
             if not sql:
                 return
             
+            # Afficher la requête colorée si configuré
+            if self.config.get('shell', {}).get('syntax_highlighting', True):
+                print(Colors.dim(f"Executing: {self._colorize_sql(sql)}"))
+            
             # Exécuter la requête
             start_time = datetime.now()
             result = self.db.execute(sql)
@@ -386,7 +511,7 @@ class GSQLShell(cmd.Cmd):
             
         except Exception as e:
             print(Colors.error(f"Error: {e}"))
-            if config.get('verbose_errors', True):
+            if self.config.get('verbose_errors', True):
                 traceback.print_exc()
     
     def _display_result(self, result: Dict, execution_time: float):
@@ -405,34 +530,53 @@ class GSQLShell(cmd.Cmd):
             if count == 0:
                 print(Colors.warning("No rows returned"))
             else:
-                # Afficher l'en-tête
-                header = " | ".join(Colors.highlight(col) for col in columns)
-                print(header)
-                print(Colors.dim('─' * len(header)))
+                # Afficher l'en-tête si configuré
+                if self.show_headers:
+                    # Calculer les largeurs de colonnes
+                    col_widths = []
+                    for i, col in enumerate(columns):
+                        max_len = len(str(col))
+                        for row in rows:
+                            val = str(row[i] if isinstance(row, (list, tuple)) else row)
+                            max_len = max(max_len, len(val))
+                        col_widths.append(min(max_len + 2, 50))  # Limite à 50
+                    
+                    # Afficher l'en-tête
+                    header_parts = []
+                    for i, col in enumerate(columns):
+                        header_parts.append(Colors.highlight(f"{col:<{col_widths[i]}}"))
+                    print("".join(header_parts))
+                    print(Colors.dim('─' * sum(col_widths)))
                 
-                # Afficher les données (limité à 50 lignes)
-                for i, row in enumerate(rows[:50]):
+                # Afficher les données (limité à 100 lignes)
+                max_rows = 100
+                for i, row in enumerate(rows[:max_rows]):
                     if isinstance(row, (list, tuple)):
-                        values = [str(v) if v is not None else "NULL" for v in row]
+                        values = [str(v) if v is not None else self.null_value for v in row]
                     else:
-                        values = [str(row)]
+                        values = [str(row) if row is not None else self.null_value]
                     
-                    # Colorer les valeurs
-                    colored_values = []
-                    for val in values:
-                        if val == "NULL":
-                            colored_values.append(Colors.dim(val))
+                    # Formater la ligne
+                    line_parts = []
+                    for j, val in enumerate(values):
+                        if val == self.null_value:
+                            colored_val = Colors.dim(val)
                         elif val.isdigit() or (val.replace('.', '', 1).isdigit() and val.count('.') <= 1):
-                            colored_values.append(Colors.sql_number(val))
+                            colored_val = Colors.sql_number(val)
                         elif val.startswith("'") and val.endswith("'"):
-                            colored_values.append(Colors.sql_string(val))
+                            colored_val = Colors.sql_string(val)
                         else:
-                            colored_values.append(val)
+                            colored_val = val
+                        
+                        if 'col_widths' in locals():
+                            line_parts.append(f"{colored_val:<{col_widths[j]}}")
+                        else:
+                            line_parts.append(colored_val)
                     
-                    print(" | ".join(colored_values))
+                    print("".join(line_parts))
                 
-                if len(rows) > 50:
-                    print(Colors.dim(f"... and {len(rows) - 50} more rows"))
+                if len(rows) > max_rows:
+                    print(Colors.dim(f"... and {len(rows) - max_rows} more rows"))
                 
                 print(Colors.dim(f"\n{count} row(s) returned"))
         
@@ -491,13 +635,14 @@ class GSQLShell(cmd.Cmd):
         else:
             print(Colors.success(f"Query executed successfully"))
         
-        # Afficher le temps d'exécution
-        if 'execution_time' in result:
-            time_str = f"{result['execution_time']:.3f}s"
-        else:
-            time_str = f"{execution_time:.3f}s"
-        
-        print(Colors.dim(f"Time: {time_str}"))
+        # Afficher le temps d'exécution si configuré
+        if self.show_timer:
+            if 'execution_time' in result:
+                time_str = f"{result['execution_time']:.3f}s"
+            else:
+                time_str = f"{execution_time:.3f}s"
+            
+            print(Colors.dim(f"Time: {time_str}"))
     
     # ==================== BUILT-IN COMMANDS ====================
     
@@ -515,6 +660,7 @@ SQL COMMANDS:
   DROP TABLE name
   ALTER TABLE name ADD COLUMN col TYPE
   CREATE INDEX idx_name ON table(column)
+  BEGIN TRANSACTION; ...; COMMIT/ROLLBACK
 
 GSQL SPECIAL COMMANDS:
   SHOW TABLES                    - List all tables
@@ -534,10 +680,24 @@ DOT COMMANDS (SQLite style):
   .exit / .quit                  - Exit shell
   .clear                         - Clear screen
   .history                       - Show command history
+  .mode [mode]                   - Set output mode
+  .timer [on|off]                - Toggle execution timer
+  .headers [on|off]              - Toggle column headers
+  .nullvalue STRING              - Set NULL display string
+  .width NUM1 NUM2 ...           - Set column widths
+
+SHELL FEATURES:
+  Multi-line SQL: End line with \
+  Syntax highlighting
+  Auto-completion (Tab key)
+  Command history (Up/Down arrows)
+  Ctrl+C to cancel command
+  Ctrl+D to exit
 
 SHELL COMMANDS:
   exit, quit, Ctrl+D             - Exit GSQL
   Ctrl+C                         - Cancel current command
+  help                           - Show this help
         """
         print(help_text.strip())
     
@@ -566,8 +726,8 @@ SHELL COMMANDS:
     
     def precmd(self, line: str) -> str:
         """Avant l'exécution de la commande"""
-        # Enregistrer dans l'historique (sauf les commandes spéciales)
-        if line and not line.startswith('.'):
+        # Enregistrer dans l'historique (sauf les commandes spéciales et multi-lignes)
+        if line and not line.startswith('.') and not self.multiline_mode:
             readline.add_history(line)
         return line
     
@@ -579,15 +739,17 @@ SHELL COMMANDS:
         """Gère Ctrl+C"""
         print("\n" + Colors.warning("Interrupted (Ctrl+C)"))
         self.prompt = Colors.info('gsql> ')
+        self.multiline_mode = False
+        self.multiline_buffer = []
     
     # ==================== SQL SYNTAX HIGHLIGHTING ====================
     
     def _colorize_sql(self, sql: str) -> str:
         """Colorise la syntaxe SQL"""
-        if not config.get('colors', True):
+        if not self.config.get('shell', {}).get('syntax_highlighting', True):
             return sql
         
-        # Mots-clés SQL (simplifié)
+        # Mots-clés SQL
         keywords = [
             'SELECT', 'FROM', 'WHERE', 'INSERT', 'INTO', 'VALUES',
             'UPDATE', 'SET', 'DELETE', 'CREATE', 'TABLE', 'DROP',
@@ -603,12 +765,35 @@ SHELL COMMANDS:
             'CASE', 'WHEN', 'THEN', 'ELSE', 'END'
         ]
         
+        # Fonctions SQL
+        functions = [
+            'COUNT', 'SUM', 'AVG', 'MIN', 'MAX', 'UPPER', 'LOWER',
+            'LENGTH', 'SUBSTR', 'SUBSTRING', 'TRIM', 'LTRIM', 'RTRIM',
+            'ROUND', 'ABS', 'CEIL', 'CEILING', 'FLOOR', 'RANDOM',
+            'NOW', 'CURRENT_DATE', 'CURRENT_TIME', 'CURRENT_TIMESTAMP',
+            'DATE', 'TIME', 'DATETIME', 'JULIANDAY', 'STRFTIME',
+            'YEAR', 'MONTH', 'DAY', 'HOUR', 'MINUTE', 'SECOND',
+            'COALESCE', 'NULLIF', 'IFNULL', 'IIF', 'CASE'
+        ]
+        
+        # Opérateurs
+        operators = ['=', '<>', '!=', '<', '>', '<=', '>=', '+', '-', '*', '/', '%', '||']
+        
         # Coloriser les mots-clés
         for keyword in keywords:
             pattern = rf'\b{keyword}\b'
             sql = re.sub(pattern, Colors.sql_keyword(keyword), sql, flags=re.IGNORECASE)
         
-        # Coloriser les chaînes (simplifié)
+        # Coloriser les fonctions
+        for func in functions:
+            pattern = rf'\b{func}\b(?=\()'
+            sql = re.sub(pattern, Colors.sql_function(func), sql, flags=re.IGNORECASE)
+        
+        # Coloriser les opérateurs
+        for op in operators:
+            sql = sql.replace(op, Colors.sql_operator(op))
+        
+        # Coloriser les chaînes
         sql = re.sub(r"'[^']*'", lambda m: Colors.sql_string(m.group(0)), sql)
         sql = re.sub(r'"[^"]*"', lambda m: Colors.sql_string(m.group(0)), sql)
         
@@ -645,20 +830,9 @@ class GSQLApp:
     
     def _load_config(self) -> Dict:
         """Charge la configuration"""
-        user_config = config.to_dict()
-        
-        # Fusionner avec la configuration par défaut
-        merged = DEFAULT_CONFIG.copy()
-        
-        # Mettre à jour avec la configuration utilisateur
-        for section in ['database', 'executor', 'shell']:
-            if section in user_config:
-                merged[section].update(user_config[section])
-        
-        # Mettre à jour la configuration globale
-        config.update(**merged.get('database', {}))
-        
-        return merged
+        # Pour l'instant, utiliser la config par défaut
+        # Vous pouvez ajouter la lecture depuis un fichier de config
+        return DEFAULT_CONFIG.copy()
     
     def _initialize(self, database_path: Optional[str] = None):
         """Initialise les composants GSQL"""
@@ -683,8 +857,6 @@ class GSQLApp:
                 self.nlp_translator = NLToSQLTranslator()
             else:
                 self.nlp_translator = None
-                if self.config['executor'].get('enable_nlp', False):
-                    print(Colors.warning("NLP features not available. Install NLTK for NLP support."))
             
             # Configurer l'auto-complétion
             self.completer = GSQLCompleter(self.db)
@@ -713,48 +885,6 @@ class GSQLApp:
             shell.cmdloop()
         except KeyboardInterrupt:
             print("\n" + Colors.info("Interrupted"))
-        finally:
-            self._cleanup()
-    
-    def run_query(self, query: str, database_path: Optional[str] = None):
-        """Exécute une requête unique"""
-        try:
-            self._initialize(database_path)
-            
-            # Exécuter la requête
-            result = self.db.execute(query)
-            
-            # Afficher le résultat
-            if result.get('success'):
-                print(Colors.success("Query executed successfully"))
-                
-                # Afficher les résultats pour SELECT
-                if result.get('type') == 'select':
-                    rows = result.get('rows', [])
-                    if rows:
-                        columns = result.get('columns', [])
-                        # Afficher l'en-tête
-                        print(" | ".join(columns))
-                        print("─" * (len(columns) * 10))
-                        # Afficher les données
-                        for row in rows:
-                            print(" | ".join(str(v) if v is not None else "NULL" for v in row))
-                        print(f"\n{len(rows)} row(s) returned")
-                    else:
-                        print("No rows returned")
-                
-                # Afficher les statistiques
-                if 'execution_time' in result:
-                    print(f"\nTime: {result['execution_time']:.3f}s")
-                
-                return result
-            else:
-                print(Colors.error(f"Query failed: {result.get('message', 'Unknown error')}"))
-                return None
-                
-        except Exception as e:
-            print(Colors.error(f"Error: {e}"))
-            return None
         finally:
             self._cleanup()
     
@@ -825,28 +955,35 @@ Examples:
     
     args = parser.parse_args()
     
+    # Créer l'application
+    app = GSQLApp()
+    
     # Configurer les couleurs
     if args.no_color:
-        config.set('colors', False)
+        app.config['shell']['colors'] = False
+        app.config['shell']['syntax_highlighting'] = False
     
     # Configurer le verbose
     if args.verbose:
-        config.set('log_level', 'DEBUG')
-        config.set('verbose_errors', True)
-    
-    # Créer l'application
-    app = GSQLApp()
+        app.config['log_level'] = 'DEBUG'
+        app.config['verbose_errors'] = True
     
     # Exécuter selon le mode
     if args.execute:
         # Mode exécution unique
-        app.run_query(args.execute, args.database)
+        print(Colors.error("Single query execution not fully implemented yet"))
+        print(Colors.dim("Use interactive shell instead"))
+        # Vous pouvez implémenter cette partie
+        # app.run_query(args.execute, args.database)
     elif args.file:
         # Mode fichier
         try:
             with open(args.file, 'r') as f:
                 queries = f.read()
-            app.run_query(queries, args.database)
+            print(Colors.error("File execution not fully implemented yet"))
+            print(Colors.dim("Use interactive shell instead"))
+            # Vous pouvez implémenter cette partie
+            # app.run_query(queries, args.database)
         except Exception as e:
             print(Colors.error(f"Error reading file: {e}"))
             sys.exit(1)
