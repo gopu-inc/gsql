@@ -23,60 +23,24 @@ from typing import Dict, List, Optional, Tuple, Any
 # ==================== IMPORTS ====================
 
 try:
-    # Configuration
-    from . import config
-    from . import __version__
-    
-    # Setup logging
-    from . import setup_logging
-    
-    # Core modules
+    from . import __version__, config, setup_logging
     from .database import create_database, Database
-    from .executor import QueryExecutor
+    from .executor import create_executor, QueryExecutor
+    from .functions import FunctionManager
     from .storage import SQLiteStorage
     
-    # NLP module (optional)
+    # NLP avec création automatique des patterns
     try:
-        from .nlp.translator import NLToSQLTranslator, create_translator
+        from .nlp.translator import NLToSQLTranslator, create_translator, nl_to_sql
         NLP_AVAILABLE = True
     except ImportError as e:
         print(f"Warning: NLP module not available: {e}")
         NLP_AVAILABLE = False
         NLToSQLTranslator = None
         create_translator = None
-    
-    # Functions manager (optional)
-    try:
-        from .functions.user_functions import FunctionManager
-        FUNCTIONS_AVAILABLE = True
-    except ImportError as e:
-        print(f"Note: Functions module not available, continuing without it: {e}")
-        FUNCTIONS_AVAILABLE = False
-        # Create a dummy FunctionManager class
-        class FunctionManager:
-            def __init__(self):
-                self.functions = {}
-            def get_functions(self):
-                return {}
-            def register_function(self, name, func):
-                self.functions[name.upper()] = func
-            def execute_function(self, name, args):
-                # Return dummy values for common functions
-                common_funcs = {
-                    'COUNT': lambda *args: len([a for a in args if a is not None]),
-                    'SUM': lambda *args: sum([a for a in args if isinstance(a, (int, float))]),
-                    'AVG': lambda *args: sum([a for a in args if isinstance(a, (int, float))]) / len([a for a in args if isinstance(a, (int, float))]) if args else None,
-                    'MAX': lambda *args: max([a for a in args if isinstance(a, (int, float))]) if args else None,
-                    'MIN': lambda *args: min([a for a in args if isinstance(a, (int, float))]) if args else None,
-                    'UPPER': lambda x: x.upper() if isinstance(x, str) else x,
-                    'LOWER': lambda x: x.lower() if isinstance(x, str) else x,
-                }
-                if name.upper() in common_funcs:
-                    return common_funcs[name.upper()](*args)
-                raise ValueError(f"Function '{name}' not available")
+        nl_to_sql = None
     
     GSQL_AVAILABLE = True
-    
 except ImportError as e:
     print(f"Error importing GSQL modules: {e}")
     GSQL_AVAILABLE = False
@@ -275,6 +239,10 @@ class Colors:
     @staticmethod
     def sql_function(text: str) -> str:
         return Colors.colorize(text, Colors.BRIGHT_MAGENTA)
+    
+    @staticmethod
+    def sql_type(text: str) -> str:
+        return Colors.colorize(text, Colors.BRIGHT_CYAN, Colors.ITALIC)
 
 # ==================== PROGRESS BAR ====================
 
@@ -322,32 +290,36 @@ class GSQLCompleter:
                 return
                 
             # Get tables
-            result = self.database.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            result = self.database.execute("SHOW TABLES")
             if result.get('success'):
                 self.table_names = [
-                    table['name'] 
-                    for table in result.get('rows', [])
+                    table['table'] 
+                    for table in result.get('tables', [])
                 ]
             
             # Get columns for each table
             self.column_names.clear()
             for table in self.table_names:
                 try:
-                    result = self.database.execute(f"PRAGMA table_info('{table}')")
+                    result = self.database.execute(f"DESCRIBE {table}")
                     if result.get('success'):
                         self.column_names[table] = [
-                            col['name'] 
-                            for col in result.get('rows', [])
+                            col['field'] 
+                            for col in result.get('columns', [])
                         ]
                 except Exception:
                     continue
             
-            # Get functions (simplified)
-            self.function_names = [
-                'COUNT', 'SUM', 'AVG', 'MIN', 'MAX',
-                'UPPER', 'LOWER', 'LENGTH', 'SUBSTR',
-                'ABS', 'ROUND', 'RANDOM', 'DATE', 'TIME'
-            ]
+            # Get functions
+            try:
+                result = self.database.execute("SHOW FUNCTIONS")
+                if result.get('success'):
+                    self.function_names = [
+                        func['function'] 
+                        for func in result.get('functions', [])
+                    ]
+            except Exception:
+                self.function_names = []
                     
         except Exception:
             logger.debug("Failed to refresh schema", exc_info=True)
@@ -548,7 +520,7 @@ class ResultDisplay:
     
     def display_show_tables(self, result: Dict) -> None:
         """Display SHOW TABLES results"""
-        tables = result.get('rows', [])
+        tables = result.get('tables', [])
         if not tables:
             print(Colors.warning("No tables found"))
             return
@@ -556,47 +528,51 @@ class ResultDisplay:
         print(Colors.success(f"Found {len(tables)} table(s):"))
         
         if self.rich_ui:
-            headers = ["Table", "Type"]
+            headers = ["Table", "Rows", "Type", "Created"]
             rows = []
             for table in tables:
                 rows.append([
-                    Colors.sql_table(table.get('name', '')),
-                    table.get('type', 'table')
+                    Colors.sql_table(table.get('table', '')),
+                    str(table.get('rows', 0)),
+                    table.get('type', 'table'),
+                    table.get('created_at', 'N/A')
                 ])
             self._display_table(headers, rows, len(tables), 0)
         else:
             for table in tables:
-                print(f"  • {Colors.highlight(table['name'])} ({table.get('type', 'table')})")
+                print(f"  • {Colors.highlight(table['table'])} ({table.get('rows', 0)} rows)")
     
     def display_describe(self, result: Dict) -> None:
         """Display DESCRIBE results"""
-        columns = result.get('rows', [])
+        columns = result.get('columns', [])
         if not columns:
             print(Colors.warning("No columns found"))
             return
         
-        table_name = columns[0].get('table', 'Unknown Table') if columns else 'Unknown Table'
+        table_name = result.get('table_name', 'Unknown Table')
         print(Colors.success(f"Table structure: {table_name}"))
         
         if self.rich_ui:
-            headers = ["Column", "Type", "Null", "Default", "Primary Key"]
+            headers = ["Column", "Type", "Null", "Key", "Default", "Extra"]
             rows = []
             for col in columns:
                 rows.append([
-                    Colors.sql_column(col.get('name', '')),
-                    col.get('type', ''),
-                    "YES" if col.get('notnull', 1) == 0 else "NO",
-                    str(col.get('dflt_value', 'NULL')),
-                    "YES" if col.get('pk', 0) > 0 else "NO"
+                    Colors.sql_column(col.get('field', '')),
+                    Colors.sql_type(col.get('type', '')),
+                    "✓" if col.get('null') else "✗",
+                    col.get('key', ''),
+                    col.get('default', 'NULL'),
+                    col.get('extra', '')
                 ])
             self._display_table(headers, rows, len(columns), 0)
         else:
             for col in columns:
-                null_str = "NULL" if col.get('notnull', 1) == 0 else "NOT NULL"
-                default_str = f"DEFAULT {col.get('dflt_value')}" if col.get('dflt_value') else ""
-                pk_str = " PRIMARY KEY" if col.get('pk', 0) > 0 else ""
+                null_str = "NULL" if col.get('null') else "NOT NULL"
+                default_str = f"DEFAULT {col.get('default')}" if col.get('default') else ""
+                key_str = f" {col.get('key')}" if col.get('key') else ""
+                extra_str = f" {col.get('extra')}" if col.get('extra') else ""
                 
-                line = f"  {Colors.highlight(col['name'])} {col['type']} {null_str} {default_str}{pk_str}"
+                line = f"  {Colors.highlight(col['field'])} {col['type']} {null_str} {default_str}{key_str}{extra_str}"
                 print(line.strip())
     
     def display_stats(self, result: Dict) -> None:
@@ -623,8 +599,15 @@ class ResultDisplay:
             'insert': self._display_insert,
             'update': self._display_update_delete,
             'delete': self._display_update_delete,
-            'create': self._display_create_drop,
-            'drop': self._display_create_drop,
+            'show_tables': self.display_show_tables,
+            'describe': self.display_describe,
+            'stats': self.display_stats,
+            'vacuum': self._display_vacuum,
+            'backup': self._display_backup,
+            'help': self._display_help,
+            'show_functions': self._display_functions,
+            'export': self._display_export,
+            'import': self._display_import
         }
         
         handler = handlers.get(query_type)
@@ -636,7 +619,7 @@ class ResultDisplay:
                 print(Colors.dim(f"Rows affected: {result['rows_affected']}"))
         
         # Show execution time
-        if execution_time > 0:
+        if execution_time > 0 and config.get('shell', {}).get('show_timer', True):
             time_str = f"{execution_time:.3f}s"
             print(Colors.dim(f"Time: {time_str}"))
     
@@ -658,10 +641,63 @@ class ResultDisplay:
             if rows == 0:
                 print(Colors.warning("  (No rows matched the condition)"))
     
-    def _display_create_drop(self, result: Dict) -> None:
-        """Display CREATE/DROP results"""
-        query_type = result.get('type', '').upper()
-        print(Colors.success(f"✓ {query_type} executed successfully"))
+    def _display_vacuum(self, result: Dict) -> None:
+        """Display VACUUM results"""
+        print(Colors.success("✓ Database optimized"))
+        if 'freed_space' in result:
+            print(Colors.dim(f"Freed space: {result['freed_space']} bytes"))
+    
+    def _display_backup(self, result: Dict) -> None:
+        """Display BACKUP results"""
+        print(Colors.success("✓ Backup created successfully"))
+        if 'backup_file' in result:
+            print(Colors.dim(f"Backup file: {result['backup_file']}"))
+        if 'size' in result:
+            print(Colors.dim(f"Backup size: {result['size']} bytes"))
+    
+    def _display_help(self, result: Dict) -> None:
+        """Display HELP results"""
+        if 'message' in result:
+            print(result['message'])
+        else:
+            self._show_help()
+    
+    def _display_functions(self, result: Dict) -> None:
+        """Display SHOW FUNCTIONS results"""
+        functions = result.get('functions', [])
+        if not functions:
+            print(Colors.warning("No functions found"))
+            return
+        
+        print(Colors.success(f"Found {len(functions)} function(s):"))
+        
+        if self.rich_ui:
+            headers = ["Function", "Type", "Description"]
+            rows = []
+            for func in functions:
+                rows.append([
+                    Colors.sql_function(func.get('function', '')),
+                    func.get('type', 'builtin'),
+                    func.get('description', '')
+                ])
+            self._display_table(headers, rows, len(functions), 0)
+        else:
+            for func in functions:
+                print(f"  • {Colors.highlight(func['function'])} ({func.get('type', 'builtin')})")
+    
+    def _display_export(self, result: Dict) -> None:
+        """Display EXPORT results"""
+        print(Colors.success("✓ Export completed"))
+        if 'export_file' in result:
+            print(Colors.dim(f"Export file: {result['export_file']}"))
+        if 'rows_exported' in result:
+            print(Colors.dim(f"Rows exported: {result['rows_exported']}"))
+    
+    def _display_import(self, result: Dict) -> None:
+        """Display IMPORT results"""
+        print(Colors.success("✓ Import completed"))
+        if 'rows_imported' in result:
+            print(Colors.dim(f"Rows imported: {result['rows_imported']}"))
     
     def _show_help(self) -> None:
         """Show comprehensive help"""
@@ -696,28 +732,47 @@ UTILITY COMMANDS:
   EXPLAIN [QUERY PLAN] query
   ANALYZE [table]
   VACUUM [INTO 'filename']
+  BACKUP [TO 'filename']
   PRAGMA pragma_name [= value]
 
-GSQL SPECIAL COMMANDS (DOT COMMANDS):
-  .tables                         - List all tables
-  .schema [table]                 - Show table structure
-  .indexes [table]                - Show indexes for table
-  .stats                          - Show database statistics
-  .info                           - System information
-  .mode [table|csv|json|list]     - Set output mode
-  .headers [on|off]               - Toggle headers
-  .timer [on|off]                 - Toggle execution timer
-  .backup [file]                  - Create backup
-  .restore [file]                 - Restore from backup
-  .vacuum                         - Optimize database
-  .help [command]                 - Show help
-  .exit / .quit                   - Exit shell
-  .clear                          - Clear screen
-  .history                        - Show command history
+GSQL SPECIAL COMMANDS:
+  SHOW TABLES                    - List all tables
+  SHOW INDEXES [FROM table]      - List indexes
+  SHOW FUNCTIONS                 - List available functions
+  DESCRIBE table                 - Show table structure
+  STATS                          - Show database statistics
+  HELP [command]                 - Show help
+  EXPORT table TO 'file' [FORMAT csv|json]
+  IMPORT 'file' INTO table [FORMAT csv|json]
+  OPTIMIZE                       - Optimize database
+  INFO                           - System information
+
+DOT COMMANDS (.commands):
+  .tables [pattern]              - List tables matching pattern
+  .schema [table]                - Show schema for table
+  .indexes [table]               - Show indexes for table
+  .stats                         - Database statistics
+  .info                          - System info
+  .mode [table|csv|json|list]    - Set output mode
+  .headers [on|off]              - Toggle headers
+  .timer [on|off]                - Toggle execution timer
+  .width NUM1 NUM2 ...           - Set column widths
+  .nullvalue STRING              - Set NULL display string
+  .backup [file]                 - Create backup
+  .restore [file]                - Restore from backup
+  .vacuum                        - Optimize database
+  .help [command]                - Show help
+  .exit / .quit                  - Exit shell
+  .clear                         - Clear screen
+  .history                       - Show command history
 
 NATURAL LANGUAGE COMMANDS (NLP):
   show tables                    - List tables
+  count [table]                  - Count rows
   describe [table]               - Table structure
+  average [column] from [table]  - Calculate average
+  sum [column] from [table]      - Calculate sum
+  max/min [column] from [table]  - Find max/min
   add to [table] values (...)    - Insert data
   delete from [table] where ...  - Delete data
   update [table] set ... where .. - Update data
@@ -795,7 +850,7 @@ class GSQLShell(cmd.Cmd):
             
         config_data = self.gsql.config.get('shell', {})
         history_file = config_data.get('history_file', '.gsql_history')
-        base_dir = self.gsql.config['database'].get('base_dir', '/root/.gsql')
+        base_dir = self.gsql.config['database'].get('base_dir')
         
         self.history_file = Path(base_dir) / history_file
         
@@ -945,12 +1000,12 @@ class GSQLShell(cmd.Cmd):
         # Enhanced dot command handlers
         handlers = {
             # Information commands
-            'tables': lambda: self._execute_sql("SELECT name FROM sqlite_master WHERE type='table'"),
+            'tables': lambda: self._execute_sql(f"SHOW TABLES {' '.join(args)}"),
             'schema': lambda: self._handle_schema(args),
             'indexes': lambda: self._handle_indexes(args),
-            'functions': lambda: print(Colors.info("Functions not implemented yet")),
-            'stats': lambda: self._show_stats(),
-            'info': lambda: self._show_info(),
+            'functions': lambda: self._execute_sql("SHOW FUNCTIONS"),
+            'stats': lambda: self._execute_sql("STATS"),
+            'info': lambda: self._execute_sql("INFO"),
             'status': lambda: self._show_status(),
             'version': lambda: print(f"GSQL {__version__}"),
             
@@ -964,7 +1019,7 @@ class GSQLShell(cmd.Cmd):
             'backup': lambda: self._handle_backup(args),
             'restore': lambda: self._handle_restore(args),
             'vacuum': lambda: self._execute_sql("VACUUM"),
-            'optimize': lambda: self._handle_optimize(),
+            'optimize': lambda: self._execute_sql("OPTIMIZE"),
             'reindex': lambda: self._execute_sql("REINDEX"),
             'import': lambda: self._handle_import(args),
             'export': lambda: self._handle_export(args),
@@ -1013,20 +1068,20 @@ class GSQLShell(cmd.Cmd):
         if not args:
             # Show all schemas
             if self.db:
-                result = self.db.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                result = self.db.execute("SHOW TABLES")
                 if result.get('success'):
-                    tables = result.get('rows', [])
+                    tables = result.get('tables', [])
                     for table in tables:
-                        self._execute_sql(f"PRAGMA table_info('{table['name']}')", silent=True)
+                        self._execute_sql(f"DESCRIBE {table['table']}", silent=True)
         else:
-            self._execute_sql(f"PRAGMA table_info('{args[0]}')")
+            self._execute_sql(f"DESCRIBE {args[0]}")
     
     def _handle_indexes(self, args: List[str]) -> None:
         """Handle .indexes command"""
         if args:
-            self._execute_sql(f"PRAGMA index_list('{args[0]}')")
+            self._execute_sql(f"SHOW INDEXES FROM {args[0]}")
         else:
-            self._execute_sql("SELECT * FROM sqlite_master WHERE type='index'")
+            self._execute_sql("SHOW INDEXES")
     
     def _handle_run(self, args: List[str]) -> None:
         """Handle .run command - execute SQL from file"""
@@ -1072,107 +1127,54 @@ class GSQLShell(cmd.Cmd):
         else:
             self._execute_sql("ANALYZE")
     
-    def _show_stats(self) -> None:
-        """Show database statistics"""
-        if not self.db:
-            print(Colors.error("No database connection"))
-            return
-        
-        try:
-            stats_result = self.db.get_stats()
-            if stats_result.get('success'):
-                self.result_display.display_stats(stats_result)
-            else:
-                print(Colors.error(f"Failed to get stats: {stats_result.get('message')}"))
-        except Exception as e:
-            print(Colors.error(f"Error getting stats: {e}"))
-    
-    def _show_info(self) -> None:
-        """Show system information"""
-        print(Colors.info("System Information:"))
-        print(f"  GSQL Version: {__version__}")
-        print(f"  Python: {sys.version}")
-        print(f"  Platform: {sys.platform}")
-        print(f"  NLP Available: {'Yes' if NLP_AVAILABLE else 'No'}")
-        print(f"  NLP Enabled: {'Yes' if self.nlp_enabled else 'No'}")
-        if self.db and hasattr(self.db.storage, 'db_path'):
-            print(f"  Database: {self.db.storage.db_path}")
-    
     def _handle_backup(self, args: List[str]) -> None:
         """Handle .backup command"""
         if args:
-            backup_file = args[0]
+            self._execute_sql(f"BACKUP TO '{args[0]}'")
         else:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            if self.db and hasattr(self.db.storage, 'db_path'):
-                db_name = Path(self.db.storage.db_path).stem
-                backup_file = f"{db_name}_backup_{timestamp}.db"
-            else:
-                backup_file = f"backup_{timestamp}.db"
-        
-        if not self.db:
-            print(Colors.error("No database connection"))
-            return
-        
-        try:
-            result = self.db.backup(backup_file)
-            if result.get('success'):
-                print(Colors.success(f"Backup created: {backup_file}"))
-            else:
-                print(Colors.error(f"Backup failed: {result.get('message')}"))
-        except Exception as e:
-            print(Colors.error(f"Backup error: {e}"))
+            self._execute_sql("BACKUP")
     
     def _handle_restore(self, args: List[str]) -> None:
         """Handle .restore command"""
         if not args:
-            print(Colors.error("Usage: .restore <backup_file>"))
+            print(Colors.error("Usage: .restore <filename>"))
             return
         
-        if not self.db:
-            print(Colors.error("No database connection"))
-            return
-        
-        backup_file = args[0]
-        if not Path(backup_file).exists():
-            print(Colors.error(f"Backup file not found: {backup_file}"))
-            return
-        
-        try:
-            result = self.db.restore(backup_file)
-            if result.get('success'):
-                print(Colors.success("Database restored successfully"))
-            else:
-                print(Colors.error(f"Restore failed: {result.get('message')}"))
-        except Exception as e:
-            print(Colors.error(f"Restore error: {e}"))
-    
-    def _handle_optimize(self) -> None:
-        """Handle .optimize command"""
-        if not self.db:
-            print(Colors.error("No database connection"))
-            return
-        
-        try:
-            result = self.db.optimize()
-            if result.get('success'):
-                print(Colors.success("Database optimization completed"))
-            else:
-                print(Colors.error(f"Optimization failed: {result.get('message')}"))
-        except Exception as e:
-            print(Colors.error(f"Optimization error: {e}"))
+        self._execute_sql(f"RESTORE FROM '{args[0]}'")
     
     def _handle_import(self, args: List[str]) -> None:
         """Handle .import command"""
-        print(Colors.info("Import not implemented yet"))
+        if len(args) < 2:
+            print(Colors.error("Usage: .import <filename> <table> [FORMAT csv|json]"))
+            return
+        
+        filename = args[0]
+        table = args[1]
+        format = args[2] if len(args) > 2 else 'csv'
+        
+        self._execute_sql(f"IMPORT '{filename}' INTO {table} FORMAT {format}")
     
     def _handle_export(self, args: List[str]) -> None:
         """Handle .export command"""
-        print(Colors.info("Export not implemented yet"))
+        if len(args) < 2:
+            print(Colors.error("Usage: .export <table> <filename> [FORMAT csv|json]"))
+            return
+        
+        table = args[0]
+        filename = args[1]
+        format = args[2] if len(args) > 2 else 'csv'
+        
+        self._execute_sql(f"EXPORT {table} TO '{filename}' FORMAT {format}")
     
     def _handle_clone(self, args: List[str]) -> None:
         """Handle .clone command"""
-        print(Colors.info("Clone not implemented yet"))
+        if not args:
+            print(Colors.error("Usage: .clone <new_database>"))
+            return
+        
+        new_db = args[0]
+        print(Colors.info(f"Cloning database to {new_db}..."))
+        # Implementation would depend on database cloning functionality
     
     def _handle_mode(self, args: List[str]) -> None:
         """Handle .mode command"""
@@ -1206,18 +1208,16 @@ class GSQLShell(cmd.Cmd):
     def _handle_timer(self, args: List[str]) -> None:
         """Handle .timer command"""
         if not args:
-            current = self.gsql.config.get('shell', {}).get('show_timer', True) if self.gsql else True
+            current = config.get('shell', {}).get('show_timer', True)
             status = "on" if current else "off"
             print(Colors.info(f"Timer is {status}"))
             return
         
         if args[0].lower() in ['on', 'yes', 'true', '1']:
-            if self.gsql:
-                self.gsql.config['shell']['show_timer'] = True
+            config.set('shell.show_timer', True)
             print(Colors.success("Timer enabled"))
         else:
-            if self.gsql:
-                self.gsql.config['shell']['show_timer'] = False
+            config.set('shell.show_timer', False)
             print(Colors.success("Timer disabled"))
     
     def _handle_headers(self, args: List[str]) -> None:
@@ -1255,11 +1255,32 @@ class GSQLShell(cmd.Cmd):
     
     def _handle_bail(self, args: List[str]) -> None:
         """Handle .bail command"""
-        print(Colors.info("Bail command not implemented"))
+        if not args:
+            current = config.get('executor', {}).get('stop_on_error', True)
+            status = "on" if current else "off"
+            print(Colors.info(f"Bail is {status}"))
+            return
+        
+        if args[0].lower() in ['on', 'yes', 'true', '1']:
+            config.set('executor.stop_on_error', True)
+            print(Colors.success("Stop on error enabled"))
+        else:
+            config.set('executor.stop_on_error', False)
+            print(Colors.success("Stop on error disabled"))
     
     def _handle_timeout(self, args: List[str]) -> None:
         """Handle .timeout command"""
-        print(Colors.info("Timeout command not implemented"))
+        if not args:
+            current = config.get('executor', {}).get('query_timeout', 30)
+            print(Colors.info(f"Query timeout: {current} seconds"))
+            return
+        
+        try:
+            timeout = int(args[0])
+            config.set('executor.query_timeout', timeout)
+            print(Colors.success(f"Query timeout set to {timeout} seconds"))
+        except ValueError:
+            print(Colors.error("Invalid timeout value"))
     
     def _handle_help(self, args: List[str]) -> None:
         """Handle .help command"""
@@ -1293,6 +1314,7 @@ class GSQLShell(cmd.Cmd):
         else:
             # Show help for SQL command
             print(Colors.info(f"Help for {args[0]}: ..."))
+            # Could expand with detailed SQL command help
     
     def _clear_screen(self) -> None:
         """Clear screen"""
@@ -1360,14 +1382,11 @@ class GSQLShell(cmd.Cmd):
     def _show_status(self) -> None:
         """Show shell status"""
         status = []
-        if self.db and hasattr(self.db.storage, 'db_path'):
-            status.append(f"Database: {self.db.storage.db_path}")
-        else:
-            status.append("Database: Not connected")
+        status.append(f"Database: {getattr(self.db.storage, 'db_path', 'unknown') if self.db else 'Not connected'}")
         status.append(f"NLP: {'Enabled' if self.nlp_enabled else 'Disabled'}")
         status.append(f"Output mode: {self.result_display.mode}")
         status.append(f"Headers: {'On' if self.result_display.show_headers else 'Off'}")
-        status.append(f"Timer: {'On' if self.gsql.config.get('shell', {}).get('show_timer', True) if self.gsql else True else 'Off'}")
+        status.append(f"Timer: {'On' if config.get('shell', {}).get('show_timer', True) else 'Off'}")
         if self._current_transaction:
             status.append("Transaction: Active")
         if self._batch_mode:
@@ -1386,12 +1405,10 @@ class GSQLShell(cmd.Cmd):
             if self.nlp_enabled:
                 print(Colors.success("NLP is enabled"))
                 if self.nlp_translator:
-                    try:
-                        stats = self.nlp_translator.get_statistics()
-                        print(Colors.dim(f"  Patterns: {stats.get('total_patterns', 0)}"))
-                        print(Colors.dim(f"  Translations: {stats.get('total_translations', 0)}"))
-                    except:
-                        print(Colors.dim("  Stats not available"))
+                    stats = self.nlp_translator.get_statistics()
+                    print(Colors.dim(f"  Patterns: {stats['total_patterns']}"))
+                    print(Colors.dim(f"  Translations: {stats['total_translations']}"))
+                    print(Colors.dim(f"  Cache size: {stats['cache_size']}"))
             else:
                 print(Colors.warning("NLP is disabled"))
             return
@@ -1428,14 +1445,19 @@ class GSQLShell(cmd.Cmd):
             print(Colors.error("NLP not initialized"))
             return
         
-        try:
-            stats = self.nlp_translator.get_statistics()
-            print(Colors.info("NLP Statistics:"))
-            print(f"  Patterns loaded: {stats.get('total_patterns', 0)}")
-            print(f"  Total translations: {stats.get('total_translations', 0)}")
-            print(f"  NLTK available: {stats.get('nltk_available', False)}")
-        except Exception as e:
-            print(Colors.error(f"Error getting NLP stats: {e}"))
+        stats = self.nlp_translator.get_statistics()
+        
+        print(Colors.info("NLP Statistics:"))
+        print(f"  Patterns loaded: {stats['total_patterns']}")
+        print(f"  Total translations: {stats['total_translations']}")
+        print(f"  Cache size: {stats['cache_size']}")
+        print(f"  NLTK available: {stats['nltk_available']}")
+        print(f"  Database context: {'Loaded' if stats['db_context_loaded'] else 'Not loaded'}")
+        
+        if stats['top_patterns']:
+            print(Colors.info("\nTop 5 patterns:"))
+            for i, pattern in enumerate(stats['top_patterns'], 1):
+                print(f"  {i}. {pattern['pattern']} (used {pattern['usage_count']} times)")
     
     def _learn_nlp_pattern(self, args: List[str]) -> None:
         """Learn a new NLP pattern"""
@@ -1450,14 +1472,11 @@ class GSQLShell(cmd.Cmd):
         nl_query = ' '.join(args[:-1])
         sql_query = args[-1]
         
-        try:
-            success = self.nlp_translator.learn_from_example(nl_query, sql_query)
-            if success:
-                print(Colors.success("Pattern learned successfully"))
-            else:
-                print(Colors.error("Failed to learn pattern"))
-        except Exception as e:
-            print(Colors.error(f"Error learning pattern: {e}"))
+        success = self.nlp_translator.learn_from_example(nl_query, sql_query)
+        if success:
+            print(Colors.success("Pattern learned successfully"))
+        else:
+            print(Colors.error("Failed to learn pattern")
     
     def _show_nlp_patterns(self, args: List[str]) -> None:
         """Show NLP patterns"""
@@ -1465,7 +1484,25 @@ class GSQLShell(cmd.Cmd):
             print(Colors.error("NLP not initialized"))
             return
         
-        print(Colors.info("NLP patterns not implemented"))
+        pattern_type = args[0] if args else None
+        
+        if pattern_type and pattern_type in self.nlp_translator.patterns:
+            patterns = self.nlp_translator.patterns[pattern_type]
+            print(Colors.info(f"{pattern_type.upper()} patterns ({len(patterns)}):"))
+            for pattern in patterns:
+                print(f"  • {pattern.nl_pattern} → {pattern.sql_template}")
+        else:
+            # Show all patterns
+            total = 0
+            for ptype, patterns in self.nlp_translator.patterns.items():
+                print(Colors.info(f"{ptype.upper()} patterns ({len(patterns)}):")
+                for pattern in patterns[:5]:  # Show first 5 of each type
+                    print(f"  • {pattern.nl_pattern}")
+                if len(patterns) > 5:
+                    print(f"  ... and {len(patterns) - 5} more")
+                total += len(patterns)
+                print()
+            print(Colors.dim(f"Total patterns: {total}"))
     
     def _handle_nlp_query(self, nl_query: str) -> Optional[bool]:
         """Handle natural language query"""
@@ -1482,7 +1519,7 @@ class GSQLShell(cmd.Cmd):
             print(Colors.info(f"SQL Translation: {translation['sql']}"))
             print(Colors.info(f"Confidence: {translation['confidence']:.2f}"))
             
-            if translation.get('explanation'):
+            if translation['explanation']:
                 print(Colors.dim(f"Explanation: {translation['explanation']}"))
             
             # Check confidence threshold
@@ -1545,16 +1582,13 @@ class GSQLShell(cmd.Cmd):
                 if is_nlp and nl_query and self.nlp_translator:
                     auto_learn = self.gsql.config['executor'].get('nlp_auto_learn', True) if self.gsql else True
                     if auto_learn:
-                        try:
-                            self.nlp_translator.learn_from_example(
-                                nl_query=nl_query,
-                                sql_query=sql,
-                                feedback_score=0.8
-                            )
-                            if not silent:
-                                print(Colors.dim("Pattern learned from successful execution"))
-                        except:
-                            pass
+                        self.nlp_translator.learn_from_example(
+                            nl_query=nl_query,
+                            sql_query=sql,
+                            feedback_score=0.8
+                        )
+                        if not silent:
+                            print(Colors.dim("Pattern learned from successful execution"))
                 
                 return True
             else:
@@ -1563,14 +1597,11 @@ class GSQLShell(cmd.Cmd):
                 
                 # Learn from failed NLP translation with lower score
                 if is_nlp and nl_query and self.nlp_translator:
-                    try:
-                        self.nlp_translator.learn_from_example(
-                            nl_query=nl_query,
-                            sql_query=sql,
-                            feedback_score=0.2
-                        )
-                    except:
-                        pass
+                    self.nlp_translator.learn_from_example(
+                        nl_query=nl_query,
+                        sql_query=sql,
+                        feedback_score=0.2
+                    )
                 
                 return False
                 
@@ -1603,23 +1634,28 @@ SQL COMMANDS:
   SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER
   BEGIN, COMMIT, ROLLBACK, EXPLAIN, ANALYZE, VACUUM
 
+GSQL SPECIAL:
+  SHOW TABLES, SHOW INDEXES, SHOW FUNCTIONS
+  DESCRIBE table, STATS, HELP, EXPORT, IMPORT
+
 DOT COMMANDS:
-  .tables                    - List tables
-  .schema [table]           - Show table structure  
-  .stats                    - Database statistics
+  .tables [pattern]    - List tables
+  .schema [table]      - Show table structure  
+  .stats              - Database statistics
   .mode [table|csv|json|list] - Set output mode
-  .timer [on|off]          - Toggle execution timer
-  .headers [on|off]        - Toggle column headers
-  .backup [file]           - Create backup
-  .vacuum                  - Optimize database
-  .help [command]          - Show help
-  .exit / .quit            - Exit shell
-  .clear                   - Clear screen
-  .history                 - Show command history
+  .timer [on|off]     - Toggle execution timer
+  .headers [on|off]   - Toggle column headers
+  .backup [file]      - Create backup
+  .vacuum             - Optimize database
+  .help [command]     - Show help
+  .exit / .quit       - Exit shell
+  .clear              - Clear screen
+  .history            - Show command history
 
 NLP COMMANDS:
-  .nlp [on|off]            - Enable/disable NLP
-  .nlp_stats               - Show NLP statistics
+  .nlp [on|off]       - Enable/disable NLP
+  .nlp_stats          - Show NLP statistics
+  .nlp_learn          - Learn new NLP pattern
 
 Type '.help <command>' for more information on a specific command.
             """
@@ -1687,33 +1723,25 @@ class GSQLApp:
         self.nlp_enabled = False
         self.nlp_patterns_file = None
         
-        # Setup logging
-        try:
-            log_level = self.config.get('log_level', 'INFO')
-            log_file = self.config.get('log_file')
-            setup_logging(level=log_level, log_file=log_file)
-        except:
-            # Basic logging setup
-            logging.basicConfig(
-                level=logging.INFO,
-                format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-            )
+        setup_logging(
+            level=self.config.get('log_level', 'INFO'),
+            log_file=self.config.get('log_file')
+        )
         
         logger.info(f"GSQL v{__version__} initialized")
     
     def _load_config(self) -> Dict:
         """Load configuration"""
-        # Start with default config
+        user_config = config.to_dict()
         merged = DEFAULT_CONFIG.copy()
         
-        # Try to merge user config
-        try:
-            user_config = config.to_dict()
-            for section in ['database', 'executor', 'shell']:
-                if section in user_config:
-                    merged[section].update(user_config[section])
-        except:
-            pass
+        # Merge configurations
+        for section in ['database', 'executor', 'shell']:
+            if section in user_config:
+                merged[section].update(user_config[section])
+        
+        # Update global config
+        config.update(**merged.get('database', {}))
         
         return merged
     
@@ -1736,13 +1764,15 @@ class GSQLApp:
             self.nlp_patterns_file = patterns_file
         else:
             # Chemin par défaut
-            nlp_dir = Path(self.config['database'].get('base_dir', '/root/.gsql')) / 'nlp'
+            nlp_dir = Path(self.config['database'].get('base_dir')) / 'nlp'
             nlp_dir.mkdir(exist_ok=True, parents=True)
             self.nlp_patterns_file = str(nlp_dir / 'patterns.json')
         
         # Mettre à jour la configuration
         self.config['executor']['enable_nlp'] = True
         self.config['executor']['nlp_confidence_threshold'] = confidence_threshold
+        config.set('executor.enable_nlp', True)
+        config.set('executor.nlp_confidence_threshold', confidence_threshold)
         
         logger.info(f"NLP enabled with patterns file: {self.nlp_patterns_file}")
         logger.info(f"NLP confidence threshold: {confidence_threshold}")
@@ -1758,9 +1788,8 @@ class GSQLApp:
         
         try:
             # Créer le traducteur
-            db_path = database_path or (self.db.storage.db_path if self.db else None)
             self.nlp_translator = create_translator(
-                db_path=db_path,
+                db_path=database_path or (self.db.storage.db_path if self.db else None),
                 patterns_path=self.nlp_patterns_file
             )
             
@@ -1779,355 +1808,7 @@ class GSQLApp:
             # Database - filtrer uniquement les paramètres supportés
             db_config = self.config['database'].copy()
             
-            # Paramètres supportés par create_database
-            supported_params = ['base_dir', 'buffer_pool_size', 'enable_wal', 'auto_recovery']
-            filtered_config = {k: v for k, v in db_config.items() if k in supported_params}
-            
-            if database_path:
-                filtered_config['db_path'] = database_path
-            
-            logger.debug(f"Creating database with config: {filtered_config}")
-            
-            self.db = create_database(**filtered_config)
-            
-            # Function manager (if available)
-            if FUNCTIONS_AVAILABLE and FunctionManager:
-                try:
-                    self.function_manager = FunctionManager()
-                    logger.info("Function manager initialized")
-                except Exception as e:
-                    logger.warning(f"Failed to initialize function manager: {e}")
-            
-            # NLP (optional)
-            if self.nlp_enabled:
-                nlp_success = self.initialize_nlp(database_path)
-                if nlp_success:
-                    print(Colors.success("✓ NLP initialized"))
-                else:
-                    print(Colors.warning("⚠ NLP initialization failed"))
-            
-            # Autocompleter
-            self.completer = GSQLCompleter(self.db)
-            
-            print(Colors.success("✓ GSQL initialized successfully"))
-            if self.db and hasattr(self.db, 'storage') and hasattr(self.db.storage, 'db_path'):
-                print(Colors.dim(f"Database: {self.db.storage.db_path}"))
-            
-            if self.nlp_enabled:
-                print(Colors.dim(f"NLP: Enabled (confidence: {self.config['executor'].get('nlp_confidence_threshold', 0.4)})"))
-            
-        except Exception as e:
-            print(Colors.error(f"Failed to initialize GSQL: {e}"))
-            traceback.print_exc()
-            sys.exit(1)
-    
-    def run_shell(self, database_path: Optional[str] = None) -> None:
-        """Run interactive shell"""
-        self.initialize(database_path)
-        shell = GSQLShell(self)
-        
-        signal.signal(signal.SIGINT, shell.sigint_handler)
-        
-        try:
-            shell.cmdloop()
-        except KeyboardInterrupt:
-            print(f"\n{Colors.info('Session terminated')}")
-        finally:
-            self.cleanup()
-    
-    def run_nlp_query(self, nl_query: str, database_path: Optional[str] = None) -> Optional[Dict]:
-        """Execute a natural language query"""
-        if not self.nlp_enabled:
-            # Activer NLP pour cette exécution
-            self.setup_nlp(enable_nlp=True)
-        
-        try:
-            self.initialize(database_path)
-            
-            if not hasattr(self, 'nlp_translator') or not self.nlp_translator:
-                print(Colors.error("NLP translator not initialized"))
-                return None
-            
-            # Traduire la requête NL
-            translation = self.nlp_translator.translate(nl_query)
-            
-            print(Colors.info(f"NL Query: {nl_query}"))
-            print(Colors.info(f"Translated to SQL: {translation['sql']}"))
-            print(Colors.info(f"Confidence: {translation['confidence']:.2f}"))
-            
-            if translation.get('explanation'):
-                print(Colors.dim(f"Explanation: {translation['explanation']}"))
-            
-            # Vérifier la confiance
-            confidence_threshold = self.config['executor'].get('nlp_confidence_threshold', 0.4)
-            if translation['confidence'] < confidence_threshold:
-                print(Colors.warning(f"⚠ Low confidence ({translation['confidence']:.2f} < {confidence_threshold})"))
-                
-                # Demander confirmation
-                response = input(Colors.info("Execute this query? (y/N) ")).lower()
-                if response not in ['y', 'yes', 'o', 'oui']:
-                    print(Colors.info("Query cancelled"))
-                    return None
-            
-            # Exécuter la requête SQL
-            result = self.db.execute(translation['sql'])
-            
-            # Afficher le résultat
-            if result.get('success'):
-                display = ResultDisplay(self.config['shell'].get('rich_ui', True))
-                display.display_generic(result, result.get('type', ''), 
-                                      result.get('execution_time', 0))
-                return result
-            else:
-                print(Colors.error(f"Query failed: {result.get('message', 'Unknown error')}"))
-                return None
-                
-        except Exception as e:
-            print(Colors.error(f"Error: {e}"))
-            return None
-        finally:
-            self.cleanup()
-    
-    def run_query(self, query: str, database_path: Optional[str] = None) -> Optional[Dict]:
-        """Execute single query (SQL or NLP)"""
-        # Détecter si c'est une requête NLP
-        if self.nlp_enabled and self._is_nlp_query(query):
-            return self.run_nlp_query(query, database_path)
-        else:
-            # Exécuter comme requête SQL normale
-            try:
-                self.initialize(database_path)
-                result = self.db.execute(query)
-                
-                if result.get('success'):
-                    display = ResultDisplay(self.config['shell'].get('rich_ui', True))
-                    display.display_generic(result, result.get('type', ''), 
-                                          result.get('execution_time', 0))
-                    return result
-                else:
-                    print(Colors.error(f"Query failed: {result.get('message', 'Unknown error')}"))
-                    return None
-                    
-            except Exception as e:
-                print(Colors.error(f"Error: {e}"))
-                return None
-            finally:
-                self.cleanup()
-    
-    def _is_nlp_query(self, query: str) -> bool:
-        """Detect if query is natural language"""
-        # Ne pas traiter les commandes SQL évidentes
-        sql_keywords = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 
-                       'CREATE', 'DROP', 'SHOW', 'DESCRIBE',
-                       'ALTER', 'BEGIN', 'COMMIT', 'ROLLBACK',
-                       'EXPLAIN', 'ANALYZE', 'VACUUM', 'PRAGMA',
-                       'WITH', 'RECURSIVE']
-        
-        query_upper = query.strip().upper()
-        for keyword in sql_keywords:
-            if query_upper.startswith(keyword):
-                return False
-        
-        # Détecter le langage naturel
-        nlp_patterns = [
-            r'^(show|display|list|get)\s+',
-            r'^(how many|count of|number of)\s+',
-            r'^(what is|tell me|give me)\s+',
-            r'^(find|search|look for)\s+',
-            r'^(average|mean|sum|total|max|min|maximum|minimum)\s+',
-            r'^(add|insert|create new|new)\s+',
-            r'^(delete|remove|erase)\s+',
-            r'^(update|change|modify|edit)\s+'
-        ]
-        
-        query_lower = query.lower()
-        return any(re.search(pattern, query_lower) for pattern in nlp_patterns)
-    
-    def cleanup(self) -> None:
-        """Cleanup resources"""
-        try:
-            if self.db:
-                self.db.close()
-                print(Colors.dim("Database closed"))
-        except Exception:
-            pass
-
-# ==================== COMMAND LINE INTERFACE ====================
-
-def create_parser() -> argparse.ArgumentParser:
-    """Create command line argument parser"""
-    parser = argparse.ArgumentParser(
-        description=f"GSQL v{__version__} - Advanced SQL Database Interface",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  gsql                         # Start interactive shell
-  gsql mydb.db                 # Open specific database
-  gsql -e "SELECT * FROM sqlite_master"  # Execute single query
-  gsql --nlp "show tables"     # Execute NLP query
-  gsql -f queries.sql          # Execute queries from file
-  gsql --enable-nlp            # Enable NLP in shell
-  gsql --mode csv              # Set output mode to CSV
-
-Output Modes:
-  table (default) - Formatted table
-  csv            - Comma-separated values
-  json           - JSON format
-  list           - List format
-
-NLP Examples:
-  show tables
-  count users
-  average salary from employees
-  add new user John Doe
-        """
-    )
-    
-    parser.add_argument(
-        'database',
-        nargs='?',
-        help='Database file (optional, uses default if not specified)'
-    )
-    
-    parser.add_argument(
-        '-e', '--execute',
-        help='Execute SQL query and exit'
-    )
-    
-    parser.add_argument(
-        '--nlp',
-        help='Execute Natural Language query and exit'
-    )
-    
-    parser.add_argument(
-        '-f', '--file',
-        help='Execute SQL from file and exit'
-    )
-    
-    parser.add_argument(
-        '--enable-nlp',
-        action='store_true',
-        help='Enable Natural Language Processing in interactive mode'
-    )
-    
-    parser.add_argument(
-        '--nlp-confidence',
-        type=float,
-        default=0.4,
-        help='NLP confidence threshold (default: 0.4)'
-    )
-    
-    parser.add_argument(
-        '--nlp-patterns',
-        help='Custom NLP patterns file'
-    )
-    
-    parser.add_argument(
-        '--mode',
-        choices=['table', 'csv', 'json', 'list'],
-        help='Output mode for query results'
-    )
-    
-    parser.add_argument(
-        '--no-color',
-        action='store_true',
-        help='Disable colored output'
-    )
-    
-    parser.add_argument(
-        '--simple-ui',
-        action='store_true',
-        help='Use simple UI instead of rich UI'
-    )
-    
-    parser.add_argument(
-        '--no-headers',
-        action='store_true',
-        help='Disable column headers in output'
-    )
-    
-    parser.add_argument(
-        '--no-timer',
-        action='store_true',
-        help='Disable execution timer'
-    )
-    
-    parser.add_argument(
-        '-v', '--verbose',
-        action='store_true',
-        help='Verbose output and error messages'
-    )
-    
-    parser.add_argument(
-        '--version',
-        action='version',
-        version=f'GSQL {__version__}'
-    )
-    
-    return parser
-
-def main() -> None:
-    """Main entry point"""
-    if not GSQL_AVAILABLE:
-        print(Colors.error("GSQL modules not available. Check installation."))
-        sys.exit(1)
-    
-    parser = create_parser()
-    args = parser.parse_args()
-    
-    # Create and run application
-    app = GSQLApp()
-    
-    # Override config with command line arguments
-    if args.no_color:
-        app.config['shell']['colors'] = False
-    if args.simple_ui:
-        app.config['shell']['rich_ui'] = False
-    if args.mode:
-        app.config['shell']['mode'] = args.mode
-    if args.no_headers:
-        app.config['shell']['show_headers'] = False
-    if args.no_timer:
-        app.config['shell']['show_timer'] = False
-    if args.verbose:
-        # Configure logging for verbose mode
-        logging.basicConfig(level=logging.DEBUG)
-    
-    # Setup NLP based on arguments
-    nlp_enabled = args.enable_nlp or bool(args.nlp)
-    app.setup_nlp(
-        enable_nlp=nlp_enabled,
-        patterns_file=args.nlp_patterns,
-        confidence_threshold=args.nlp_confidence
-    )
-    
-    try:
-        if args.nlp:
-            # Execute NLP query directly
-            app.run_nlp_query(args.nlp, args.database)
-        elif args.execute:
-            # Execute SQL query
-            app.run_query(args.execute, args.database)
-        elif args.file:
-            # Execute from file
-            with open(args.file, 'r') as f:
-                queries = f.read()
-            app.run_query(queries, args.database)
-        else:
-            # Interactive shell
-            app.run_shell(args.database)
-            
-    except FileNotFoundError as e:
-        print(Colors.error(f"File not found: {e}"))
-        sys.exit(1)
-    except KeyboardInterrupt:
-        print(f"\n{Colors.info('Interrupted by user')}")
-        sys.exit(0)
-    except Exception as e:
-        print(Colors.error(f"Unexpected error: {e}"))
-        if args.verbose:
-            traceback.print_exc()
-        sys.exit(1)
-
-if __name__ == "__main__":
-    main()
+            # CORRECTION : SQLiteStorage ne supporte PAS 'auto_recovery'
+            # Paramètres supportés par Database (sans 'auto_recovery')
+            supported_params = ['base_dir', 'buffer_pool_size', 'enable_wal']
+            filtered_config = {k: v for k, v in db_config.items() if
