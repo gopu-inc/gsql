@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-GSQL Storage Engine Complete - SQLite avec Buffer Pool et Transactions
-Version: 3.1.0 - Transactions Fixées
+GSQL Storage Engine Complete - SQLite avec Buffer Pool et Transactions ACID
+Version: 3.2.0 - Transactions Complètes et Stables
 """
 
 import os
@@ -14,9 +14,10 @@ import pickle
 import hashlib
 from pathlib import Path
 from datetime import datetime
-from collections import OrderedDict
-from typing import Dict, List, Any, Optional, Tuple, Union
+from collections import OrderedDict, defaultdict
+from typing import Dict, List, Any, Optional, Tuple, Union, Set
 import re
+import traceback
 
 from .exceptions import (
     SQLExecutionError, TransactionError, BufferPoolError,
@@ -123,10 +124,10 @@ class BufferPool:
             self.invalidate()
 
 
-# ==================== TRANSACTION MANAGER ====================
+# ==================== TRANSACTION MANAGER CORRIGÉ ====================
 
 class TransactionManager:
-    """Gestionnaire de transactions SQLite"""
+    """Gestionnaire de transactions SQLite corrigé et stable"""
     
     def __init__(self, storage):
         self.storage = storage
@@ -134,67 +135,180 @@ class TransactionManager:
         self.transaction_counter = 0
         self.lock = threading.RLock()
         self.transaction_timeout = 30
+        
+        # Pour le débogage et le suivi
+        self.transaction_log = []
     
-    def begin(self, isolation_level: str = "DEFERRED") -> int:
-        """Démarre une nouvelle transaction"""
+    def begin(self, isolation_level: str = "DEFERRED") -> Dict:
+        """Démarre une nouvelle transaction - VERSION CORRIGÉE"""
         with self.lock:
             tid = self.transaction_counter
             self.transaction_counter += 1
             
             try:
-                # Vérifier qu'on n'est pas déjà dans une transaction
+                # Créer un nouveau curseur pour cette transaction
                 cursor = self.storage.conn.cursor()
-                cursor.execute("SAVEPOINT gsql_tx_check")
-                cursor.execute("RELEASE SAVEPOINT gsql_tx_check")
                 
                 # Déterminer le type de transaction
+                sql = "BEGIN "
                 if isolation_level.upper() == "IMMEDIATE":
-                    cursor.execute("BEGIN IMMEDIATE TRANSACTION")
+                    sql += "IMMEDIATE "
                 elif isolation_level.upper() == "EXCLUSIVE":
-                    cursor.execute("BEGIN EXCLUSIVE TRANSACTION")
+                    sql += "EXCLUSIVE "
                 else:
-                    cursor.execute("BEGIN DEFERRED TRANSACTION")
+                    sql += "DEFERRED "
+                sql += "TRANSACTION"
                 
+                cursor.execute(sql)
+                
+                # Stocker les informations de la transaction
                 self.active_transactions[tid] = {
                     'start_time': time.time(),
                     'isolation': isolation_level,
                     'savepoints': [],
                     'state': 'ACTIVE',
-                    'cursor': cursor
+                    'cursor': cursor,
+                    'operations': 0
                 }
                 
+                # Journaliser
+                self.transaction_log.append({
+                    'time': datetime.now().isoformat(),
+                    'tid': tid,
+                    'action': 'BEGIN',
+                    'isolation': isolation_level
+                })
+                
                 logger.info(f"Transaction {tid} started ({isolation_level})")
-                return tid
+                return {'success': True, 'tid': tid, 'message': f'Transaction {tid} started'}
                 
             except Exception as e:
                 self.transaction_counter -= 1
-                raise TransactionError(f"Failed to begin transaction: {e}")
+                error_msg = f"Failed to begin transaction: {e}"
+                logger.error(error_msg)
+                return {'success': False, 'error': error_msg}
     
-    def commit(self, tid: int) -> bool:
-        """Valide une transaction"""
+    def _execute_in_transaction(self, tid: int, sql: str, params: Tuple = None) -> Dict:
+        """Exécute une requête dans le contexte d'une transaction spécifique"""
+        if tid not in self.active_transactions:
+            return {'success': False, 'error': f'Transaction {tid} not found'}
+        
+        trans = self.active_transactions[tid]
+        
+        if trans['state'] != 'ACTIVE':
+            return {'success': False, 'error': f'Transaction {tid} is {trans["state"]}'}
+        
+        try:
+            cursor = trans['cursor']
+            
+            # Exécuter la requête
+            if params:
+                cursor.execute(sql, params)
+            else:
+                cursor.execute(sql)
+            
+            # Mettre à jour le compteur d'opérations
+            trans['operations'] += 1
+            
+            # Construire le résultat
+            result = {'success': True}
+            
+            # Détecter le type de requête
+            sql_upper = sql.lstrip().upper()
+            
+            if sql_upper.startswith("SELECT"):
+                rows = cursor.fetchall()
+                column_names = [desc[0] for desc in cursor.description] if cursor.description else []
+                
+                formatted_rows = []
+                for row in rows:
+                    if len(column_names) == len(row):
+                        formatted_rows.append(dict(zip(column_names, row)))
+                    else:
+                        formatted_rows.append(row)
+                
+                result.update({
+                    'type': 'select',
+                    'count': len(rows),
+                    'columns': column_names,
+                    'rows': formatted_rows
+                })
+                
+            elif sql_upper.startswith("INSERT"):
+                result.update({
+                    'type': 'insert',
+                    'lastrowid': cursor.lastrowid,
+                    'rows_affected': cursor.rowcount
+                })
+                
+            elif sql_upper.startswith("UPDATE"):
+                result.update({
+                    'type': 'update',
+                    'rows_affected': cursor.rowcount
+                })
+                
+            elif sql_upper.startswith("DELETE"):
+                result.update({
+                    'type': 'delete',
+                    'rows_affected': cursor.rowcount
+                })
+            
+            return result
+            
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"Transaction {tid} execution error: {error_msg}")
+            return {'success': False, 'error': error_msg, 'tid': tid}
+    
+    def commit(self, tid: int) -> Dict:
+        """Valide une transaction - VERSION CORRIGÉE"""
         with self.lock:
             if tid not in self.active_transactions:
-                raise TransactionError(f"Transaction {tid} not found")
+                return {
+                    'success': False, 
+                    'error': f'Transaction {tid} not found or already completed',
+                    'tid': tid
+                }
             
             trans = self.active_transactions[tid]
             
             if trans['state'] != 'ACTIVE':
-                raise TransactionError(f"Transaction {tid} is already {trans['state']}")
+                return {
+                    'success': False,
+                    'error': f'Transaction {tid} is already {trans["state"]}',
+                    'tid': tid,
+                    'state': trans['state']
+                }
             
             # Vérifier le timeout
-            if time.time() - trans['start_time'] > self.transaction_timeout:
-                logger.warning(f"Transaction {tid} timeout")
-                return self.rollback(tid)
+            elapsed = time.time() - trans['start_time']
+            if elapsed > self.transaction_timeout:
+                logger.warning(f"Transaction {tid} timeout after {elapsed:.1f}s")
+                # Rollback automatique
+                rollback_result = self._rollback_internal(tid)
+                return {
+                    'success': False,
+                    'error': f'Transaction {tid} timeout after {elapsed:.1f}s',
+                    'tid': tid,
+                    'auto_rollback': rollback_result.get('success', False)
+                }
             
             try:
-                # COMMIT direct
-                cursor = trans.get('cursor')
-                if cursor:
-                    cursor.execute("COMMIT")
-                    cursor.close()
+                cursor = trans['cursor']
+                cursor.execute("COMMIT")
+                cursor.close()
                 
                 trans['state'] = 'COMMITTED'
-                logger.info(f"Transaction {tid} committed")
+                logger.info(f"Transaction {tid} committed successfully")
+                
+                # Journaliser
+                self.transaction_log.append({
+                    'time': datetime.now().isoformat(),
+                    'tid': tid,
+                    'action': 'COMMIT',
+                    'operations': trans['operations'],
+                    'duration': elapsed
+                })
                 
                 # Nettoyer
                 del self.active_transactions[tid]
@@ -202,95 +316,124 @@ class TransactionManager:
                 # Invalider le buffer pool
                 self.storage.buffer_pool.invalidate()
                 
-                return True
+                return {
+                    'success': True,
+                    'tid': tid,
+                    'message': f'Transaction {tid} committed successfully',
+                    'operations': trans['operations'],
+                    'duration': elapsed
+                }
                 
             except Exception as e:
                 logger.error(f"Commit failed for transaction {tid}: {e}")
-                # Rollback automatique
+                
+                # Rollback automatique en cas d'échec
                 try:
-                    if trans.get('cursor'):
-                        trans['cursor'].execute("ROLLBACK")
-                        trans['cursor'].close()
+                    trans['cursor'].execute("ROLLBACK")
+                    trans['cursor'].close()
                 except:
                     pass
                 
                 trans['state'] = 'FAILED'
                 del self.active_transactions[tid]
-                raise TransactionError(f"Commit failed: {e}")
+                
+                return {
+                    'success': False,
+                    'error': f'Commit failed: {e}',
+                    'tid': tid
+                }
     
-    def rollback(self, tid: int, to_savepoint: str = None) -> bool:
-        """Annule une transaction"""
-        with self.lock:
-            if tid not in self.active_transactions:
-                # Si la transaction n'existe pas, c'est peut-être déjà rollback
-                logger.warning(f"Transaction {tid} not found for rollback")
-                return True
+    def _rollback_internal(self, tid: int, to_savepoint: str = None) -> Dict:
+        """Méthode interne pour rollback"""
+        if tid not in self.active_transactions:
+            return {'success': False, 'error': f'Transaction {tid} not found'}
+        
+        trans = self.active_transactions[tid]
+        
+        try:
+            cursor = trans['cursor']
             
-            trans = self.active_transactions[tid]
+            if to_savepoint:
+                if to_savepoint not in trans['savepoints']:
+                    return {'success': False, 'error': f'Savepoint {to_savepoint} not found'}
+                
+                cursor.execute(f"ROLLBACK TO SAVEPOINT {to_savepoint}")
+                
+                # Retirer les savepoints après celui-ci
+                sp_index = trans['savepoints'].index(to_savepoint)
+                trans['savepoints'] = trans['savepoints'][:sp_index + 1]
+                
+                message = f'Rolled back to savepoint {to_savepoint}'
+            else:
+                cursor.execute("ROLLBACK")
+                cursor.close()
+                
+                trans['state'] = 'ROLLED_BACK'
+                message = 'Transaction rolled back completely'
+                
+                # Nettoyer
+                del self.active_transactions[tid]
             
+            # Journaliser
+            self.transaction_log.append({
+                'time': datetime.now().isoformat(),
+                'tid': tid,
+                'action': 'ROLLBACK',
+                'savepoint': to_savepoint,
+                'operations': trans.get('operations', 0)
+            })
+            
+            return {'success': True, 'tid': tid, 'message': message}
+            
+        except Exception as e:
+            logger.error(f"Rollback failed for transaction {tid}: {e}")
+            
+            # Nettoyer même en cas d'erreur
             try:
-                cursor = trans.get('cursor')
-                
-                if to_savepoint:
-                    # Vérifier que le savepoint existe
-                    if to_savepoint not in trans['savepoints']:
-                        raise TransactionError(f"Savepoint '{to_savepoint}' not found")
-                    
-                    if cursor:
-                        cursor.execute(f"ROLLBACK TO SAVEPOINT {to_savepoint}")
-                    logger.info(f"Transaction {tid} rolled back to savepoint {to_savepoint}")
-                else:
-                    # Rollback complet
-                    if cursor:
-                        cursor.execute("ROLLBACK")
-                        cursor.close()
-                    
-                    trans['state'] = 'ROLLED_BACK'
-                    logger.info(f"Transaction {tid} rolled back")
-                    
-                    # Nettoyer
-                    del self.active_transactions[tid]
-                
-                return True
-                
-            except Exception as e:
-                logger.error(f"Rollback failed for transaction {tid}: {e}")
-                trans['state'] = 'CORRUPTED'
-                # Essayer de fermer le curseur
-                try:
-                    if trans.get('cursor'):
-                        trans['cursor'].close()
-                except:
-                    pass
-                
-                # Supprimer quand même
-                if tid in self.active_transactions:
-                    del self.active_transactions[tid]
-                
-                return False
+                if trans.get('cursor'):
+                    trans['cursor'].close()
+            except:
+                pass
+            
+            if tid in self.active_transactions:
+                del self.active_transactions[tid]
+            
+            return {'success': False, 'error': f'Rollback failed: {e}', 'tid': tid}
     
-    def savepoint(self, tid: int, name: str) -> bool:
-        """Crée un savepoint dans la transaction"""
+    def rollback(self, tid: int, to_savepoint: str = None) -> Dict:
+        """Annule une transaction - VERSION CORRIGÉE"""
+        with self.lock:
+            return self._rollback_internal(tid, to_savepoint)
+    
+    def savepoint(self, tid: int, name: str) -> Dict:
+        """Crée un savepoint dans la transaction - VERSION CORRIGÉE"""
         with self.lock:
             if tid not in self.active_transactions:
-                raise TransactionError(f"Transaction {tid} not found")
+                return {'success': False, 'error': f'Transaction {tid} not found'}
             
             trans = self.active_transactions[tid]
             
             if trans['state'] != 'ACTIVE':
-                raise TransactionError(f"Cannot create savepoint, transaction is {trans['state']}")
+                return {'success': False, 'error': f'Cannot create savepoint, transaction is {trans["state"]}'}
             
             try:
-                cursor = trans.get('cursor')
-                if cursor:
-                    cursor.execute(f"SAVEPOINT {name}")
+                cursor = trans['cursor']
+                cursor.execute(f"SAVEPOINT {name}")
                 
                 trans['savepoints'].append(name)
                 logger.debug(f"Savepoint '{name}' created in transaction {tid}")
-                return True
+                
+                return {
+                    'success': True,
+                    'tid': tid,
+                    'savepoint': name,
+                    'message': f"Savepoint '{name}' created"
+                }
                 
             except Exception as e:
-                raise TransactionError(f"Savepoint failed: {e}")
+                error_msg = f"Savepoint failed: {e}"
+                logger.error(error_msg)
+                return {'success': False, 'error': error_msg}
     
     def get_active_transactions(self) -> List[Dict]:
         """Liste les transactions actives"""
@@ -301,20 +444,26 @@ class TransactionManager:
                     'age': round(time.time() - data['start_time'], 2),
                     'isolation': data['isolation'],
                     'savepoints': len(data['savepoints']),
-                    'state': data['state']
+                    'state': data['state'],
+                    'operations': data['operations']
                 }
                 for tid, data in self.active_transactions.items()
                 if data['state'] == 'ACTIVE'
             ]
+    
+    def get_transaction_log(self, limit: int = 100) -> List[Dict]:
+        """Retourne le journal des transactions"""
+        with self.lock:
+            return self.transaction_log[-limit:] if self.transaction_log else []
 
 
-# ==================== SQLITE STORAGE ====================
+# ==================== SQLITE STORAGE COMPLET ====================
 
 class SQLiteStorage:
-    """Moteur de stockage SQLite complet"""
+    """Moteur de stockage SQLite avec transactions ACID stables"""
     
-    VERSION = "3.1.0"
-    SCHEMA_VERSION = 2
+    VERSION = "3.2.0"
+    SCHEMA_VERSION = 3
     
     def __init__(self, db_path=None, base_dir="/root/.gsql", 
                  buffer_pool_size=100, enable_wal=True):
@@ -399,7 +548,7 @@ class SQLiteStorage:
                         str(self.db_path),
                         timeout=self.config['busy_timeout'] / 1000,
                         check_same_thread=False,
-                        isolation_level=None
+                        isolation_level=None  # Auto-commit par défaut
                     )
                     
                     # Configuration de base
@@ -582,31 +731,41 @@ class SQLiteStorage:
             logger.error(f"Database reset failed: {e}")
             raise
     
-    def execute(self, query: str, params: Tuple = None) -> Dict:
-        """Exécute une requête SQL"""
+    def execute(self, query: str, params: Tuple = None, tid: int = None) -> Dict:
+        """Exécute une requête SQL - VERSION CORRIGÉE"""
         if not self.is_connected:
             self._connect()
         
         if params is None:
             params = ()
         
+        # Convertir les paramètres en tuple
+        if isinstance(params, dict):
+            params = tuple(params.values())
+        elif isinstance(params, list):
+            params = tuple(params)
+        elif not isinstance(params, tuple):
+            params = (params,) if params else ()
+        
         try:
             query = query.strip()
             if not query:
                 return {'success': False, 'error': 'Empty query'}
             
-            # Convertir les paramètres en tuple
-            if isinstance(params, dict):
-                params = tuple(params.values())
-            elif isinstance(params, list):
-                params = tuple(params)
-            elif not isinstance(params, tuple):
-                params = (params,) if params else ()
-            
             start_time = time.time()
+            
+            # Vérifier si on exécute dans une transaction
+            if tid is not None:
+                # Utiliser le gestionnaire de transactions
+                result = self.transaction_manager._execute_in_transaction(tid, query, params)
+                if result.get('success'):
+                    result['execution_time'] = round(time.time() - start_time, 4)
+                    result['timestamp'] = datetime.now().isoformat()
+                return result
+            
+            # Exécution normale (hors transaction)
             cursor = self.conn.cursor()
             
-            # Exécuter la requête
             if params:
                 cursor.execute(query, params)
             else:
@@ -614,15 +773,15 @@ class SQLiteStorage:
             
             execution_time = time.time() - start_time
             
-            # Détecter le type de requête
-            query_upper = query.lstrip().upper()
-            
             # Construire le résultat
             result = {
                 'success': True, 
                 'execution_time': round(execution_time, 4),
                 'timestamp': datetime.now().isoformat()
             }
+            
+            # Détecter le type de requête
+            query_upper = query.lstrip().upper()
             
             if query_upper.startswith("SELECT"):
                 rows = cursor.fetchall()
@@ -680,25 +839,25 @@ class SQLiteStorage:
             elif query_upper.startswith("BEGIN"):
                 result.update({
                     'type': 'transaction',
-                    'message': 'Transaction started'
+                    'message': 'Use begin_transaction() for explicit transactions'
                 })
                 
             elif query_upper.startswith("COMMIT"):
                 result.update({
                     'type': 'transaction',
-                    'message': 'Transaction committed'
+                    'message': 'Use commit_transaction() for explicit transactions'
                 })
                 
             elif query_upper.startswith("ROLLBACK"):
                 result.update({
                     'type': 'transaction',
-                    'message': 'Transaction rolled back'
+                    'message': 'Use rollback_transaction() for explicit transactions'
                 })
                 
             elif query_upper.startswith("SAVEPOINT"):
                 result.update({
                     'type': 'savepoint',
-                    'message': 'Savepoint created'
+                    'message': 'Use create_savepoint() for explicit savepoints'
                 })
                 
             else:
@@ -707,10 +866,8 @@ class SQLiteStorage:
                     'rows_affected': cursor.rowcount
                 })
             
-            # Commit seulement si pas de transaction active
-            active_tx = self.transaction_manager.get_active_transactions()
-            if not active_tx:
-                self.conn.commit()
+            # Commit automatique pour les exécutions hors transaction
+            self.conn.commit()
             
             # Mettre à jour les statistiques
             self._update_statistics(query_upper.split()[0] if query_upper else "OTHER", execution_time)
@@ -721,7 +878,7 @@ class SQLiteStorage:
             error_msg = str(e)
             logger.error(f"SQL execution error: {error_msg}")
             
-            # Essayer de rollback
+            # Rollback pour les erreurs
             try:
                 self.conn.rollback()
             except:
@@ -742,6 +899,8 @@ class SQLiteStorage:
                 return {'success': False, 'error': 'Duplicate entry'}
             elif "FOREIGN KEY constraint failed" in error_msg:
                 return {'success': False, 'error': 'Foreign key violation'}
+            elif "syntax error" in error_msg:
+                return {'success': False, 'error': f'SQL syntax error: {error_msg}'}
             else:
                 return {'success': False, 'error': f'SQL error: {error_msg}'}
                 
@@ -855,23 +1014,132 @@ class SQLiteStorage:
             logger.error(f"Failed to get tables: {e}")
             return []
     
-    # ============ API TRANSACTIONS ============
+    # ============ API TRANSACTIONS STABLE ============
     
-    def begin_transaction(self, isolation_level: str = "DEFERRED") -> int:
+    def begin_transaction(self, isolation_level: str = "DEFERRED") -> Dict:
         """Démarre une transaction"""
         return self.transaction_manager.begin(isolation_level)
     
-    def commit_transaction(self, tid: int) -> bool:
+    def commit_transaction(self, tid: int) -> Dict:
         """Valide une transaction"""
         return self.transaction_manager.commit(tid)
     
-    def rollback_transaction(self, tid: int, to_savepoint: str = None) -> bool:
+    def rollback_transaction(self, tid: int, to_savepoint: str = None) -> Dict:
         """Annule une transaction"""
         return self.transaction_manager.rollback(tid, to_savepoint)
     
-    def create_savepoint(self, tid: int, name: str) -> bool:
+    def create_savepoint(self, tid: int, name: str) -> Dict:
         """Crée un savepoint"""
         return self.transaction_manager.savepoint(tid, name)
+    
+    def execute_in_transaction(self, tid: int, query: str, params: Tuple = None) -> Dict:
+        """
+        Exécute une requête dans une transaction spécifique
+        
+        Args:
+            tid: Transaction ID
+            query: Requête SQL
+            params: Paramètres de la requête
+        
+        Returns:
+            Résultat de l'exécution
+        """
+        if tid not in self.transaction_manager.active_transactions:
+            return {'success': False, 'error': f'Transaction {tid} not found'}
+        
+        return self.transaction_manager._execute_in_transaction(tid, query, params)
+    
+    def get_transaction_status(self, tid: int = None) -> Dict:
+        """Récupère le statut des transactions"""
+        if tid is not None:
+            if tid in self.transaction_manager.active_transactions:
+                trans = self.transaction_manager.active_transactions[tid]
+                return {
+                    'tid': tid,
+                    'state': trans['state'],
+                    'isolation': trans['isolation'],
+                    'age_seconds': round(time.time() - trans['start_time'], 2),
+                    'operations': trans['operations'],
+                    'savepoints': trans['savepoints']
+                }
+            else:
+                return {'error': f'Transaction {tid} not found'}
+        else:
+            return {
+                'active_count': len(self.transaction_manager.get_active_transactions()),
+                'total_started': self.transaction_manager.transaction_counter,
+                'active_transactions': self.transaction_manager.get_active_transactions()
+            }
+    
+    def atomic_transaction(self, operations: List[Dict]) -> Dict:
+        """
+        Exécute plusieurs opérations dans une transaction atomique
+        
+        Args:
+            operations: Liste de dicts avec 'query' et 'params'
+        
+        Returns:
+            Résultat global de la transaction
+        """
+        if not operations:
+            return {'success': False, 'error': 'No operations provided'}
+        
+        tx_result = self.begin_transaction("DEFERRED")
+        if not tx_result.get('success'):
+            return tx_result
+        
+        tid = tx_result['tid']
+        results = []
+        
+        try:
+            for i, op in enumerate(operations):
+                query = op.get('query', '')
+                params = op.get('params')
+                
+                if not query:
+                    results.append({
+                        'index': i,
+                        'success': False,
+                        'error': 'Empty query'
+                    })
+                    raise SQLExecutionError(f"Empty query at index {i}")
+                
+                result = self.execute_in_transaction(tid, query, params)
+                results.append({
+                    'index': i,
+                    'success': result.get('success', False),
+                    'result': result
+                })
+                
+                if not result.get('success'):
+                    error = result.get('error', 'Unknown error')
+                    raise SQLExecutionError(f"Operation {i} failed: {error}")
+            
+            # Tout a réussi, commit
+            commit_result = self.commit_transaction(tid)
+            
+            return {
+                'success': True,
+                'transaction_id': tid,
+                'operations_executed': len(operations),
+                'commit_result': commit_result,
+                'operation_results': results,
+                'message': f'Successfully executed {len(operations)} operations in transaction'
+            }
+            
+        except Exception as e:
+            # Rollback en cas d'erreur
+            rollback_result = self.rollback_transaction(tid)
+            
+            return {
+                'success': False,
+                'error': str(e),
+                'transaction_id': tid,
+                'operations_executed_before_failure': len([r for r in results if r.get('success')]),
+                'failed_operation_index': len(results),
+                'operation_results': results,
+                'rollback_result': rollback_result
+            }
     
     # ============ BACKUP ET MAINTENANCE ============
     
@@ -940,16 +1208,19 @@ class SQLiteStorage:
                     'path': str(self.db_path),
                     'tables': table_count,
                     'size_mb': round(size_bytes / (1024 * 1024), 2),
-                    'connection_status': self.is_connected
+                    'connection_status': self.is_connected,
+                    'version': self.VERSION
                 },
                 'performance': self.buffer_pool.get_stats(),
                 'transactions': {
                     'active': len(self.transaction_manager.get_active_transactions()),
-                    'total': self.transaction_manager.transaction_counter
+                    'total_started': self.transaction_manager.transaction_counter,
+                    'recent_log': self.transaction_manager.get_transaction_log(10)
                 },
                 'cache': {
                     'schema': len(self.schema_cache),
-                    'tables': len(self.table_cache)
+                    'tables': len(self.table_cache),
+                    'query': len(self.query_cache)
                 },
                 'statistics': custom_stats
             }
@@ -979,6 +1250,7 @@ class SQLiteStorage:
                     self.buffer_pool.invalidate()
                     self.schema_cache.clear()
                     self.table_cache.clear()
+                    self.query_cache.clear()
                 
                 logger.info("Storage closed")
         except Exception as e:
@@ -993,6 +1265,55 @@ class SQLiteStorage:
         self.close()
 
 
+# ==================== TRANSACTION CONTEXT ====================
+
+class TransactionContext:
+    """Context manager pour les transactions sécurisées"""
+    
+    def __init__(self, storage, isolation_level: str = "DEFERRED"):
+        self.storage = storage
+        self.isolation_level = isolation_level
+        self.tid = None
+    
+    def __enter__(self):
+        """Démarre la transaction"""
+        result = self.storage.begin_transaction(self.isolation_level)
+        if not result.get('success'):
+            raise TransactionError(f"Failed to begin transaction: {result.get('error')}")
+        
+        self.tid = result['tid']
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Termine la transaction (commit ou rollback)"""
+        if self.tid is None:
+            return False
+        
+        try:
+            if exc_type is None:
+                # Tout s'est bien passé, commit
+                result = self.storage.commit_transaction(self.tid)
+                if not result.get('success'):
+                    logger.error(f"Commit failed: {result.get('error')}")
+            else:
+                # Exception levée, rollback
+                logger.warning(f"Rollback transaction {self.tid} due to exception: {exc_val}")
+                self.storage.rollback_transaction(self.tid)
+            
+            return False  # Propager l'exception si elle existe
+        
+        except Exception as e:
+            logger.error(f"Error in transaction cleanup: {e}")
+            return False
+    
+    def execute(self, query: str, params: Tuple = None) -> Dict:
+        """Exécute une requête dans la transaction"""
+        if self.tid is None:
+            raise TransactionError("Transaction not started")
+        
+        return self.storage.execute_in_transaction(self.tid, query, params)
+
+
 # ==================== API PUBLIQUE ====================
 
 def create_storage(db_path=None, **kwargs) -> SQLiteStorage:
@@ -1000,11 +1321,30 @@ def create_storage(db_path=None, **kwargs) -> SQLiteStorage:
     return SQLiteStorage(db_path, **kwargs)
 
 
-def quick_query(query: str, db_path=None) -> Dict:
+def atomic_transaction(operations: List[Dict], db_path=None, isolation_level: str = "DEFERRED") -> Dict:
+    """
+    Exécute des opérations dans une transaction atomique
+    
+    Args:
+        operations: Liste de dicts avec 'query' et 'params'
+        db_path: Chemin de la base de données
+        isolation_level: Niveau d'isolation
+    
+    Returns:
+        Résultat de la transaction
+    """
+    storage = SQLiteStorage(db_path)
+    try:
+        return storage.atomic_transaction(operations)
+    finally:
+        storage.close()
+
+
+def quick_query(query: str, params: Tuple = None, db_path=None) -> Dict:
     """Exécute une requête rapide"""
     storage = SQLiteStorage(db_path)
     try:
-        result = storage.execute(query)
+        result = storage.execute(query, params)
         return result
     finally:
         storage.close()
