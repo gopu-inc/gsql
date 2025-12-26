@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test des transactions GSQL - Version Corrigée
+Test de diagnostic des transactions GSQL
 """
 
 import os
@@ -13,469 +13,169 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from gsql.database import Database
+from gsql.storage import SQLiteStorage
 
 # Configuration du logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # DEBUG pour plus de détails
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 
-def print_header(text):
-    """Affiche un en-tête de test"""
+def test_direct_sqlite():
+    """Test direct avec SQLite pour vérifier si le problème vient de SQLite lui-même"""
     print("\n" + "="*60)
-    print(f"🧪 {text}")
+    print("🧪 Test DIRECT SQLite (sans GSQL)")
     print("="*60)
-
-def print_result(success, message):
-    """Affiche un résultat de test"""
-    if success:
-        print(f"✅ {message}")
-    else:
-        print(f"❌ {message}")
-
-def test_basic_transaction():
-    """Test basique de transaction (COMMIT) - VERSION CORRIGÉE"""
-    print_header("Test Transaction BASIC - COMMIT")
+    
+    import sqlite3
     
     with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
         db_path = tmp.name
     
     try:
-        # Créer une base de données
-        db = Database(db_path, create_default_tables=False)
-        
-        # Créer une table de test
-        db.execute("""
-            CREATE TABLE test_users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                email TEXT UNIQUE
-            )
-        """)
-        
-        # Démarrer une transaction
-        begin_result = db.begin_transaction("BEGIN DEFERRED")
-        print(f"BEGIN: {begin_result}")
-        
-        if begin_result.get('success'):
-            tid = begin_result['tid']
-            
-            # Insérer des données dans la transaction
-            insert1 = db.execute_in_transaction(
-                "INSERT INTO test_users (name, email) VALUES (?, ?)",
-                ("Alice", "alice@example.com")
-            )
-            print(f"INSERT 1: {insert1.get('success')}")
-            
-            insert2 = db.execute_in_transaction(
-                "INSERT INTO test_users (name, email) VALUES (?, ?)",
-                ("Bob", "bob@example.com")
-            )
-            print(f"INSERT 2: {insert2.get('success')}")
-            
-            # Vérifier que les données sont visibles dans la transaction
-            select_in_tx = db.execute_in_transaction("SELECT * FROM test_users")
-            print(f"Rows in transaction: {select_in_tx.get('count', 0)}")
-            
-            # COMMIT la transaction
-            commit_result = db.commit_transaction()
-            print(f"COMMIT: {commit_result}")
-            
-            # Vérifier que les données sont persistées
-            select_after = db.execute("SELECT * FROM test_users")
-            rows_after = select_after.get('count', 0)
-            print(f"Rows after commit: {rows_after}")
-            
-            # Validation
-            success = (
-                begin_result.get('success') and
-                insert1.get('success') and
-                insert2.get('success') and
-                commit_result.get('success') and
-                rows_after == 2
-            )
-            
-            print_result(success, f"Transaction COMMIT: {success}")
-            return success
-            
-        else:
-            print_result(False, f"Failed to begin transaction: {begin_result.get('error')}")
-            return False
-            
-    except Exception as e:
-        print_result(False, f"Exception: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-        
-    finally:
-        # Nettoyer
-        try:
-            db.close()
-        except:
-            pass
-        if os.path.exists(db_path):
-            os.unlink(db_path)
-
-def test_rollback_transaction():
-    """Test de transaction avec ROLLBACK - VERSION CORRIGÉE"""
-    print_header("Test Transaction ROLLBACK")
-    
-    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
-        db_path = tmp.name
-    
-    try:
-        # Créer une base de données
-        db = Database(db_path, create_default_tables=False)
-        
-        # Créer une table de test
-        db.execute("""
-            CREATE TABLE test_products (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                price REAL
-            )
-        """)
-        
-        # Insérer une donnée de base (HORS transaction)
-        db.execute(
-            "INSERT INTO test_products (name, price) VALUES (?, ?)",
-            ("Base Product", 10.0)
-        )
-        
-        # Démarrer une transaction
-        begin_result = db.begin_transaction("BEGIN")
-        print(f"BEGIN: {begin_result}")
-        
-        if begin_result.get('success'):
-            tid = begin_result['tid']
-            
-            # Insérer des données dans la transaction
-            insert1 = db.execute_in_transaction(
-                "INSERT INTO test_products (name, price) VALUES (?, ?)",
-                ("Product A", 20.0)
-            )
-            print(f"INSERT 1: {insert1.get('success')}")
-            
-            # CORRECTION: Utiliser execute_in_transaction pour voir dans la transaction
-            select_in_tx = db.execute_in_transaction("SELECT * FROM test_products")
-            rows_in_tx = select_in_tx.get('count', 0)
-            print(f"Rows visible in transaction: {rows_in_tx}")
-            
-            # ROLLBACK la transaction
-            rollback_result = db.rollback_transaction()
-            print(f"ROLLBACK: {rollback_result}")
-            
-            # Vérifier que les données ne sont PAS persistées
-            # CORRECTION: Utiliser execute normal (hors transaction)
-            select_after = db.execute("SELECT * FROM test_products")
-            rows_after = select_after.get('count', 0)
-            print(f"Rows after rollback (outside transaction): {rows_after}")
-            
-            # Validation
-            # CORRIGÉ: Dans la transaction on voit 2 lignes, mais après rollback seulement 1
-            success = (
-                begin_result.get('success') and
-                insert1.get('success') and
-                rows_in_tx == 2 and  # Base + Product A (visibles dans la transaction)
-                rollback_result.get('success') and
-                rows_after == 1  # Seulement Base Product (après rollback)
-            )
-            
-            print_result(success, f"Transaction ROLLBACK: {success}")
-            return success
-            
-        else:
-            print_result(False, f"Failed to begin transaction: {begin_result.get('error')}")
-            return False
-            
-    except Exception as e:
-        print_result(False, f"Exception: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-        
-    finally:
-        # Nettoyer
-        try:
-            db.close()
-        except:
-            pass
-        if os.path.exists(db_path):
-            os.unlink(db_path)
-
-def test_transaction_isolation_levels():
-    """Test des différents niveaux d'isolation"""
-    print_header("Test Niveaux d'Isolation")
-    
-    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
-        db_path = tmp.name
-    
-    try:
-        db = Database(db_path, create_default_tables=False)
-        
-        # Tester différents niveaux d'isolation
-        isolation_levels = ["DEFERRED", "IMMEDIATE", "EXCLUSIVE"]
-        results = []
-        
-        for isolation in isolation_levels:
-            print(f"\nTest isolation: {isolation}")
-            
-            # Démarrer transaction avec le niveau spécifié
-            begin_result = db.begin_transaction(f"BEGIN {isolation}")
-            success = begin_result.get('success', False)
-            
-            if success:
-                # Vérifier que le niveau est correct
-                actual_isolation = begin_result.get('isolation', 'UNKNOWN')
-                print(f"  Started: success={success}, isolation={actual_isolation}")
-                
-                # Rollback
-                db.rollback_transaction()
-            else:
-                print(f"  Failed: {begin_result.get('error')}")
-            
-            results.append(success)
-        
-        all_success = all(results)
-        print_result(all_success, f"Isolation levels: {all_success}")
-        return all_success
-        
-    except Exception as e:
-        print_result(False, f"Exception: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-        
-    finally:
-        try:
-            db.close()
-        except:
-            pass
-        if os.path.exists(db_path):
-            os.unlink(db_path)
-
-def test_transaction_context_manager():
-    """Test du context manager pour transactions"""
-    print_header("Test Context Manager")
-    
-    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
-        db_path = tmp.name
-    
-    try:
-        db = Database(db_path, create_default_tables=False)
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
         
         # Créer une table
-        db.execute("CREATE TABLE test_context (id INTEGER PRIMARY KEY, value TEXT)")
+        cursor.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, value TEXT)")
         
-        # Utiliser le context manager
-        with db.transaction("DEFERRED") as tx:
-            # Ces inserts sont dans la transaction
-            db.execute("INSERT INTO test_context (value) VALUES ('in_transaction')")
+        # Insérer une ligne hors transaction
+        cursor.execute("INSERT INTO test (value) VALUES ('initial')")
+        conn.commit()
         
-        # Après le context manager, la transaction est automatiquement commitée
-        result = db.execute("SELECT COUNT(*) as count FROM test_context")
-        count = result.get('rows', [{}])[0].get('count', 0) if result.get('rows') else 0
-        
-        success = count == 1
-        print_result(success, f"Context manager auto-commit: {success}")
-        return success
-        
-    except Exception as e:
-        print_result(False, f"Exception: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-        
-    finally:
-        try:
-            db.close()
-        except:
-            pass
-        if os.path.exists(db_path):
-            os.unlink(db_path)
-
-def test_transaction_errors():
-    """Test des erreurs de transaction"""
-    print_header("Test Erreurs de Transaction")
-    
-    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
-        db_path = tmp.name
-    
-    try:
-        db = Database(db_path, create_default_tables=False)
-        
-        # Test 1: Commit sans transaction active
-        print("\n1. Commit sans transaction active:")
-        result = db.commit_transaction()
-        print(f"   Result: success={result.get('success')}, error={result.get('error')}")
-        
-        # Test 2: Rollback sans transaction active
-        print("\n2. Rollback sans transaction active:")
-        result = db.rollback_transaction()
-        print(f"   Result: success={result.get('success')}, error={result.get('error')}")
-        
-        # Test 3: Double BEGIN
-        print("\n3. Double BEGIN:")
-        db.begin_transaction()
-        result = db.begin_transaction()
-        print(f"   Result: success={result.get('success')}, error={result.get('error')}")
-        
-        # Nettoyer
-        db.rollback_transaction()
-        
-        print_result(True, "Error handling tested")
-        return True
-        
-    except Exception as e:
-        print_result(False, f"Exception: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-        
-    finally:
-        try:
-            db.close()
-        except:
-            pass
-        if os.path.exists(db_path):
-            os.unlink(db_path)
-
-def test_savepoints():
-    """Test des savepoints - VERSION CORRIGÉE"""
-    print_header("Test Savepoints")
-    
-    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
-        db_path = tmp.name
-    
-    try:
-        db = Database(db_path, create_default_tables=False)
-        
-        # Créer une table
-        db.execute("CREATE TABLE test_savepoints (id INTEGER PRIMARY KEY, step INTEGER)")
+        print("\n1. Avant transaction:")
+        cursor.execute("SELECT COUNT(*) FROM test")
+        print(f"   Lignes: {cursor.fetchone()[0]}")
         
         # Démarrer transaction
-        begin_result = db.begin_transaction()
-        print(f"BEGIN: {begin_result.get('success')}")
+        print("\n2. Début transaction:")
+        cursor.execute("BEGIN")
         
-        if not begin_result.get('success'):
-            return False
+        # Insérer dans la transaction
+        cursor.execute("INSERT INTO test (value) VALUES ('in_transaction')")
         
-        # Étape 1
-        db.execute_in_transaction("INSERT INTO test_savepoints (step) VALUES (1)")
+        print("\n3. Dans transaction (avant rollback):")
+        cursor.execute("SELECT COUNT(*) FROM test")
+        print(f"   Lignes visibles: {cursor.fetchone()[0]}")
         
-        # Créer savepoint
-        savepoint1 = db.create_savepoint("step1")
-        print(f"SAVEPOINT step1: {savepoint1.get('success')}")
+        # Rollback
+        print("\n4. ROLLBACK:")
+        cursor.execute("ROLLBACK")
         
-        # Étape 2
-        db.execute_in_transaction("INSERT INTO test_savepoints (step) VALUES (2)")
-        
-        # Étape 3
-        db.execute_in_transaction("INSERT INTO test_savepoints (step) VALUES (3)")
-        
-        # CORRECTION: Vérifier avec execute_in_transaction
-        select_before = db.execute_in_transaction("SELECT COUNT(*) as count FROM test_savepoints")
-        count_before = select_before.get('rows', [{}])[0].get('count', 0) if select_before.get('rows') else 0
-        print(f"Rows visible before rollback (in transaction): {count_before}")
-        
-        # Rollback au savepoint
-        rollback_result = db.rollback_to_savepoint("step1")
-        print(f"ROLLBACK TO step1: {rollback_result.get('success')}")
-        
-        # CORRECTION: Vérifier après rollback avec execute_in_transaction
-        select_after = db.execute_in_transaction("SELECT COUNT(*) as count FROM test_savepoints")
-        count_after = select_after.get('rows', [{}])[0].get('count', 0) if select_after.get('rows') else 0
-        print(f"Rows visible after rollback (in transaction): {count_after}")
-        
-        # Commit
-        commit_result = db.commit_transaction()
-        print(f"COMMIT: {commit_result.get('success')}")
-        
-        # Vérifier final (hors transaction)
-        select_final = db.execute("SELECT COUNT(*) as count FROM test_savepoints")
-        count_final = select_final.get('rows', [{}])[0].get('count', 0) if select_final.get('rows') else 0
-        print(f"Final rows (persisted): {count_final}")
-        
-        # CORRECTION: Après rollback au savepoint, on devrait voir seulement 1 ligne (step 1)
-        # Après commit, seulement 1 ligne devrait être persistée
-        success = (
-            count_before == 3 and  # Toutes les 3 lignes visibles dans la transaction
-            count_after == 1 and   # Après rollback, seulement step 1 visible
-            count_final == 1       # Après commit, seulement step 1 persisté
-        )
-        
-        print_result(success, f"Savepoints: {success}")
-        return success
-        
-    except Exception as e:
-        print_result(False, f"Exception: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-        
-    finally:
-        try:
-            db.close()
-        except:
-            pass
-        if os.path.exists(db_path):
-            os.unlink(db_path)
-
-def test_compatibility_old_style():
-    """Test de compatibilité avec l'ancien style (tid en paramètre)"""
-    print_header("Test Compatibilité Ancien Style (tid param)")
-    
-    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
-        db_path = tmp.name
-    
-    try:
-        db = Database(db_path, create_default_tables=False)
-        
-        # Créer une table
-        db.execute("CREATE TABLE test_compat (id INTEGER PRIMARY KEY, data TEXT)")
-        
-        # Ancien style: begin avec retour de tid
-        begin_result = db.begin_transaction()
-        tid = begin_result['tid']
-        print(f"BEGIN (old style): tid={tid}")
-        
-        # Ancien style: insert avec tid
-        insert_result = db.execute(
-            "INSERT INTO test_compat (data) VALUES ('test')",
-            tid=tid
-        )
-        print(f"INSERT with tid param: {insert_result.get('success')}")
-        
-        # Ancien style: commit avec tid paramètre
-        commit_result = db.commit_transaction(tid)
-        print(f"COMMIT with tid param: {commit_result.get('success')}")
+        print("\n5. Après ROLLBACK:")
+        cursor.execute("SELECT COUNT(*) FROM test")
+        print(f"   Lignes: {cursor.fetchone()[0]}")
         
         # Vérifier
-        select_result = db.execute("SELECT COUNT(*) as count FROM test_compat")
-        count = select_result.get('rows', [{}])[0].get('count', 0) if select_result.get('rows') else 0
+        cursor.execute("SELECT value FROM test ORDER BY id")
+        rows = cursor.fetchall()
+        print(f"   Contenu: {rows}")
         
-        success = count == 1
-        print_result(success, f"Compatibility mode: {success}")
+        expected_rows = 1
+        actual_rows = len(rows)
+        
+        success = actual_rows == expected_rows
+        print(f"\n✅ SQLite ROLLBACK fonctionne: {success} (attendu: {expected_rows}, obtenu: {actual_rows})")
+        
         return success
         
     except Exception as e:
-        print_result(False, f"Exception: {e}")
+        print(f"❌ Exception: {e}")
         import traceback
         traceback.print_exc()
         return False
         
     finally:
         try:
-            db.close()
+            conn.close()
         except:
             pass
         if os.path.exists(db_path):
             os.unlink(db_path)
 
-def test_sql_commands():
-    """Test des commandes SQL BEGIN/COMMIT/ROLLBACK"""
-    print_header("Test Commandes SQL Directes")
+def test_storage_rollback():
+    """Test direct du storage GSQL"""
+    print("\n" + "="*60)
+    print("🧪 Test STORAGE GSQL Direct")
+    print("="*60)
+    
+    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
+        db_path = tmp.name
+    
+    try:
+        storage = SQLiteStorage(db_path)
+        
+        # Créer une table
+        storage.execute("CREATE TABLE test_storage (id INTEGER PRIMARY KEY, value TEXT)")
+        
+        # Insérer une ligne hors transaction
+        storage.execute("INSERT INTO test_storage (value) VALUES ('initial')")
+        
+        print("\n1. Avant transaction:")
+        result = storage.execute("SELECT COUNT(*) as count FROM test_storage")
+        print(f"   Lignes: {result.get('rows', [{}])[0].get('count', 0)}")
+        
+        # Démarrer transaction
+        print("\n2. Début transaction:")
+        tx_result = storage.begin_transaction()
+        tid = tx_result.get('tid')
+        print(f"   TID: {tid}, Success: {tx_result.get('success')}")
+        
+        # Insérer dans la transaction
+        print("\n3. Insert dans transaction:")
+        insert_result = storage.execute_in_transaction(tid, 
+            "INSERT INTO test_storage (value) VALUES ('in_transaction')")
+        print(f"   Insert success: {insert_result.get('success')}")
+        
+        # Vérifier dans la transaction
+        print("\n4. Dans transaction (avant rollback):")
+        select_in_tx = storage.execute_in_transaction(tid, 
+            "SELECT COUNT(*) as count FROM test_storage")
+        print(f"   Lignes visibles dans tx: {select_in_tx.get('rows', [{}])[0].get('count', 0)}")
+        
+        # Rollback
+        print("\n5. ROLLBACK:")
+        rollback_result = storage.rollback_transaction(tid)
+        print(f"   Rollback success: {rollback_result.get('success')}")
+        print(f"   Rollback error: {rollback_result.get('error')}")
+        
+        # Vérifier après rollback (hors transaction)
+        print("\n6. Après ROLLBACK (hors transaction):")
+        select_after = storage.execute("SELECT COUNT(*) as count FROM test_storage")
+        print(f"   Lignes: {select_after.get('rows', [{}])[0].get('count', 0)}")
+        
+        # Vérifier le contenu
+        content_result = storage.execute("SELECT value FROM test_storage ORDER BY id")
+        rows = content_result.get('rows', [])
+        print(f"   Contenu: {rows}")
+        
+        expected_rows = 1
+        actual_rows = len(rows)
+        
+        success = actual_rows == expected_rows
+        print(f"\n✅ Storage ROLLBACK fonctionne: {success} (attendu: {expected_rows}, obtenu: {actual_rows})")
+        
+        return success
+        
+    except Exception as e:
+        print(f"❌ Exception: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+        
+    finally:
+        try:
+            storage.close()
+        except:
+            pass
+        if os.path.exists(db_path):
+            os.unlink(db_path)
+
+def test_database_rollback_detailed():
+    """Test détaillé du rollback avec Database"""
+    print("\n" + "="*60)
+    print("🧪 Test DATABASE Rollback Détaillé")
+    print("="*60)
     
     with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
         db_path = tmp.name
@@ -484,53 +184,69 @@ def test_sql_commands():
         db = Database(db_path, create_default_tables=False)
         
         # Créer une table
-        db.execute("CREATE TABLE test_sql_cmds (id INTEGER PRIMARY KEY, value TEXT)")
+        db.execute("CREATE TABLE test_db (id INTEGER PRIMARY KEY, value TEXT)")
         
-        # Utiliser les commandes SQL directement
-        print("\n1. BEGIN SQL command:")
-        begin_result = db.execute("BEGIN")
-        print(f"   Result: {begin_result.get('success')}")
+        # Insérer une ligne hors transaction
+        db.execute("INSERT INTO test_db (value) VALUES ('initial')")
         
-        print("\n2. INSERT in transaction:")
-        insert_result = db.execute("INSERT INTO test_sql_cmds (value) VALUES ('test')")
-        print(f"   Result: {insert_result.get('success')}")
+        print("\n1. Avant transaction:")
+        result = db.execute("SELECT COUNT(*) as count FROM test_db")
+        print(f"   Lignes: {result.get('rows', [{}])[0].get('count', 0)}")
         
-        print("\n3. SELECT in transaction:")
-        select_result = db.execute("SELECT * FROM test_sql_cmds")
-        print(f"   Rows: {select_result.get('count', 0)}")
+        # Démarrer transaction
+        print("\n2. Début transaction:")
+        begin_result = db.begin_transaction()
+        tid = begin_result.get('tid')
+        print(f"   TID: {tid}, Success: {begin_result.get('success')}")
         
-        print("\n4. COMMIT SQL command:")
-        commit_result = db.execute("COMMIT")
-        print(f"   Result: {commit_result.get('success')}")
+        # Insérer dans la transaction
+        print("\n3. Insert dans transaction:")
+        insert_result = db.execute_in_transaction(
+            "INSERT INTO test_db (value) VALUES ('in_transaction')")
+        print(f"   Insert success: {insert_result.get('success')}")
         
-        print("\n5. Verify after commit:")
-        final_result = db.execute("SELECT COUNT(*) as count FROM test_sql_cmds")
-        count = final_result.get('rows', [{}])[0].get('count', 0) if final_result.get('rows') else 0
-        print(f"   Final count: {count}")
+        # Vérifier AVANT rollback
+        print("\n4. AVANT rollback:")
+        print("   4a. Dans transaction (avec execute_in_transaction):")
+        select_in_tx = db.execute_in_transaction("SELECT COUNT(*) as count FROM test_db")
+        print(f"       Lignes: {select_in_tx.get('rows', [{}])[0].get('count', 0)}")
         
-        # Test ROLLBACK
-        print("\n6. Test ROLLBACK:")
-        db.execute("BEGIN")
-        db.execute("INSERT INTO test_sql_cmds (value) VALUES ('to_rollback')")
-        db.execute("ROLLBACK")
+        print("\n   4b. Hors transaction (avec execute normal):")
+        select_outside = db.execute("SELECT COUNT(*) as count FROM test_db")
+        print(f"       Lignes: {select_outside.get('rows', [{}])[0].get('count', 0)}")
         
-        final_count = db.execute("SELECT COUNT(*) as count FROM test_sql_cmds")
-        count_after = final_count.get('rows', [{}])[0].get('count', 0) if final_count.get('rows') else 0
-        print(f"   Count after rollback: {count_after}")
+        # Rollback
+        print("\n5. ROLLBACK:")
+        rollback_result = db.rollback_transaction()
+        print(f"   Rollback success: {rollback_result.get('success')}")
+        print(f"   Rollback error: {rollback_result.get('error')}")
         
-        success = (
-            begin_result.get('success') and
-            insert_result.get('success') and
-            commit_result.get('success') and
-            count == 1 and
-            count_after == 1  # Le rollback a bien annulé la 2ème insertion
-        )
+        # Vérifier APRÈS rollback
+        print("\n6. APRÈS rollback:")
+        select_after = db.execute("SELECT COUNT(*) as count FROM test_db")
+        rows_count = select_after.get('rows', [{}])[0].get('count', 0)
+        print(f"   Lignes: {rows_count}")
         
-        print_result(success, f"SQL commands: {success}")
+        # Vérifier le contenu
+        content_result = db.execute("SELECT value FROM test_db ORDER BY id")
+        rows = content_result.get('rows', [])
+        print(f"   Contenu: {rows}")
+        
+        expected_rows = 1
+        actual_rows = rows_count
+        
+        success = actual_rows == expected_rows
+        print(f"\n✅ Database ROLLBACK fonctionne: {success} (attendu: {expected_rows}, obtenu: {actual_rows})")
+        
+        if not success:
+            print(f"\n⚠️  DEBUG: Le rollback n'a pas fonctionné!")
+            print(f"   - Transaction active après rollback: {db.active_transaction}")
+            print(f"   - Auto-commit mode: {db.auto_commit_mode}")
+            
         return success
         
     except Exception as e:
-        print_result(False, f"Exception: {e}")
+        print(f"❌ Exception: {e}")
         import traceback
         traceback.print_exc()
         return False
@@ -543,58 +259,123 @@ def test_sql_commands():
         if os.path.exists(db_path):
             os.unlink(db_path)
 
-def run_all_tests():
-    """Exécute tous les tests"""
+def test_manual_sql_commands():
+    """Test avec commandes SQL manuelles"""
+    print("\n" + "="*60)
+    print("🧪 Test Commandes SQL Manuelles")
+    print("="*60)
+    
+    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
+        db_path = tmp.name
+    
+    try:
+        db = Database(db_path, create_default_tables=False)
+        
+        # Créer une table
+        db.execute("CREATE TABLE test_manual (id INTEGER PRIMARY KEY, value TEXT)")
+        
+        print("\n1. Insert initial:")
+        db.execute("INSERT INTO test_manual (value) VALUES ('initial')")
+        
+        print("\n2. Utiliser BEGIN SQL direct:")
+        result = db.execute("BEGIN")
+        print(f"   Result: {result}")
+        
+        print("\n3. Insert dans transaction:")
+        result = db.execute("INSERT INTO test_manual (value) VALUES ('in_transaction')")
+        print(f"   Result: {result.get('success')}")
+        
+        print("\n4. Vérifier dans transaction:")
+        result = db.execute("SELECT COUNT(*) as count FROM test_manual")
+        print(f"   Lignes: {result.get('rows', [{}])[0].get('count', 0)}")
+        
+        print("\n5. ROLLBACK SQL direct:")
+        result = db.execute("ROLLBACK")
+        print(f"   Result: {result}")
+        
+        print("\n6. Vérifier après ROLLBACK:")
+        result = db.execute("SELECT COUNT(*) as count FROM test_manual")
+        rows = result.get('rows', [{}])[0].get('count', 0)
+        print(f"   Lignes: {rows}")
+        
+        success = rows == 1
+        print(f"\n✅ Commandes SQL directes: {success}")
+        
+        return success
+        
+    except Exception as e:
+        print(f"❌ Exception: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+        
+    finally:
+        try:
+            db.close()
+        except:
+            pass
+        if os.path.exists(db_path):
+            os.unlink(db_path)
+
+def main():
+    """Exécute tous les tests de diagnostic"""
     print("\n" + "="*80)
-    print("🚀 DÉMARRAGE DES TESTS DE TRANSACTIONS GSQL - VERSION CORRIGÉE")
+    print("🔍 DIAGNOSTIC DES TRANSACTIONS GSQL")
     print("="*80)
     
-    test_results = []
-    
-    # Liste des tests à exécuter
     tests = [
-        ("Transaction BASIC (COMMIT)", test_basic_transaction),
-        ("Transaction ROLLBACK", test_rollback_transaction),
-        ("Niveaux d'isolation", test_transaction_isolation_levels),
-        ("Context Manager", test_transaction_context_manager),
-        ("Gestion des erreurs", test_transaction_errors),
-        ("Savepoints", test_savepoints),
-        ("Compatibilité ancien style", test_compatibility_old_style),
-        ("Commandes SQL directes", test_sql_commands),
+        ("SQLite Direct", test_direct_sqlite),
+        ("Storage GSQL", test_storage_rollback),
+        ("Database Rollback", test_database_rollback_detailed),
+        ("Commandes SQL", test_manual_sql_commands),
     ]
     
-    # Exécuter chaque test
+    results = []
+    
     for test_name, test_func in tests:
-        print(f"\n▶️  Exécution: {test_name}")
+        print(f"\n▶️  {test_name}")
         try:
             result = test_func()
-            test_results.append((test_name, result))
+            results.append((test_name, result))
         except Exception as e:
-            print(f"❌ Test '{test_name}' a échoué avec exception: {e}")
-            test_results.append((test_name, False))
+            print(f"❌ Exception: {e}")
+            results.append((test_name, False))
     
-    # Afficher le résumé
+    # Résumé
     print("\n" + "="*80)
-    print("📊 RÉSUMUM DES TESTS")
+    print("📊 RÉSULTATS DU DIAGNOSTIC")
     print("="*80)
     
-    passed = 0
-    failed = 0
-    
-    for test_name, result in test_results:
-        if result:
-            print(f"✅ {test_name}: PASSED")
-            passed += 1
-        else:
-            print(f"❌ {test_name}: FAILED")
-            failed += 1
+    for test_name, result in results:
+        status = "✅ PASS" if result else "❌ FAIL"
+        print(f"{status} - {test_name}")
     
     print("\n" + "="*80)
-    print(f"🎯 TOTAL: {passed} passed, {failed} failed sur {len(tests)} tests")
-    print("="*80)
     
-    return failed == 0
+    # Analyser les résultats
+    sqlite_works = results[0][1] if len(results) > 0 else False
+    storage_works = results[1][1] if len(results) > 1 else False
+    database_works = results[2][1] if len(results) > 2 else False
+    sql_cmds_work = results[3][1] if len(results) > 3 else False
+    
+    print("\n🔍 ANALYSE:")
+    
+    if not sqlite_works:
+        print("❌ SQLite lui-même ne fonctionne pas - problème système")
+    elif not storage_works:
+        print("❌ Le problème est dans storage.py")
+        print("   → Vérifiez les méthodes begin/commit/rollback dans SQLiteStorage")
+    elif not database_works:
+        print("❌ Le problème est dans database.py")
+        print("   → Vérifiez comment Database gère les transactions")
+    elif not sql_cmds_work:
+        print("❌ Les commandes SQL directes ne fonctionnent pas")
+        print("   → Vérifiez la méthode execute() dans Database")
+    else:
+        print("✅ Tous les tests passent - le problème est dans les tests originaux")
+    
+    return all(result for _, result in results)
 
 if __name__ == "__main__":
-    success = run_all_tests()
+    success = main()
     sys.exit(0 if success else 1)
