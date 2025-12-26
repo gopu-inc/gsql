@@ -386,6 +386,7 @@ class Database:
         """Atomic transaction context manager (alternative syntax)"""
         transaction = self.transaction()
         try:
+            transaction.begin()
             yield
             transaction.commit()
         except Exception:
@@ -964,23 +965,23 @@ class Database:
 # ==================== FACTORY FUNCTIONS ====================
 
 def create_database(db_path: str = None, **kwargs) -> Database:
-    """
-    Create a new database instance
-    
-    Args:
-        db_path: Path to database file
-        **kwargs: Additional parameters for storage configuration
-    
-    Returns:
-        Database instance
-    """
+    """Create a new database instance"""
     return Database(db_path, **kwargs)
 
+def get_default_database() -> Optional[Database]:
+    """Get the default database instance"""
+    # Implement according to your needs
+    # This could return a globally stored instance
+    return None
+
+def set_default_database(db: Database) -> None:
+    """Set the default database instance"""
+    # Store globally or in configuration
+    pass
 
 def connect(db_path: str = None, **kwargs) -> Database:
-    """Alias for create_database"""
+    """Connect to a database (alias for create_database)"""
     return create_database(db_path, **kwargs)
-
 
 # ==================== TEST ====================
 
