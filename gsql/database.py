@@ -13,6 +13,7 @@ from datetime import datetime
 import hashlib
 import time
 import contextlib
+import shutil
 
 from .storage import SQLiteStorage
 from .executor import QueryExecutor
@@ -131,13 +132,19 @@ class Database:
         Args:
             db_path: Path to database file
             **kwargs: Additional parameters for storage configuration
-                      Supported: base_dir, auto_recovery, buffer_pool_size, enable_wal
+                      Supported: base_dir, buffer_pool_size, enable_wal
         """
         self.db_path = db_path
         
-        # Filter valid parameters for storage
-        valid_params = ['base_dir', 'auto_recovery', 'buffer_pool_size', 'enable_wal']
+        # Filter valid parameters for SQLiteStorage
+        # SQLiteStorage ne supporte PAS 'auto_recovery'
+        valid_params = ['base_dir', 'buffer_pool_size', 'enable_wal']
         storage_params = {k: v for k, v in kwargs.items() if k in valid_params}
+        
+        # Debug: afficher les paramètres reçus
+        print(f"DEBUG: Initializing Database with db_path={db_path}")
+        print(f"DEBUG: Storage params: {storage_params}")
+        print(f"DEBUG: All kwargs: {kwargs}")
         
         self.storage = SQLiteStorage(db_path, **storage_params)
         self.executor = QueryExecutor(self.storage)
@@ -473,7 +480,6 @@ class Database:
             self.close()
             
             # Replace current database with backup
-            import shutil
             shutil.copy2(backup_path, self.db_path)
             
             # Reinitialize storage
