@@ -1,6 +1,6 @@
 __version__ = "4.0.0"
 
-import .user_functions
+import gsql.functions.user_functions
 
 all = [
     'FunctionManager',
