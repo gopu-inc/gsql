@@ -18,6 +18,7 @@ from collections import OrderedDict, defaultdict
 from typing import Dict, List, Any, Optional, Tuple, Union, Set
 import re
 import traceback
+import shutil
 
 from .exceptions import (
     SQLExecutionError, TransactionError, BufferPoolError,
@@ -1399,6 +1400,60 @@ class TransactionContext:
 def create_storage(db_path=None, **kwargs) -> SQLiteStorage:
     """Crée une instance de stockage SQLite"""
     return SQLiteStorage(db_path, **kwargs)
+
+
+def get_storage_stats(storage) -> Dict[str, Any]:
+    """
+    Get statistics about storage
+    
+    Args:
+        storage: Storage instance
+        
+    Returns:
+        Dict with statistics
+    """
+    stats = {
+        'type': 'SQLite',
+        'path': str(storage.db_path) if hasattr(storage, 'db_path') else 'unknown',
+        'connected': storage.connection is not None if hasattr(storage, 'connection') else False,
+        'tables_count': 0,
+        'total_rows': 0,
+        'file_size': 0,
+        'last_modified': None
+    }
+    
+    try:
+        if hasattr(storage, 'db_path') and storage.db_path:
+            path = Path(storage.db_path)
+            if path.exists():
+                stats['file_size'] = path.stat().st_size
+                stats['last_modified'] = datetime.fromtimestamp(path.stat().st_mtime).isoformat()
+        
+        if hasattr(storage, 'connection') and storage.connection:
+            cursor = storage.connection.cursor()
+            
+            # Get table count
+            cursor.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table'")
+            stats['tables_count'] = cursor.fetchone()[0]
+            
+            # Get total rows (approx)
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            tables = cursor.fetchall()
+            
+            total_rows = 0
+            for table in tables:
+                try:
+                    cursor.execute(f"SELECT COUNT(*) FROM {table[0]}")
+                    total_rows += cursor.fetchone()[0]
+                except:
+                    continue
+            
+            stats['total_rows'] = total_rows
+            
+    except Exception as e:
+        stats['error'] = str(e)
+    
+    return stats
 
 
 def atomic_transaction(operations: List[Dict], db_path=None, isolation_level: str = "DEFERRED") -> Dict:
