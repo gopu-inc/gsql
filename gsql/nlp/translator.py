@@ -143,7 +143,45 @@ class DatabaseContext:
             
         except Exception as e:
             print(f"Erreur lors du chargement du schéma: {e}")
+    def ensure_patterns_file(patterns_path: str = None) -> str:
+    """
+    Ensure patterns file exists, create default if not
     
+    Returns:
+        str: Path to patterns file
+    """
+    if patterns_path is None:
+        # Default path
+        default_dir = Path.home() / '.gsql' / 'nlp'
+        default_dir.mkdir(exist_ok=True, parents=True)
+        patterns_path = str(default_dir / 'patterns.json')
+    
+    path = Path(patterns_path)
+    
+    if not path.exists():
+        # Create default patterns
+        default_patterns = {
+            "patterns": {
+                # ... [INSÉRER ICI LES PATTERNS PAR DÉFAUT COMPLETS] ...
+            },
+            "synonyms": {
+                # ... [INSÉRER ICI LES SYNONYMES] ...
+            },
+            "metadata": {
+                "created": datetime.now().isoformat(),
+                "version": "1.0",
+                "description": "Auto-generated NLP patterns for GSQL"
+            }
+        }
+        
+        try:
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(default_patterns, f, ensure_ascii=False, indent=2)
+            logger.info(f"Created default NLP patterns file: {path}")
+        except Exception as e:
+            logger.error(f"Failed to create patterns file: {e}")
+    
+    return patterns_path
     def suggest_columns(self, table: str, context: str = "") -> List[str]:
         """Suggère des colonnes basées sur le contexte"""
         if table not in self.schema:
